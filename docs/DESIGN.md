@@ -4,7 +4,7 @@
 
 Echo Satellite repurposes a rooted Amazon Echo Dot Gen 2 as a self-hosted network voice terminal.
 
-The Echo Dot provides the hardware-facing capabilities — microphone capture, **local wake-word detection**, speaker playback, LEDs, buttons, volume and mute — while a separate gateway performs speech recognition, assistant orchestration, conversation management and speech generation.
+The Echo Dot provides the hardware-facing capabilities — microphone capture, **local voice activity detection for wake gating**, **local wake-word detection**, speaker playback, LEDs, buttons, volume and mute — while a separate gateway performs speech recognition, assistant orchestration, conversation management and speech generation.
 
 Hermes is the first assistant backend, not part of the device protocol. The same satellite should be able to work later with OpenClaw, a Raspberry Pi-hosted assistant, another local agent, or a cloud service without rewriting the device agent.
 
@@ -18,7 +18,8 @@ This document defines the initial architecture and implementation direction. Det
 
 - Run a small Go daemon on a rooted Echo Dot Gen 2.
 - Perform wake-word detection locally on the Echo Dot.
-- Reuse/adapt the proven local wake-word implementation from existing Echo Dot projects where practical.
+- Use local VAD as part of the wake pipeline to suppress non-speech false activations.
+- Reuse/adapt proven local wake-word implementations from existing projects where practical.
 - Stream microphone audio to the gateway only for an active voice turn, rather than continuously for wake detection.
 - Play gateway-generated audio through the Echo speaker.
 - Expose LEDs, buttons, mute and volume as device capabilities.
@@ -36,6 +37,7 @@ This document defines the initial architecture and implementation direction. Det
 
 - Recreating every Alexa feature.
 - Gateway-side wake-word detection.
+- Gateway-side VAD for wake-word gating.
 - Continuously streaming microphone audio to the gateway solely for wake detection.
 - Running STT or the LLM directly on the Echo Dot.
 - Supporting arbitrary Echo generations before Gen 2 is stable.
@@ -54,9 +56,10 @@ The Echo device should know nothing about Hermes, OpenClaw, LLM APIs, conversati
 Its responsibilities are limited to:
 
 - hardware initialization;
-- continuous local microphone capture needed by the wake engine;
+- continuous local microphone capture needed by the wake stack;
+- local preprocessing / beamforming where enabled;
+- **local VAD used to gate wake inference**;
 - **local wake-word inference**;
-- optional beamforming / AEC / preprocessing;
 - short audio buffering around a wake trigger;
 - streaming command audio for an active turn;
 - audio playback;
@@ -67,22 +70,45 @@ Its responsibilities are limited to:
 - diagnostics;
 - maintaining a secure connection to the gateway.
 
-### 3.2 Wake detection is always local
+### 3.2 Wake detection, including wake VAD, is always local
 
 Wake-word detection is a device capability and is not implemented by the gateway.
 
-The gateway may configure the active model and sensitivity and may receive wake diagnostics, but it does not receive a continuous microphone stream and does not score wake words itself.
+The always-on wake stack is conceptually:
+
+```text
+microphone
+  -> optional DSP / beamforming / noise suppression
+  -> local VAD
+  -> local wake-word model
+  -> wake accepted only when wake criteria are satisfied
+```
+
+For openWakeWord specifically, upstream openWakeWord includes a Silero VAD option. When `vad_threshold` is enabled, each input frame gets a VAD score and wake predictions are accepted only when the VAD score is above the configured threshold. This reduces false activations caused by non-speech noise.
+
+The gateway may configure the active wake model, wake threshold and local VAD settings and may receive wake diagnostics, but it does not receive a continuous microphone stream and does not score wake words or wake VAD itself.
 
 A manual Action-button / push-to-talk trigger may start a turn without a wake word for development, accessibility and recovery. This is an alternate **trigger**, not an alternate wake-word engine.
 
-### 3.3 The gateway owns assistant orchestration
+### 3.3 Wake VAD and command endpointing are separate concerns
+
+There are two different uses of voice activity detection in the system:
+
+1. **Wake VAD — device-local, always-on.** It helps decide whether a wake-word score is credible speech and should be allowed to trigger.
+2. **Command endpointing — after a wake/button trigger.** It decides when the user's spoken command has ended so STT can proceed.
+
+For v0.1, command endpointing may run on the gateway. This does not make wake detection gateway-side: the gateway sees audio only after the device has already created a voice turn.
+
+The two functions should have separate configuration and thresholds. A wake-VAD threshold must not automatically be reused as the command-endpointing threshold.
+
+### 3.4 The gateway owns assistant orchestration
 
 The gateway is responsible for:
 
 - advertising its local endpoint using mDNS;
 - device registration and configuration;
 - turn lifecycle after a local wake/button trigger;
-- VAD / endpointing for the command audio initially;
+- **post-wake command endpointing**;
 - speech-to-text provider selection;
 - assistant backend selection;
 - conversation management;
@@ -90,13 +116,15 @@ The gateway is responsible for:
 - turn state and observability;
 - management API and UI.
 
-### 3.4 Stable internal contracts, replaceable providers
+### 3.5 Stable internal contracts, replaceable providers
 
 The system should define its own interfaces for:
 
 - satellite protocol;
 - local discovery;
 - wake-model configuration;
+- local wake VAD configuration;
+- command endpointing;
 - STT;
 - TTS;
 - assistant backend;
@@ -104,7 +132,7 @@ The system should define its own interfaces for:
 
 Hermes-specific concepts stay inside a Hermes adapter.
 
-### 3.5 Capability negotiation instead of firmware-version logic
+### 3.6 Capability negotiation instead of firmware-version logic
 
 Each device announces what it supports. Example:
 
@@ -122,20 +150,21 @@ Each device announces what it supports. Example:
     "mute",
     "volume",
     "wake.local.openwakeword",
-    "wake.local.microwakeword"
+    "wake.local.microwakeword",
+    "wake.local.vad"
   ]
 }
 ```
 
 The gateway enables behaviour based on capabilities rather than hard-coded firmware-version comparisons.
 
-### 3.6 Hardware-independent development where possible
+### 3.7 Hardware-independent development where possible
 
 The protocol and gateway should be testable against a simulated device (`dotsim`) that feeds WAV files instead of microphone hardware and writes playback audio to disk instead of a speaker.
 
-The simulator must also be able to generate local-wake events so gateway development does not depend on running a wake model.
+The simulator must also be able to generate local-wake events, wake scores and local-VAD scores so gateway development does not depend on running the actual detector.
 
-### 3.7 Zero-configuration local discovery, explicit configuration when needed
+### 3.8 Zero-configuration local discovery, explicit configuration when needed
 
 A newly installed satellite should normally be able to find a gateway on the same local network without requiring an IP address.
 
@@ -158,13 +187,30 @@ Primary implementation reference for:
 - microphone and speaker paths;
 - LEDs and buttons;
 - AEC / beamforming work;
-- **local openWakeWord and microWakeWord support**;
+- local openWakeWord and microWakeWord support;
 - TFLite model loading;
 - wake-model metadata and sensitivity configuration;
 - host-side installer UX;
 - ADB-based development workflow.
 
-EchoLocal already separates wake-model configuration from the detection engine and supports both openWakeWord and microWakeWord model kinds. Echo Satellite should reuse/adapt these low-level ideas rather than inventing a second wake stack.
+EchoLocal already provides a useful Go-native local wake stack and supports both openWakeWord and microWakeWord model kinds. Echo Satellite should reuse/adapt those low-level pieces rather than inventing a separate wake inference stack.
+
+At the time of this design, EchoLocal's current Go openWakeWord path does not appear to include the upstream Silero VAD gate. Therefore Echo Satellite should treat **local wake VAD as an additional part of the local wake pipeline that must be implemented/adapted and validated**, rather than assuming it is already present in the reused EchoLocal code.
+
+### openWakeWord
+
+Repository: `dscripka/openWakeWord`
+
+Reference for the behaviour of the openWakeWord model pipeline, especially:
+
+- 16 kHz PCM input expectations;
+- wake-model scoring;
+- wake activation thresholds;
+- optional Speex noise suppression;
+- bundled Silero VAD gating through `vad_threshold`;
+- the rule that wake predictions are accepted only when the simultaneous VAD score is above the configured VAD threshold.
+
+Echo Satellite does not need to run the upstream Python package on the Dot. Its behaviour is the reference for the local Go implementation/adaptation.
 
 ### EchoMuse
 
@@ -196,46 +242,49 @@ EchoMuse's controller-side wake architecture is **not** the target architecture 
                                      |
                                      | HTTP/WS
                                      v
-+------------------------+   WSS   +---------------------------+
-| Echo Dot Gen 2         |<------->|       Voice Gateway       |
-|                        |         |                           |
-| echod (Go)             |         | mDNS advertisement        |
-|------------------------|         | device manager            |
-| mDNS discovery         |         | turn state machine        |
-| mic capture            |         | VAD / endpointing         |
-| local wake engine      |         | conversation manager      |
-| short pre-roll buffer  |         | STT / TTS routing         |
-| speaker playback       |         | assistant routing         |
-| LEDs/buttons           |         | SQLite                    |
-| mute/volume            |         +------+------+-------------+
-+------------------------+                |      |
-                                         |      |
-                          +--------------+      +----------------+
-                          v                                      v
-                +-------------------+                  +-------------------+
-                | Speech Providers  |                  | Assistant Backend |
-                |-------------------|                  |-------------------|
-                | local Whisper     |                  | Hermes            |
-                | Hermes STT/TTS    |                  | OpenClaw (future) |
-                | future providers  |                  | other (future)    |
-                +-------------------+                  +-------------------+
++--------------------------+  WSS  +---------------------------+
+| Echo Dot Gen 2           |<----->|       Voice Gateway       |
+|                          |       |                           |
+| echod (Go)               |       | mDNS advertisement        |
+|--------------------------|       | device manager            |
+| mDNS discovery           |       | turn state machine        |
+| mic capture              |       | command endpointing       |
+| local DSP / beamforming  |       | conversation manager      |
+| local wake VAD           |       | STT / TTS routing         |
+| local wake engine        |       | assistant routing         |
+| short pre-roll buffer    |       | SQLite                    |
+| speaker / LEDs / buttons |       +------+------+-------------+
+| mute / volume            |              |      |
++--------------------------+              |      |
+                              +-----------+      +----------------+
+                              v                                   v
+                    +-------------------+               +-------------------+
+                    | Speech Providers  |               | Assistant Backend |
+                    |-------------------|               |-------------------|
+                    | local Whisper     |               | Hermes            |
+                    | Hermes STT/TTS    |               | OpenClaw (future) |
+                    | future providers  |               | other (future)    |
+                    +-------------------+               +-------------------+
 ```
 
 Normal turn flow:
 
 ```text
-local mic -> local wake engine
-          -> wake detected
-          -> local feedback immediately
-          -> turn.start + command audio over WSS
-          -> gateway VAD/endpointing
-          -> STT
-          -> assistant
-          -> TTS
-          -> Echo speaker
+local microphone
+  -> local preprocessing
+  -> local VAD
+  -> local wake model
+  -> wake accepted
+  -> immediate local feedback
+  -> turn.start + command audio over WSS
+  -> gateway command endpointing
+  -> STT
+  -> assistant
+  -> TTS
+  -> Echo speaker
 ```
 
-No gateway-side wake detector exists in this architecture.
+No gateway-side wake detector or wake-VAD detector exists in this architecture.
 
 ---
 
@@ -252,7 +301,7 @@ echo-satellite/
 ├── internal/
 │   ├── device/
 │   │   ├── audio/
-│   │   ├── wake/              # local wake engine + model management
+│   │   ├── wake/              # local wake engines, wake VAD, model management
 │   │   ├── buttons/
 │   │   ├── led/
 │   │   ├── mixer/
@@ -262,6 +311,7 @@ echo-satellite/
 │   ├── gateway/
 │   │   ├── devices/
 │   │   ├── turns/
+│   │   ├── endpointing/       # post-wake command endpointing only
 │   │   ├── conversations/
 │   │   └── config/
 │   ├── assistant/
@@ -296,20 +346,19 @@ Keeping the first versions in one repository simplifies coordinated protocol cha
 
 ## 7. Device Agent (`echod`)
 
-### Responsibilities
-
 `echod` runs as a supervised service on the rooted Echo Dot.
 
-Initial responsibilities:
+### Responsibilities
 
 - derive stable device identity from the device serial;
 - initialize supported hardware;
 - discover a local gateway using mDNS when no explicit gateway is configured;
 - establish/re-establish the gateway WebSocket;
 - advertise capabilities;
-- continuously feed local microphone frames into the local wake engine while idle;
-- maintain a small local audio ring buffer so speech immediately after the wake phrase is not clipped;
-- start a turn after a local wake or Action-button trigger;
+- continuously capture microphone frames while idle;
+- run the local preprocessing / wake-VAD / wake-model pipeline;
+- maintain a small audio ring buffer so speech immediately after the wake phrase is not clipped;
+- start a turn after an accepted local wake or Action-button trigger;
 - stream command PCM only during the active listening phase;
 - receive and play response PCM;
 - report button and mute events;
@@ -319,28 +368,35 @@ Initial responsibilities:
 
 ### Audio strategy
 
-Start with the simplest known-good microphone path and prove wake detection plus the complete voice loop before optimizing far-field behaviour.
+Start with the simplest known-good microphone path and prove local wake detection plus the complete voice loop before optimizing far-field behaviour.
 
-The same local capture path should feed both the wake engine and turn streaming so switching from idle detection to active listening does not require reopening/reconfiguring ALSA.
+The same local capture path should feed wake processing and active-turn streaming so changing from idle wake monitoring to command capture does not require reopening/reconfiguring ALSA.
 
-Beamforming, AEC and preprocessing can be adopted from the reference projects as needed, but the wake engine remains on-device regardless of which DSP stages are enabled.
+The initial idle pipeline should conceptually be:
+
+```text
+ALSA mic
+  -> optional beamforming / noise suppression
+  -> local wake VAD
+  -> local wake model
+```
+
+For openWakeWord-compatible models, retain the reference 16 kHz PCM expectations where practical rather than inventing another model input format.
 
 ### Device state
 
-Suggested states:
-
 ```text
-idle         # local wake engine active
+idle         # local VAD + wake engine active
 listening    # wake/button triggered; command audio streaming
 thinking
 speaking
-muted        # wake engine must not trigger while hardware/software muted
+muted        # local wake stack must not trigger
 offline
 error
 updating
 ```
 
-The device should provide wake tone/LED feedback immediately after local detection instead of waiting for gateway round-trip latency.
+Wake tone/LED feedback should happen immediately on the device after local detection instead of waiting for gateway round-trip latency.
 
 ---
 
@@ -355,11 +411,11 @@ Initial transport:
 - JSON text frames for control/events;
 - binary WebSocket frames for PCM audio.
 
-The WSS connection may remain idle while the local wake engine listens. Microphone frames are not forwarded until a turn starts.
+The WSS connection may remain idle while the local wake stack listens. Microphone frames are not forwarded until a turn starts.
 
 ### mDNS gateway discovery
 
-The gateway advertises a DNS-SD service:
+The gateway advertises:
 
 ```text
 _echo-satellite._tcp.local.
@@ -386,7 +442,7 @@ Satellite resolution order:
 1. Explicitly configured gateway URL
 2. Previously paired/discovered gateway, if reachable
 3. Browse _echo-satellite._tcp.local. using mDNS
-4. Select a compatible/preferred gateway
+4. Select compatible/preferred gateway
 5. Connect and authenticate over WSS
 6. Retry with backoff if unavailable
 ```
@@ -405,9 +461,7 @@ Only non-sensitive metadata such as device ID, version and pairing state should 
 
 ### Network limitations and fallback
 
-mDNS normally stays within a multicast domain. VLANs, multicast filtering, routed segments, VPNs or container isolation may require an mDNS reflector/repeater or an explicit gateway URL.
-
-Example configuration:
+mDNS normally stays within a multicast domain. VLANs, multicast filtering, routed segments, VPNs or container isolation may require an mDNS reflector/repeater or explicit gateway URL.
 
 ```yaml
 gateway:
@@ -429,26 +483,26 @@ gateway:
 
 ```text
 Device boots
-  -> initialize mic + local wake engine
+  -> initialize mic + local wake VAD + wake engine
   -> load explicit/previous gateway configuration
   -> if necessary discover gateway over mDNS
   -> connect/authenticate over WSS
-  -> hello(device id, version, capabilities, installed wake models)
+  -> hello(device id, version, capabilities, wake configuration)
   <- welcome/config
-  -> idle; local wake inference continues
+  -> idle; local wake stack continues
 
-Wake detected locally
+Wake accepted locally
   -> immediate local LED/tone
-  -> turn.start(trigger=wake, model, score)
+  -> turn.start(trigger=wake, model, wake_score, vad_score)
   -> audio.start
   -> binary PCM command audio
   <- state(thinking)
   <- play.start + binary response audio
   -> playback complete
-  -> return to idle/local wake inference
+  -> return to idle/local wake stack
 ```
 
-### Turn-start example
+Example:
 
 ```json
 {
@@ -457,12 +511,13 @@ Wake detected locally
   "trigger": {
     "type": "wake",
     "model_id": "okay_nabu",
-    "score": 0.87
+    "wake_score": 0.87,
+    "vad_score": 0.93
   }
 }
 ```
 
-Manual Action-button trigger:
+Manual trigger:
 
 ```json
 {
@@ -505,9 +560,7 @@ Exact framing belongs in `docs/protocol.md` once hardware formats and latency be
 
 The gateway should initially be written in Go.
 
-### Major modules
-
-#### Discovery Service
+### Discovery Service
 
 Owns:
 
@@ -517,19 +570,20 @@ Owns:
 - service lifecycle across network-interface changes;
 - optional diagnostic browsing of satellite advertisements.
 
-#### Device Manager
+### Device Manager
 
 Maintains:
 
 - connected devices;
 - capabilities;
-- installed/active wake-model metadata reported by devices;
+- installed/active wake-model metadata;
+- local wake-VAD configuration/status reported by devices;
 - current state;
 - last-seen time;
 - configuration revisions;
 - commands and active audio streams.
 
-#### Turn Manager
+### Turn Manager
 
 Owns the server-side turn state after a device trigger:
 
@@ -543,15 +597,21 @@ IDLE
 
 The gateway never transitions `IDLE -> LISTENING` because of wake inference of its own; it does so only after `turn.start` from a device or simulator.
 
-#### Speech Router
+### Command Endpointing
+
+Consumes only active-turn audio and decides when the spoken command is complete.
+
+The implementation may use a VAD model, silence timing, STT streaming information, or a combination of those. It is distinct from local wake VAD.
+
+### Speech Router
 
 Selects STT and TTS providers through internal interfaces.
 
-#### Assistant Router
+### Assistant Router
 
 Selects an assistant adapter. Hermes is the first implementation.
 
-#### Conversation Manager
+### Conversation Manager
 
 Owns local conversation identity and maps it to backend-specific sessions/threads.
 
@@ -560,8 +620,6 @@ Owns local conversation identity and maps it to backend-specific sessions/thread
 ## 10. Speech Recognition and Generation
 
 ### STT
-
-Conceptual interface:
 
 ```go
 type STT interface {
@@ -582,11 +640,9 @@ Initial candidates:
 
 English and Ukrainian must both be supported. Auto language detection is the default, with optional language hints.
 
-If the selected STT provider needs whole utterances, the gateway buffers the active turn until endpointing. Streaming STT can be added later without changing the satellite trigger model.
+If the selected STT provider needs whole utterances, the gateway buffers the active turn until command endpointing completes. Streaming STT can be added later without changing the local wake architecture.
 
 ### Python speech worker
-
-If local Whisper is used:
 
 ```text
 Gateway (Go)
@@ -595,8 +651,6 @@ Gateway (Go)
 ```
 
 ### TTS
-
-Conceptual interface:
 
 ```go
 type TTS interface {
@@ -655,8 +709,6 @@ The mock backend should prove the complete voice loop before Hermes integration.
 
 Conversation identity belongs to Echo Satellite, not Hermes.
 
-Suggested entities:
-
 ### Conversation
 
 ```text
@@ -684,6 +736,8 @@ conversation_id
 device_id
 trigger_type
 wake_model_id
+wake_score
+wake_vad_score
 started_at
 finished_at
 language
@@ -719,68 +773,88 @@ Conversation history is not owned by a physical Dot, enabling future cross-devic
 
 ---
 
-## 13. Wake Word
+## 13. Wake Word and Local Wake VAD
 
 ### Architecture decision
 
-**Wake-word detection is local-only. Gateway-side wake detection is intentionally unsupported.**
+**Wake-word detection and the VAD used to gate wake detection are local-only. Gateway-side wake detection is intentionally unsupported.**
 
-The initial implementation should reuse/adapt EchoLocal's current local wake stack instead of developing a separate detector.
+The initial implementation should reuse/adapt EchoLocal's current local wake stack and add/reuse the local VAD behaviour needed to match upstream openWakeWord semantics.
+
+### Wake engines
 
 The reference implementation already supports two useful model families:
 
 - **openWakeWord** classifiers using TFLite models and a shared on-device feature/embedding pipeline;
 - **microWakeWord** TFLite models using the existing microWakeWord runtime.
 
-The model-loading layer should preserve the useful reference behaviour:
+The model-loading layer should preserve:
 
-- discover/install `.tflite` wake models;
-- support optional sidecar metadata describing phrase and trained languages;
-- identify which local engine should run a model;
-- expose a configurable sensitivity/threshold;
-- allow models to be selected by stable ID;
-- keep wake configuration independent of Hermes or any other assistant backend.
+- `.tflite` wake models;
+- optional sidecar metadata describing phrase and trained languages;
+- engine detection/model kind;
+- configurable wake sensitivity/threshold;
+- stable model IDs;
+- backend-independent wake configuration.
+
+### Local VAD
+
+For the openWakeWord path, local VAD should be supported as part of the wake pipeline and enabled by default for normal deployments unless real-device testing shows a reason not to.
+
+Upstream openWakeWord uses Silero VAD this way:
+
+```text
+for each audio frame:
+  compute VAD score
+  compute wake model score
+  accept positive wake prediction only if:
+      wake score >= wake threshold
+      AND
+      VAD score >= vad_threshold
+```
+
+The upstream library defaults `vad_threshold` to `0`, which disables VAD; Echo Satellite may choose a non-zero project default after hardware testing. The threshold should be explicitly configurable rather than hard-coded prematurely.
+
+For microWakeWord, use the behaviour of the selected runtime/model and do not force openWakeWord-specific VAD semantics onto it without testing. The device-level wake interface should nevertheless expose whether local VAD gating is active.
 
 ### v0.1 behaviour
 
-Start with one active wake model per device to keep behaviour and CPU usage predictable. The internal API should not prevent multiple simultaneously active models later.
-
-The local detector runs continuously while the device is `idle` and not muted.
+Start with one active wake model per device to keep behaviour and CPU use predictable. The internal API should not prevent multiple simultaneously active models later.
 
 ```text
 mic capture
-  -> optional DSP/beamforming
-  -> local wake engine
-  -> threshold reached
+  -> optional DSP / beamforming / noise suppression
+  -> local wake VAD
+  -> local wake model
+  -> wake + VAD thresholds satisfied
   -> immediate local wake feedback
   -> create turn_id
   -> send turn.start
   -> stream command audio
 ```
 
-The openWakeWord-compatible path should preserve the reference project's 16 kHz input expectations rather than introducing an unnecessary resampling/model format of our own.
+### Pre-roll
 
-### Pre-roll and speech clipping
+Maintain a small PCM ring buffer while idle. When wake fires, include a configurable tail of pre-trigger audio so the first word after the wake phrase is not clipped.
 
-The device should maintain a short PCM ring buffer while idle. When a wake word fires, a small configurable tail of pre-trigger audio can be included at the beginning of the active turn so the first word after the wake phrase is not clipped.
+Tune this from real recordings. If pre-roll repeatedly carries the wake phrase into STT, reduce it or strip the configured phrase from STT output rather than moving wake processing to the gateway.
 
-The initial value should be conservative and tuned from recordings. If the pre-roll frequently contains the wake phrase itself, reduce it or strip the configured wake phrase from STT output rather than moving wake inference to the gateway.
+### Command endpointing
 
-### Endpointing
-
-Wake detection and endpointing are separate concerns.
+Wake VAD is **not** the mechanism that ends the user's command.
 
 For v0.1:
 
-- wake detection: **device only**;
-- command VAD/endpointing: gateway;
-- STT: gateway-side provider.
+```text
+wake VAD:             device only
+wake inference:       device only
+command endpointing:  gateway, after turn.start
+STT:                  gateway-side provider
+```
 
-Local endpointing can be explored later if it gives useful latency/bandwidth benefits, but it is not required to keep wake detection local.
+Later, command endpointing may also move to the device if latency/bandwidth testing justifies it. That remains a separate state machine and separate configuration from wake VAD.
 
 ### Action button
-
-The Action button should start the same voice-turn pipeline without running a synthetic wake detector:
 
 ```text
 button press
@@ -788,17 +862,21 @@ button press
   -> command audio stream
 ```
 
-This is useful during development and when wake models are misconfigured.
+This bypasses wake inference but still enters the same post-trigger command pipeline.
 
 ### Configuration
 
-Example device configuration:
+Example:
 
 ```yaml
 wake:
   enabled: true
+  engine: openwakeword
   model: okay_nabu
   threshold: 0.80
+  vad:
+    enabled: true
+    threshold: 0.50   # example only; tune on real device
   preroll_ms: 250
 ```
 
@@ -806,21 +884,25 @@ There is deliberately no `gateway` wake mode.
 
 ### Wake model distribution
 
-For the first implementation, `echoctl` may install/update wake-model files on the device while the gateway manages selection and sensitivity.
+Initially, `echoctl` may install/update wake-model files on the device while the gateway manages selection and sensitivity.
 
-Later, authenticated model delivery through the gateway can be added if useful. Model binaries must not be fetched from arbitrary unauthenticated network locations by the Dot.
+Later, authenticated model delivery through the gateway can be added. Model binaries must not be fetched from arbitrary unauthenticated locations by the Dot.
 
 ### Diagnostics
 
-Useful wake diagnostics:
+Useful local wake diagnostics:
 
 ```text
 active model id
-model kind (openWakeWord / microWakeWord)
+model kind
 trained language metadata
-threshold
+wake threshold
+wake VAD enabled/disabled
+wake VAD threshold
 last wake score
+last VAD score
 wake count
+rejected high-wake/low-VAD candidate count
 false-trigger test recordings (opt-in)
 inference timing / CPU usage
 ```
@@ -830,8 +912,6 @@ Raw continuous microphone audio must not be uploaded merely for wake scoring.
 ---
 
 ## 14. Management UI
-
-The first UI should remain small.
 
 ### Devices
 
@@ -846,18 +926,19 @@ The first UI should remain small.
 
 ### Voice / Wake
 
-- installed local wake models reported by each device;
+- installed local wake models;
 - active model;
 - model kind and language metadata;
 - wake sensitivity/threshold;
-- wake enable/disable;
+- local wake-VAD enable/disable and threshold;
+- last wake score / VAD score diagnostics;
 - pre-roll setting;
-- STT provider;
-- STT language hints;
+- command endpointing settings;
+- STT provider and language hints;
 - TTS provider;
 - basic audio tuning.
 
-The UI must not offer a gateway-side wake mode.
+The UI must not offer gateway-side wake or wake-VAD modes.
 
 ### Assistants
 
@@ -910,6 +991,7 @@ echoctl mic record
 echoctl wake list
 echoctl wake install <model>
 echoctl wake test <wav-or-live>
+echoctl wake vad-test <wav-or-live>
 echoctl speaker test
 echoctl led test
 echoctl buttons test
@@ -917,7 +999,7 @@ echoctl buttons test
 echoctl update        # later
 ```
 
-`echoctl wake test` should make it possible to evaluate local models and thresholds independently from STT/Hermes.
+`echoctl wake test` should report both wake score and wake-VAD score so model and VAD thresholds can be tuned independently from STT/Hermes.
 
 ### Install flow
 
@@ -929,7 +1011,7 @@ find ADB device
   -> inspect existing installation
   -> back up changed state
   -> push echod
-  -> install default wake model/assets
+  -> install default wake model/VAD assets
   -> push config/credentials
   -> configure supervised startup
   -> handle conflicting Alexa services as required
@@ -937,7 +1019,7 @@ find ADB device
   -> discover/configure gateway
   -> verify gateway connectivity
   -> microphone test
-  -> local wake test
+  -> local wake + VAD test
   -> speaker test
 ```
 
@@ -955,10 +1037,10 @@ Initial model:
 - stable gateway `server_id` for preference/pairing, not as a secret;
 - per-device random credential/token;
 - gateway stores Hermes/assistant/speech secrets;
-- Echo stores only device credentials and local wake models/configuration;
+- Echo stores only device credentials and local wake assets/configuration;
 - management API requires authentication before non-local deployment.
 
-Local wake detection also gives a useful privacy property: while idle, microphone audio required for wake recognition remains on the device rather than being continuously sent to the gateway.
+Local wake detection and local wake VAD provide a useful privacy property: while idle, microphone audio needed for activation decisions stays on the device rather than being continuously sent to the gateway.
 
 Future improvement: per-device client certificates / mTLS.
 
@@ -966,7 +1048,7 @@ A browser-exposed root shell is not part of v1; ADB is sufficient for developmen
 
 ---
 
-## 17. Persistence
+## 17. Persistence and Observability
 
 SQLite is sufficient initially.
 
@@ -974,7 +1056,8 @@ Expected gateway data:
 
 - devices;
 - per-device configuration;
-- reported wake-model inventory and selected model;
+- reported wake-model inventory/selection;
+- reported local wake-VAD configuration/status;
 - gateway/server identity;
 - preferred/paired gateway metadata;
 - conversations;
@@ -982,12 +1065,6 @@ Expected gateway data:
 - turns;
 - selected diagnostics;
 - system configuration.
-
-Raw microphone audio is not stored by default. Development/debug mode may optionally persist selected turns or explicit wake-test recordings.
-
----
-
-## 18. Observability and Record/Replay
 
 Every turn gets a `turn_id` propagated through the pipeline.
 
@@ -1001,6 +1078,7 @@ conversation_id
 trigger_type
 wake_model_id
 wake_score
+wake_vad_score
 audio_stream_id
 backend
 state
@@ -1017,11 +1095,13 @@ TTS output
 timing information
 ```
 
-Wake testing should support explicitly captured fixtures so thresholds/models can be evaluated offline without adding gateway-side real-time wake detection.
+Wake testing should use explicitly captured fixtures so thresholds can be evaluated offline without adding gateway-side real-time wake processing.
+
+Raw microphone audio is not stored by default.
 
 ---
 
-## 19. Device Simulator (`dotsim`)
+## 18. Device Simulator (`dotsim`)
 
 `dotsim` implements the same protocol as `echod` but replaces hardware with files/terminal events.
 
@@ -1032,6 +1112,8 @@ dotsim
   --discover mdns
   --trigger wake
   --wake-model okay_nabu
+  --wake-score 0.87
+  --vad-score 0.93
   --mic testdata/audio/uk/question.wav
   --speaker-out ./response.wav
 ```
@@ -1041,7 +1123,7 @@ Capabilities to simulate:
 - mDNS discovery;
 - multiple gateways;
 - registration;
-- local wake event and score;
+- local wake event, wake score and VAD score;
 - button-triggered turns;
 - microphone turn streams;
 - speaker playback;
@@ -1049,11 +1131,11 @@ Capabilities to simulate:
 - network failures;
 - partial/older capability sets.
 
-The simulator does not need to run a real wake model for ordinary gateway tests. Local wake-engine correctness is tested separately with device/unit/audio-fixture tests.
+The simulator does not need to run a real wake model for ordinary gateway tests. Local wake/VAD correctness is tested separately with device/unit/audio-fixture tests.
 
 ---
 
-## 20. Windows Development Workflow
+## 19. Windows Development Workflow
 
 Recommended environment:
 
@@ -1100,14 +1182,14 @@ build echod
   -> adb push
   -> restart foreground/service
   -> tail logs
-  -> run mic/wake fixture tests
+  -> run mic/wake/VAD fixture tests
 ```
 
 mDNS must be tested from the actual Docker/WSL deployment because multicast visibility can differ by network mode. Explicit host/port remains the fallback.
 
 ---
 
-## 21. Deployment
+## 20. Deployment
 
 Initial gateway deployment: Docker Compose.
 
@@ -1126,7 +1208,7 @@ Future target: Raspberry Pi / ARM64 host without architectural changes.
 
 ---
 
-## 22. Implementation Milestones
+## 21. Implementation Milestones
 
 ### Milestone 0 — Repository and development foundation
 
@@ -1142,12 +1224,12 @@ Prove locally on the Dot:
 
 ```text
 mic -> WAV
-mic -> reused/adapted local wake engine -> wake event
+mic -> local VAD -> wake engine -> wake event
 WAV/PCM -> speaker
 LED/button access
 ```
 
-Success criterion: the Dot can detect a selected local wake model repeatedly without any gateway wake processing.
+Success criterion: the Dot can repeatedly detect a selected wake model locally, with observable wake and VAD scores, without gateway wake processing.
 
 ### Milestone 2 — Discovery, protocol and simulator
 
@@ -1159,7 +1241,7 @@ Success criterion: the Dot can detect a selected local wake model repeatedly wit
 - reconnect/backoff;
 - config push;
 - structured logs;
-- `turn.start` triggers;
+- `turn.start` triggers including wake/VAD diagnostics;
 - binary turn-audio framing;
 - `dotsim` integration tests.
 
@@ -1168,7 +1250,7 @@ Success criterion: the Dot can detect a selected local wake model repeatedly wit
 ```text
 Echo local wake / simulator trigger
   -> turn audio
-  -> gateway VAD/endpointing
+  -> gateway command endpointing
   -> STT
   -> transcript
 ```
@@ -1178,7 +1260,8 @@ Validate English and Ukrainian utterances using replayable fixtures.
 ### Milestone 4 — Complete mock voice loop
 
 ```text
-local wake
+local VAD + wake
+ -> turn audio
  -> STT
  -> MockBackend("You said: ...")
  -> TTS
@@ -1204,6 +1287,8 @@ local wake
 - device list/status;
 - discovery/network diagnostics;
 - local wake model/sensitivity configuration;
+- local wake-VAD configuration/diagnostics;
+- command-endpointing configuration;
 - audio diagnostics;
 - STT/TTS configuration;
 - assistant configuration;
@@ -1212,45 +1297,49 @@ local wake
 ### Milestone 8 — Productization
 
 - stable bootstrap/install;
-- wake-model update workflow;
+- wake/VAD asset update workflow;
 - upgrades/rollback;
 - stronger device authentication;
 - Raspberry Pi/ARM64 validation;
 - multi-Dot arbitration;
-- optional local endpointing / barge-in improvements.
+- optional local command endpointing / barge-in improvements.
 
 ---
 
-## 23. First Engineering Tasks
+## 22. First Engineering Tasks
 
 1. Create Go module/package skeleton and CI.
 2. Port/adapt the minimum EchoLocal microphone path.
 3. Port/adapt the EchoLocal local wake-model layer and one known working model.
-4. Build `echoctl mic record` and `echoctl wake test` before gateway integration.
-5. Verify local wake inference CPU, stability and false-trigger behaviour on the real Dot.
-6. Define `_echo-satellite._tcp.local.` discovery record and implement gateway advertisement.
-7. Implement minimal gateway WSS server and satellite discovery/connection.
-8. Define `turn.start` + binary audio framing.
-9. On local wake, stream command PCM to gateway and write it to WAV.
-10. Implement gateway-to-Echo speaker playback and semantic LED state.
-11. Implement `dotsim` with synthetic wake/button triggers.
-12. Add VAD/endpointing and STT/TTS interfaces.
-13. Add local Whisper integration.
-14. Add mock assistant end-to-end loop.
-15. Add Hermes only after hardware, local wake and transport are proven.
+4. Add a local wake-VAD gate consistent with upstream openWakeWord behaviour for the openWakeWord path.
+5. Build `echoctl mic record`, `echoctl wake test` and VAD diagnostics before gateway integration.
+6. Verify local CPU/memory, wake score, VAD score, false-trigger and false-reject behaviour on the real Dot.
+7. Define `_echo-satellite._tcp.local.` discovery record and implement gateway advertisement.
+8. Implement minimal gateway WSS server and satellite discovery/connection.
+9. Define `turn.start` + binary audio framing.
+10. On accepted local wake, stream command PCM to gateway and write it to WAV.
+11. Implement gateway command endpointing.
+12. Implement gateway-to-Echo speaker playback and semantic LED state.
+13. Implement `dotsim` with synthetic wake/button triggers and wake/VAD scores.
+14. Add STT/TTS interfaces and local Whisper integration.
+15. Add mock assistant end-to-end loop.
+16. Add Hermes only after hardware, local wake/VAD and transport are proven.
 
-This sequence avoids debugging wake inference, audio transport, STT and Hermes simultaneously.
+This sequence avoids debugging wake inference, VAD, audio transport, STT and Hermes simultaneously.
 
 ---
 
-## 24. Architectural Questions to Validate on Hardware
+## 23. Architectural Questions to Validate on Hardware
 
 - Which Echo microphone path/channel arrangement is best for both local wake inference and command capture?
-- How directly can EchoLocal's current openWakeWord/microWakeWord code be reused while keeping Echo Satellite's dependencies and licensing clean?
+- How directly can EchoLocal's current openWakeWord/microWakeWord code be reused while keeping dependencies and licensing clean?
+- What is the cleanest local Silero-VAD implementation for the Go/ARM64 device path?
+- What is the CPU/memory impact of local VAD plus openWakeWord on the Echo Dot Gen 2?
+- Should wake VAD run before all wake engines or only where supported/beneficial?
 - Which wake model should ship as the default?
-- What thresholds give acceptable false-positive/false-negative behaviour in a real room?
+- What wake and VAD thresholds give acceptable false-positive/false-negative behaviour in a real room?
 - How much pre-roll prevents clipped command speech without polluting STT with the wake phrase?
-- What is the CPU/memory cost of one versus multiple active local wake models?
+- What is the cost of one versus multiple active local wake models?
 - Whether beamforming should be reused from EchoLocal or initially bypassed.
 - Whether AEC is required only for barge-in/full-duplex behaviour or earlier.
 - Exact speaker format and best resampling location.
@@ -1263,7 +1352,7 @@ Resolve these with focused diagnostics and recordings rather than hidden complex
 
 ---
 
-## 25. Target v0.1 Stack
+## 24. Target v0.1 Stack
 
 | Component | Initial choice |
 |---|---|
@@ -1271,6 +1360,7 @@ Resolve these with focused diagnostics and recordings rather than hidden complex
 | Echo hardware reference | EchoLocal |
 | Wake detection | **Local on Echo only** |
 | Wake engines | EchoLocal-derived openWakeWord + microWakeWord support |
+| Wake VAD | **Local on Echo; Silero/openWakeWord-compatible behaviour for OWW path** |
 | Wake models | local TFLite models |
 | Manual trigger | Action button / simulator |
 | Local discovery | mDNS / DNS-SD, static URL fallback |
@@ -1279,7 +1369,7 @@ Resolve these with focused diagnostics and recordings rather than hidden complex
 | Control frames | JSON |
 | Audio frames | binary PCM during active turns |
 | Gateway | Go |
-| Endpointing | gateway-side initially |
+| Command endpointing | gateway-side initially, separate from wake VAD |
 | Persistence | SQLite |
 | Management UI | React + Vite, embedded in Go |
 | Provisioning CLI | Go + Cobra |
@@ -1289,18 +1379,21 @@ Resolve these with focused diagnostics and recordings rather than hidden complex
 | Assistant | Hermes adapter + mock adapter |
 | Local dev | Windows + WSL2 |
 | Device iteration | Windows ADB called from WSL |
-| Integration testing | `dotsim` + WAV/wake fixtures |
+| Integration testing | `dotsim` + WAV/wake/VAD fixtures |
 | Deployment | Docker Compose |
 
 ---
 
-## 26. Core Boundary
+## 25. Core Boundary
 
 ```text
 Echo Dot
     |
-    | local microphone -> local wake inference
-    |                    (audio stays on device while idle)
+    | local microphone
+    |   -> preprocessing
+    |   -> local wake VAD
+    |   -> local wake inference
+    |      (audio stays on device while idle)
     |
     | mDNS discovery (or static configuration)
     v
@@ -1311,10 +1404,10 @@ Voice Gateway endpoint
     v
 Voice Gateway
     |
-    +-- VAD / endpointing
+    +-- command endpointing
     +-- STT Provider       -> Whisper / Hermes / other
     +-- Assistant Backend -> Hermes / OpenClaw / other
     +-- TTS Provider       -> Hermes / local / other
 ```
 
-The key architectural rule is that **wake recognition belongs to the satellite**. The gateway begins processing only after the device has decided that a voice turn has started.
+The key architectural rule is that **wake recognition, including the VAD used to validate wake candidates, belongs to the satellite**. The gateway begins processing only after the device has decided that a voice turn has started.
