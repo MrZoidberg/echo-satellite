@@ -20,6 +20,7 @@ This document defines the initial architecture and a practical implementation se
 - Capture microphone audio and stream it to a self-hosted gateway.
 - Play audio returned by the gateway through the Echo speaker.
 - Expose LEDs, buttons, mute and volume as device capabilities.
+- Support automatic local gateway discovery using mDNS, with explicit/static configuration as a fallback and override.
 - Support English and Ukrainian speech recognition.
 - Integrate first with Hermes while keeping the assistant backend replaceable.
 - Preserve conversation context across multiple voice turns.
@@ -54,6 +55,7 @@ Its responsibilities are limited to:
 - audio playback;
 - LED and button control;
 - mute and volume;
+- local gateway discovery;
 - configuration;
 - diagnostics;
 - maintaining a secure connection to the gateway.
@@ -62,6 +64,7 @@ Its responsibilities are limited to:
 
 The gateway is responsible for:
 
+- advertising its local endpoint using mDNS;
 - device registration and configuration;
 - wake-word processing when done off-device;
 - voice activity detection / endpointing;
@@ -77,6 +80,7 @@ The gateway is responsible for:
 The system should define its own interfaces for:
 
 - satellite protocol;
+- local discovery;
 - STT;
 - TTS;
 - assistant backend;
@@ -111,6 +115,14 @@ The gateway must enable behaviour based on capabilities rather than hard-coded f
 
 The protocol and gateway should be testable against a simulated device (`dotsim`) that feeds WAV files instead of microphone hardware and writes playback audio to disk instead of a speaker.
 
+### 3.6 Zero-configuration local discovery, explicit configuration when needed
+
+A newly installed satellite should normally be able to find a gateway on the same local network without requiring the user to enter an IP address.
+
+mDNS is the default local discovery mechanism. It is not the source of trust or authentication; it only locates candidate gateway endpoints.
+
+An explicitly configured gateway URL must take precedence over mDNS. This supports VLANs, routed networks, VPNs, multiple gateways, and environments where multicast DNS is disabled or not forwarded.
+
 ---
 
 ## 4. Reference Projects
@@ -144,6 +156,7 @@ Best source for:
 - device/controller separation;
 - continuous audio streaming architecture;
 - WebSocket protocol ideas;
+- mDNS controller discovery patterns;
 - device registration;
 - per-device configuration;
 - capability negotiation;
@@ -168,8 +181,9 @@ EchoMuse should primarily be treated as an architecture and implementation refer
 +-------------------+       +---------------------------+
 | Echo Dot Gen 2    | WSS   |       Voice Gateway       |
 |                   |<----->|                           |
-| echod (Go)        |       | device manager            |
-|-------------------|       | turn state machine        |
+| echod (Go)        |       | mDNS advertisement        |
+|-------------------|       | device manager            |
+| mDNS discovery    |       | turn state machine        |
 | mic capture       |       | conversation manager      |
 | speaker playback  |       | speech routing            |
 | LEDs/buttons      |       | assistant routing         |
@@ -189,6 +203,8 @@ EchoMuse should primarily be treated as an architecture and implementation refer
 ```
 
 The Echo initiates the connection to the gateway. The gateway does not need to open inbound connections to devices.
+
+On a typical flat LAN, the gateway advertises itself through mDNS and each Echo satellite discovers it before opening the WSS connection. A configured gateway URL bypasses discovery.
 
 ---
 
@@ -212,6 +228,7 @@ echo-satellite/
 │   │   ├── mixer/
 │   │   └── system/
 │   │
+│   ├── discovery/             # mDNS advertisement/discovery
 │   ├── protocol/              # shared Dot <-> Gateway messages
 │   ├── gateway/
 │   │   ├── devices/
@@ -261,6 +278,7 @@ Initial responsibilities:
 
 - derive stable device identity from the device serial;
 - initialize supported hardware;
+- discover a local gateway using mDNS when no explicit gateway is configured;
 - establish/re-establish the gateway WebSocket;
 - advertise capabilities;
 - stream microphone PCM;
@@ -302,7 +320,7 @@ The gateway sends semantic states; the device decides how those states map to LE
 
 ---
 
-## 8. Satellite Protocol
+## 8. Satellite Protocol and Local Discovery
 
 ### Transport
 
@@ -315,12 +333,99 @@ Initial transport:
 
 This keeps the initial protocol simple, ordered and easy to inspect.
 
+### mDNS gateway discovery
+
+The gateway should advertise a dedicated DNS-SD service on the local network.
+
+Proposed service name:
+
+```text
+_echo-satellite._tcp.local.
+```
+
+A gateway instance could advertise records conceptually equivalent to:
+
+```text
+Instance: echo-satellite-<server-id>._echo-satellite._tcp.local.
+Host:     echo-gateway.local.
+Port:     8770
+TXT:
+  protocol=1
+  server_id=<stable-server-id>
+  tls=1
+  path=/device
+```
+
+Exact TXT fields should remain small and contain discovery metadata only. Credentials and secrets must never be advertised through mDNS.
+
+Satellite resolution order:
+
+```text
+1. Explicitly configured gateway URL, if present
+2. Previously paired/discovered gateway, if still reachable
+3. Browse _echo-satellite._tcp.local. using mDNS
+4. Apply candidate selection rules
+5. Connect and authenticate over WSS
+6. Retry discovery with backoff if no usable gateway is available
+```
+
+If exactly one compatible gateway is discovered, the satellite may select it automatically. If multiple gateways are discovered and there is no prior pairing, selection should be deterministic but should preferably require provisioning/selection rather than silently binding to an arbitrary gateway.
+
+A previously paired `server_id` should be preferred when rediscovered even if its IP address changes.
+
+mDNS is only a discovery mechanism. A discovered server is not trusted until the normal WSS authentication/pairing checks succeed.
+
+### Optional device advertisement
+
+Device-to-gateway traffic does not require the gateway to discover satellites because `echod` initiates the connection.
+
+For diagnostics and provisioning, `echod` may optionally advertise a separate service such as:
+
+```text
+_echo-satellite-device._tcp.local.
+```
+
+This advertisement should expose only non-sensitive information such as:
+
+```text
+device_id
+version
+pairing_state
+```
+
+The optional device service must not expose a remote root shell or unauthenticated management interface.
+
+### Network limitations and fallback
+
+mDNS normally operates within a local multicast domain. Networks with VLANs, multicast filtering, routed segments, VPNs, or container isolation may require an mDNS reflector/repeater or explicit gateway configuration.
+
+Therefore mDNS must never be the only supported configuration mechanism. Example device configuration:
+
+```yaml
+gateway:
+  discovery: mdns
+  url: ""               # when set, overrides discovery
+  preferred_server_id: ""
+```
+
+A fully explicit configuration could be:
+
+```yaml
+gateway:
+  discovery: disabled
+  url: "wss://192.168.10.20:8770/device"
+  preferred_server_id: "home-gateway"
+```
+
 ### Connection flow
 
 ```text
 Device boots
-  -> discover/load gateway
+  -> load explicit/previous gateway configuration
+  -> if necessary browse mDNS for _echo-satellite._tcp.local.
+  -> select compatible/preferred gateway
   -> connect WSS
+  -> authenticate/pair
   -> hello(device id, version, capabilities)
   <- welcome(config revision, server information)
   <- config
@@ -410,6 +515,16 @@ Reasons:
 - ability to embed the compiled management UI.
 
 ### Major modules
+
+#### Discovery Service
+
+Owns local gateway advertisement and discovery-related identity:
+
+- stable `server_id`;
+- `_echo-satellite._tcp.local.` advertisement;
+- advertised protocol version and WSS endpoint metadata;
+- service lifecycle when network interfaces change;
+- optional diagnostic browsing of satellite advertisements.
 
 #### Device Manager
 
@@ -668,6 +783,7 @@ The first UI should be intentionally small.
 
 - online/offline state;
 - version and capabilities;
+- discovered/paired gateway state where relevant;
 - current voice state;
 - volume/mute;
 - microphone test;
@@ -699,6 +815,15 @@ The first UI should be intentionally small.
 - switch/resume;
 - delete/archive later.
 
+### Network / Discovery
+
+- gateway `server_id`;
+- advertised mDNS service name;
+- current host/port;
+- connected/discovered satellites;
+- discovery diagnostics;
+- explicit gateway override configuration guidance.
+
 A React/Vite SPA is acceptable, with production assets embedded in the Go gateway binary.
 
 ---
@@ -711,6 +836,7 @@ Suggested commands:
 
 ```text
 echoctl devices
+echoctl discover
 echoctl inspect
 
 echoctl install
@@ -731,6 +857,8 @@ echoctl buttons test
 echoctl update        # later
 ```
 
+`echoctl discover` should browse the same mDNS service types used by the runtime and show gateway/device records for troubleshooting.
+
 ### Install flow
 
 Because the expected starting point is an already rooted/Magisk-enabled Dot, normal installation should avoid reflashing the boot image.
@@ -748,6 +876,7 @@ find ADB device
   -> install or configure supervised startup
   -> disable/avoid conflicting services as required
   -> start echod
+  -> discover/configure gateway
   -> verify gateway connectivity
   -> microphone health test
   -> speaker health test
@@ -762,7 +891,9 @@ Destructive rooting/flashing procedures should remain separate from normal appli
 Initial model:
 
 - WSS for device/gateway traffic;
+- mDNS used for endpoint discovery only, never authentication;
 - stable serial for identity, but not authentication;
+- stable gateway `server_id` for preference/pairing, but not as a secret;
 - per-device random credential/token;
 - gateway stores Hermes/assistant/speech secrets;
 - Echo stores only its own device credential;
@@ -784,6 +915,8 @@ Expected data:
 
 - devices;
 - per-device config;
+- gateway/server identity;
+- preferred/paired gateway metadata where applicable;
 - conversations;
 - backend bindings;
 - turns;
@@ -810,6 +943,18 @@ conversation_id
 audio_stream_id
 backend
 state
+```
+
+Discovery logs should separately capture:
+
+```text
+mDNS browse started/stopped
+discovered service instance
+server_id
+resolved host/port
+candidate selected/rejected
+explicit gateway override used
+pairing/authentication result
 ```
 
 In development mode, optionally persist:
@@ -843,13 +988,25 @@ dotsim
   --speaker-out ./response.wav
 ```
 
+It should also support discovery mode:
+
+```text
+dotsim
+  --discover mdns
+  --mic testdata/audio/uk/question.wav
+  --speaker-out ./response.wav
+```
+
 Capabilities to simulate:
 
+- mDNS discovery;
+- multiple discovered gateways;
 - registration;
 - microphone streams;
 - speaker playback;
 - button events;
 - reconnects;
+- gateway IP/hostname changes;
 - network failures;
 - partial/older capability sets;
 - device logs and state.
@@ -912,6 +1069,8 @@ build echod
 
 Use structured logging and diagnostic commands instead of depending on an interactive debugger on FireOS.
 
+mDNS must be tested both from native/host networking and from the intended Docker/WSL deployment because multicast visibility can differ depending on network mode. The gateway must remain usable with explicit host/port configuration even when mDNS is unavailable inside the development environment.
+
 ---
 
 ## 21. Deployment
@@ -929,6 +1088,8 @@ persistent data volume
 
 The gateway should also remain runnable as a native Go binary.
 
+The deployment must document how mDNS advertisement reaches the physical LAN. Where container networking prevents multicast advertisement, supported alternatives should include host networking where appropriate or running discovery/advertisement through a host-side mechanism. Static gateway configuration remains the universal fallback.
+
 Future target: Raspberry Pi / ARM64 host without architectural changes.
 
 ---
@@ -941,6 +1102,7 @@ Future target: Raspberry Pi / ARM64 host without architectural changes.
 - add formatting/lint/test CI;
 - create `echod`, `gateway`, `echoctl` and `dotsim` entrypoints;
 - define initial protocol types;
+- define discovery interfaces and mDNS service records;
 - add Windows/WSL development documentation.
 
 ### Milestone 1 — Hardware vertical slice
@@ -956,8 +1118,13 @@ Echo buttons -> gateway event
 
 Success criterion: microphone and speaker round-trip are reliable and observable.
 
-### Milestone 2 — Protocol and simulator
+### Milestone 2 — Discovery, protocol and simulator
 
+- gateway mDNS advertisement;
+- satellite mDNS browsing/resolution;
+- explicit gateway override;
+- previous/preferred gateway selection using `server_id`;
+- multiple-gateway handling;
 - device registration;
 - capabilities;
 - reconnect/backoff;
@@ -965,7 +1132,7 @@ Success criterion: microphone and speaker round-trip are reliable and observable
 - structured logs;
 - health reporting;
 - binary audio framing;
-- `dotsim` integration tests.
+- `dotsim` discovery/integration tests.
 
 ### Milestone 3 — Local speech
 
@@ -1015,6 +1182,7 @@ Success criterion: complete two-way spoken interaction without an external assis
 ### Milestone 7 — Management UI
 
 - device list/status;
+- discovery/network diagnostics;
 - audio diagnostics;
 - speech/provider configuration;
 - assistant backend configuration;
@@ -1038,18 +1206,21 @@ A sensible first implementation order is:
 
 1. Create the Go module and package skeleton.
 2. Add CI for `go test`, `go vet` and linting.
-3. Port/adapt only the minimum Echo hardware code required to capture microphone audio.
-4. Implement a minimal gateway WebSocket server.
-5. Stream mic PCM from Echo to gateway and write it to WAV.
-6. Implement gateway-to-Echo speaker playback.
-7. Add LED state and action-button events.
-8. Extract protocol types into a shared package.
-9. Implement `dotsim` against the same protocol.
-10. Add record/replay fixtures.
-11. Add a mock assistant backend.
-12. Add STT/TTS provider interfaces.
-13. Add local Whisper integration.
-14. Add Hermes only after the voice transport is proven.
+3. Define the discovery interface and `_echo-satellite._tcp.local.` record format.
+4. Implement gateway mDNS advertisement and a small `echoctl discover` diagnostic.
+5. Port/adapt only the minimum Echo hardware code required to capture microphone audio.
+6. Implement a minimal gateway WebSocket server.
+7. Add satellite mDNS discovery with explicit URL override.
+8. Stream mic PCM from Echo to gateway and write it to WAV.
+9. Implement gateway-to-Echo speaker playback.
+10. Add LED state and action-button events.
+11. Extract protocol types into a shared package.
+12. Implement `dotsim` against the same discovery and transport behaviour.
+13. Add record/replay fixtures.
+14. Add a mock assistant backend.
+15. Add STT/TTS provider interfaces.
+16. Add local Whisper integration.
+17. Add Hermes only after the voice transport is proven.
 
 This sequence intentionally reduces the number of systems being debugged at once.
 
@@ -1059,6 +1230,8 @@ This sequence intentionally reduces the number of systems being debugged at once
 
 The following should remain decisions under test rather than assumptions:
 
+- Which mDNS implementation works reliably on the Echo's FireOS environment without introducing unnecessary native dependencies?
+- Whether gateway advertisement from Docker/WSL is visible to Echo devices on the physical LAN in the preferred development/deployment configuration.
 - Which Echo microphone path/channel arrangement provides the best initial mono stream?
 - Whether beamforming should be reused from EchoLocal or implemented differently.
 - Whether AEC is necessary in the initial conversational model or only for barge-in/full-duplex behaviour.
@@ -1078,6 +1251,8 @@ These should be resolved with small diagnostics and recorded evidence rather tha
 |---|---|
 | Echo daemon | Go |
 | Echo hardware reference | EchoLocal |
+| Local discovery | mDNS / DNS-SD, static URL fallback |
+| Gateway service | `_echo-satellite._tcp.local.` |
 | Device transport | WSS |
 | Control frames | JSON |
 | Audio frames | binary PCM |
@@ -1104,7 +1279,11 @@ The most important architectural boundary is:
 ```text
 Echo Dot
     |
-    | Echo Satellite Protocol
+    | mDNS discovery (or static configuration)
+    v
+Voice Gateway endpoint
+    |
+    | Echo Satellite Protocol over WSS
     v
 Voice Gateway
     |
