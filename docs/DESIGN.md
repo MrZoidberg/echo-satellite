@@ -4,11 +4,11 @@
 
 Echo Satellite repurposes a rooted Amazon Echo Dot Gen 2 as a self-hosted network voice terminal.
 
-The Echo Dot should provide the hardware-facing capabilities — microphone capture, speaker playback, LEDs, buttons, volume and mute — while a separate gateway performs the changeable parts of the voice-assistant pipeline and integrates with an assistant backend such as Hermes.
+The Echo Dot provides the hardware-facing capabilities — microphone capture, **local wake-word detection**, speaker playback, LEDs, buttons, volume and mute — while a separate gateway performs speech recognition, assistant orchestration, conversation management and speech generation.
 
-The primary architectural goal is **backend independence**: Hermes is the first backend, not part of the device protocol. The same Echo Dot agent should be able to work later with OpenClaw, a Raspberry Pi-hosted assistant, another local agent, or a cloud service without being rewritten.
+Hermes is the first assistant backend, not part of the device protocol. The same satellite should be able to work later with OpenClaw, a Raspberry Pi-hosted assistant, another local agent, or a cloud service without rewriting the device agent.
 
-This document defines the initial architecture and a practical implementation sequence. It is intentionally high-level where real Echo Dot hardware testing is still required.
+This document defines the initial architecture and implementation direction. Details that depend on real Echo Dot hardware should be validated experimentally rather than treated as assumptions.
 
 ---
 
@@ -17,8 +17,10 @@ This document defines the initial architecture and a practical implementation se
 ### Core goals
 
 - Run a small Go daemon on a rooted Echo Dot Gen 2.
-- Capture microphone audio and stream it to a self-hosted gateway.
-- Play audio returned by the gateway through the Echo speaker.
+- Perform wake-word detection locally on the Echo Dot.
+- Reuse/adapt the proven local wake-word implementation from existing Echo Dot projects where practical.
+- Stream microphone audio to the gateway only for an active voice turn, rather than continuously for wake detection.
+- Play gateway-generated audio through the Echo speaker.
 - Expose LEDs, buttons, mute and volume as device capabilities.
 - Support automatic local gateway discovery using mDNS, with explicit/static configuration as a fallback and override.
 - Support English and Ukrainian speech recognition.
@@ -33,10 +35,12 @@ This document defines the initial architecture and a practical implementation se
 ### Non-goals for the first release
 
 - Recreating every Alexa feature.
+- Gateway-side wake-word detection.
+- Continuously streaming microphone audio to the gateway solely for wake detection.
 - Running STT or the LLM directly on the Echo Dot.
 - Supporting arbitrary Echo generations before Gen 2 is stable.
 - Multi-room arbitration in the first vertical slice.
-- Perfect far-field beamforming before basic end-to-end voice works.
+- Perfect far-field tuning before the basic end-to-end voice loop works.
 - Building a general home-automation protocol.
 
 ---
@@ -50,8 +54,11 @@ The Echo device should know nothing about Hermes, OpenClaw, LLM APIs, conversati
 Its responsibilities are limited to:
 
 - hardware initialization;
-- microphone capture;
-- optional beamforming / AEC / local wake detection;
+- continuous local microphone capture needed by the wake engine;
+- **local wake-word inference**;
+- optional beamforming / AEC / preprocessing;
+- short audio buffering around a wake trigger;
+- streaming command audio for an active turn;
 - audio playback;
 - LED and button control;
 - mute and volume;
@@ -60,14 +67,22 @@ Its responsibilities are limited to:
 - diagnostics;
 - maintaining a secure connection to the gateway.
 
-### 3.2 The gateway owns assistant orchestration
+### 3.2 Wake detection is always local
+
+Wake-word detection is a device capability and is not implemented by the gateway.
+
+The gateway may configure the active model and sensitivity and may receive wake diagnostics, but it does not receive a continuous microphone stream and does not score wake words itself.
+
+A manual Action-button / push-to-talk trigger may start a turn without a wake word for development, accessibility and recovery. This is an alternate **trigger**, not an alternate wake-word engine.
+
+### 3.3 The gateway owns assistant orchestration
 
 The gateway is responsible for:
 
 - advertising its local endpoint using mDNS;
 - device registration and configuration;
-- wake-word processing when done off-device;
-- voice activity detection / endpointing;
+- turn lifecycle after a local wake/button trigger;
+- VAD / endpointing for the command audio initially;
 - speech-to-text provider selection;
 - assistant backend selection;
 - conversation management;
@@ -75,12 +90,13 @@ The gateway is responsible for:
 - turn state and observability;
 - management API and UI.
 
-### 3.3 Stable internal contracts, replaceable providers
+### 3.4 Stable internal contracts, replaceable providers
 
 The system should define its own interfaces for:
 
 - satellite protocol;
 - local discovery;
+- wake-model configuration;
 - STT;
 - TTS;
 - assistant backend;
@@ -88,9 +104,9 @@ The system should define its own interfaces for:
 
 Hermes-specific concepts stay inside a Hermes adapter.
 
-### 3.4 Capability negotiation instead of firmware-version logic
+### 3.5 Capability negotiation instead of firmware-version logic
 
-Each device announces what it supports, for example:
+Each device announces what it supports. Example:
 
 ```json
 {
@@ -104,57 +120,59 @@ Each device announces what it supports, for example:
     "led",
     "buttons",
     "mute",
-    "volume"
+    "volume",
+    "wake.local.openwakeword",
+    "wake.local.microwakeword"
   ]
 }
 ```
 
-The gateway must enable behaviour based on capabilities rather than hard-coded firmware-version comparisons.
+The gateway enables behaviour based on capabilities rather than hard-coded firmware-version comparisons.
 
-### 3.5 Hardware-independent development where possible
+### 3.6 Hardware-independent development where possible
 
 The protocol and gateway should be testable against a simulated device (`dotsim`) that feeds WAV files instead of microphone hardware and writes playback audio to disk instead of a speaker.
 
-### 3.6 Zero-configuration local discovery, explicit configuration when needed
+The simulator must also be able to generate local-wake events so gateway development does not depend on running a wake model.
 
-A newly installed satellite should normally be able to find a gateway on the same local network without requiring the user to enter an IP address.
+### 3.7 Zero-configuration local discovery, explicit configuration when needed
 
-mDNS is the default local discovery mechanism. It is not the source of trust or authentication; it only locates candidate gateway endpoints.
+A newly installed satellite should normally be able to find a gateway on the same local network without requiring an IP address.
 
-An explicitly configured gateway URL must take precedence over mDNS. This supports VLANs, routed networks, VPNs, multiple gateways, and environments where multicast DNS is disabled or not forwarded.
+mDNS is the default local discovery mechanism. It only locates candidate gateway endpoints; it is not authentication.
+
+An explicitly configured gateway URL takes precedence over mDNS for VLANs, routed networks, VPNs, multiple gateways, and networks where multicast DNS is unavailable.
 
 ---
 
 ## 4. Reference Projects
 
-Two existing projects are particularly useful references.
-
 ### EchoLocal
 
 Repository: `ygelfand/echolocal`
 
-Best source for:
+Primary implementation reference for:
 
 - Echo Dot Gen 2 hardware access;
-- pure-Go ALSA implementation;
-- microphone handling;
-- speaker handling;
+- pure-Go ALSA handling;
+- microphone and speaker paths;
 - LEDs and buttons;
-- AEC / beamforming experiments;
-- local wake-word infrastructure;
+- AEC / beamforming work;
+- **local openWakeWord and microWakeWord support**;
+- TFLite model loading;
+- wake-model metadata and sensitivity configuration;
 - host-side installer UX;
 - ADB-based development workflow.
 
-The intent is to selectively reuse or adapt suitable MIT-licensed code while keeping Echo Satellite's architecture independent from Home Assistant / ESPHome.
+EchoLocal already separates wake-model configuration from the detection engine and supports both openWakeWord and microWakeWord model kinds. Echo Satellite should reuse/adapt these low-level ideas rather than inventing a second wake stack.
 
 ### EchoMuse
 
 Repository: `wilbowes/EchoMuse`
 
-Best source for:
+Useful reference for:
 
 - device/controller separation;
-- continuous audio streaming architecture;
 - WebSocket protocol ideas;
 - mDNS controller discovery patterns;
 - device registration;
@@ -163,7 +181,7 @@ Best source for:
 - management dashboard patterns;
 - operational lessons from real Echo hardware.
 
-EchoMuse should primarily be treated as an architecture and implementation reference rather than the base repository.
+EchoMuse's controller-side wake architecture is **not** the target architecture for Echo Satellite. It remains useful for the surrounding device/controller design.
 
 ---
 
@@ -178,56 +196,67 @@ EchoMuse should primarily be treated as an architecture and implementation refer
                                      |
                                      | HTTP/WS
                                      v
-+-------------------+       +---------------------------+
-| Echo Dot Gen 2    | WSS   |       Voice Gateway       |
-|                   |<----->|                           |
-| echod (Go)        |       | mDNS advertisement        |
-|-------------------|       | device manager            |
-| mDNS discovery    |       | turn state machine        |
-| mic capture       |       | conversation manager      |
-| speaker playback  |       | speech routing            |
-| LEDs/buttons      |       | assistant routing         |
-| mute/volume       |       | SQLite                    |
-| optional DSP      |       +------+------+-------------+
-+-------------------+              |      |
-                                   |      |
-                    +--------------+      +----------------+
-                    v                                      v
-          +-------------------+                  +-------------------+
-          | Speech Providers  |                  | Assistant Backend |
-          |-------------------|                  |-------------------|
-          | local Whisper     |                  | Hermes            |
-          | Hermes STT/TTS    |                  | OpenClaw (future) |
-          | future providers  |                  | other (future)    |
-          +-------------------+                  +-------------------+
++------------------------+   WSS   +---------------------------+
+| Echo Dot Gen 2         |<------->|       Voice Gateway       |
+|                        |         |                           |
+| echod (Go)             |         | mDNS advertisement        |
+|------------------------|         | device manager            |
+| mDNS discovery         |         | turn state machine        |
+| mic capture            |         | VAD / endpointing         |
+| local wake engine      |         | conversation manager      |
+| short pre-roll buffer  |         | STT / TTS routing         |
+| speaker playback       |         | assistant routing         |
+| LEDs/buttons           |         | SQLite                    |
+| mute/volume            |         +------+------+-------------+
++------------------------+                |      |
+                                         |      |
+                          +--------------+      +----------------+
+                          v                                      v
+                +-------------------+                  +-------------------+
+                | Speech Providers  |                  | Assistant Backend |
+                |-------------------|                  |-------------------|
+                | local Whisper     |                  | Hermes            |
+                | Hermes STT/TTS    |                  | OpenClaw (future) |
+                | future providers  |                  | other (future)    |
+                +-------------------+                  +-------------------+
 ```
 
-The Echo initiates the connection to the gateway. The gateway does not need to open inbound connections to devices.
+Normal turn flow:
 
-On a typical flat LAN, the gateway advertises itself through mDNS and each Echo satellite discovers it before opening the WSS connection. A configured gateway URL bypasses discovery.
+```text
+local mic -> local wake engine
+          -> wake detected
+          -> local feedback immediately
+          -> turn.start + command audio over WSS
+          -> gateway VAD/endpointing
+          -> STT
+          -> assistant
+          -> TTS
+          -> Echo speaker
+```
+
+No gateway-side wake detector exists in this architecture.
 
 ---
 
 ## 6. Proposed Repository Structure
 
-Initial monorepo:
-
 ```text
 echo-satellite/
 ├── cmd/
 │   ├── echod/                 # daemon running on Echo Dot
-│   ├── echoctl/               # host provisioning/diagnostic CLI
+│   ├── echoctl/               # provisioning/diagnostic CLI
 │   ├── gateway/               # central API + orchestration service
 │   └── dotsim/                # simulated Echo Dot
 │
 ├── internal/
 │   ├── device/
 │   │   ├── audio/
+│   │   ├── wake/              # local wake engine + model management
 │   │   ├── buttons/
 │   │   ├── led/
 │   │   ├── mixer/
 │   │   └── system/
-│   │
 │   ├── discovery/             # mDNS advertisement/discovery
 │   ├── protocol/              # shared Dot <-> Gateway messages
 │   ├── gateway/
@@ -235,24 +264,20 @@ echo-satellite/
 │   │   ├── turns/
 │   │   ├── conversations/
 │   │   └── config/
-│   │
 │   ├── assistant/
 │   │   ├── backend.go
 │   │   ├── hermes/
 │   │   ├── mock/
 │   │   └── openclaw/          # future
-│   │
 │   ├── speech/
 │   │   ├── stt.go
 │   │   ├── tts.go
 │   │   ├── hermes/
 │   │   └── local/
-│   │
 │   └── store/
 │
 ├── services/
 │   └── speech-worker/         # optional Python ML worker
-│
 ├── web/                       # management SPA
 ├── deploy/
 │   └── docker-compose.yml
@@ -260,7 +285,8 @@ echo-satellite/
 │   ├── DESIGN.md
 │   └── protocol.md
 ├── testdata/
-│   └── audio/
+│   ├── audio/
+│   └── wake/
 └── README.md
 ```
 
@@ -281,42 +307,40 @@ Initial responsibilities:
 - discover a local gateway using mDNS when no explicit gateway is configured;
 - establish/re-establish the gateway WebSocket;
 - advertise capabilities;
-- stream microphone PCM;
-- receive and play PCM;
+- continuously feed local microphone frames into the local wake engine while idle;
+- maintain a small local audio ring buffer so speech immediately after the wake phrase is not clipped;
+- start a turn after a local wake or Action-button trigger;
+- stream command PCM only during the active listening phase;
+- receive and play response PCM;
 - report button and mute events;
 - apply volume/config changes;
 - render semantic LED states;
 - report health and logs.
 
-### Initial audio strategy
+### Audio strategy
 
-Start with the simplest known-good microphone output, ideally mono/omnidirectional, and prove the full pipeline before optimizing far-field capture.
+Start with the simplest known-good microphone path and prove wake detection plus the complete voice loop before optimizing far-field behaviour.
 
-Later options can include:
+The same local capture path should feed both the wake engine and turn streaming so switching from idle detection to active listening does not require reopening/reconfiguring ALSA.
 
-- beamforming;
-- acoustic echo cancellation;
-- local wake-word recognition;
-- preprocessing / gain tuning.
-
-These should remain capability-driven and configurable.
+Beamforming, AEC and preprocessing can be adopted from the reference projects as needed, but the wake engine remains on-device regardless of which DSP stages are enabled.
 
 ### Device state
 
-Suggested user-visible states:
+Suggested states:
 
 ```text
-idle
-listening
+idle         # local wake engine active
+listening    # wake/button triggered; command audio streaming
 thinking
 speaking
-muted
+muted        # wake engine must not trigger while hardware/software muted
 offline
 error
 updating
 ```
 
-The gateway sends semantic states; the device decides how those states map to LED effects.
+The device should provide wake tone/LED feedback immediately after local detection instead of waiting for gateway round-trip latency.
 
 ---
 
@@ -331,19 +355,17 @@ Initial transport:
 - JSON text frames for control/events;
 - binary WebSocket frames for PCM audio.
 
-This keeps the initial protocol simple, ordered and easy to inspect.
+The WSS connection may remain idle while the local wake engine listens. Microphone frames are not forwarded until a turn starts.
 
 ### mDNS gateway discovery
 
-The gateway should advertise a dedicated DNS-SD service on the local network.
-
-Proposed service name:
+The gateway advertises a DNS-SD service:
 
 ```text
 _echo-satellite._tcp.local.
 ```
 
-A gateway instance could advertise records conceptually equivalent to:
+Conceptual record:
 
 ```text
 Instance: echo-satellite-<server-id>._echo-satellite._tcp.local.
@@ -356,50 +378,36 @@ TXT:
   path=/device
 ```
 
-Exact TXT fields should remain small and contain discovery metadata only. Credentials and secrets must never be advertised through mDNS.
+TXT records contain discovery metadata only. No credentials or secrets are advertised.
 
 Satellite resolution order:
 
 ```text
-1. Explicitly configured gateway URL, if present
-2. Previously paired/discovered gateway, if still reachable
+1. Explicitly configured gateway URL
+2. Previously paired/discovered gateway, if reachable
 3. Browse _echo-satellite._tcp.local. using mDNS
-4. Apply candidate selection rules
+4. Select a compatible/preferred gateway
 5. Connect and authenticate over WSS
-6. Retry discovery with backoff if no usable gateway is available
+6. Retry with backoff if unavailable
 ```
 
-If exactly one compatible gateway is discovered, the satellite may select it automatically. If multiple gateways are discovered and there is no prior pairing, selection should be deterministic but should preferably require provisioning/selection rather than silently binding to an arbitrary gateway.
-
-A previously paired `server_id` should be preferred when rediscovered even if its IP address changes.
-
-mDNS is only a discovery mechanism. A discovered server is not trusted until the normal WSS authentication/pairing checks succeed.
+A previously paired `server_id` is preferred even when its IP address changes.
 
 ### Optional device advertisement
 
-Device-to-gateway traffic does not require the gateway to discover satellites because `echod` initiates the connection.
-
-For diagnostics and provisioning, `echod` may optionally advertise a separate service such as:
+For provisioning/diagnostics, `echod` may optionally advertise:
 
 ```text
 _echo-satellite-device._tcp.local.
 ```
 
-This advertisement should expose only non-sensitive information such as:
-
-```text
-device_id
-version
-pairing_state
-```
-
-The optional device service must not expose a remote root shell or unauthenticated management interface.
+Only non-sensitive metadata such as device ID, version and pairing state should be exposed.
 
 ### Network limitations and fallback
 
-mDNS normally operates within a local multicast domain. Networks with VLANs, multicast filtering, routed segments, VPNs, or container isolation may require an mDNS reflector/repeater or explicit gateway configuration.
+mDNS normally stays within a multicast domain. VLANs, multicast filtering, routed segments, VPNs or container isolation may require an mDNS reflector/repeater or an explicit gateway URL.
 
-Therefore mDNS must never be the only supported configuration mechanism. Example device configuration:
+Example configuration:
 
 ```yaml
 gateway:
@@ -408,7 +416,7 @@ gateway:
   preferred_server_id: ""
 ```
 
-A fully explicit configuration could be:
+Explicit configuration:
 
 ```yaml
 gateway:
@@ -417,60 +425,51 @@ gateway:
   preferred_server_id: "home-gateway"
 ```
 
-### Connection flow
+### Connection and turn flow
 
 ```text
 Device boots
+  -> initialize mic + local wake engine
   -> load explicit/previous gateway configuration
-  -> if necessary browse mDNS for _echo-satellite._tcp.local.
-  -> select compatible/preferred gateway
-  -> connect WSS
-  -> authenticate/pair
-  -> hello(device id, version, capabilities)
-  <- welcome(config revision, server information)
-  <- config
-  -> state/health
-  -> continuous or requested audio
+  -> if necessary discover gateway over mDNS
+  -> connect/authenticate over WSS
+  -> hello(device id, version, capabilities, installed wake models)
+  <- welcome/config
+  -> idle; local wake inference continues
+
+Wake detected locally
+  -> immediate local LED/tone
+  -> turn.start(trigger=wake, model, score)
+  -> audio.start
+  -> binary PCM command audio
+  <- state(thinking)
+  <- play.start + binary response audio
+  -> playback complete
+  -> return to idle/local wake inference
 ```
 
-### Example messages
-
-Device registration:
+### Turn-start example
 
 ```json
 {
-  "type": "hello",
-  "protocol": 1,
-  "device_id": "G0K0XXXXXXXX",
-  "version": "0.1.0",
-  "capabilities": ["mic", "speaker", "led", "buttons"]
-}
-```
-
-Audio stream metadata:
-
-```json
-{
-  "type": "audio.start",
-  "stream_id": "01J...",
-  "format": {
-    "encoding": "pcm_s16le",
-    "sample_rate": 16000,
-    "channels": 1
+  "type": "turn.start",
+  "turn_id": "01J...",
+  "trigger": {
+    "type": "wake",
+    "model_id": "okay_nabu",
+    "score": 0.87
   }
 }
 ```
 
-Playback request:
+Manual Action-button trigger:
 
 ```json
 {
-  "type": "play.start",
-  "stream_id": "01J...",
-  "format": {
-    "encoding": "pcm_s16le",
-    "sample_rate": 48000,
-    "channels": 2
+  "type": "turn.start",
+  "turn_id": "01J...",
+  "trigger": {
+    "type": "button"
   }
 }
 ```
@@ -484,6 +483,9 @@ state
 health
 log
 
+turn.start / turn.cancel
+wake.models / wake.status
+
 audio.start / audio.stop
 play.start / play.stop
 
@@ -491,13 +493,11 @@ button
 mute
 volume
 
-turn.start / turn.cancel
-
 ping / pong
 error
 ```
 
-The exact framing and schemas should be documented in `docs/protocol.md` once the first hardware experiments confirm formats and latency requirements.
+Exact framing belongs in `docs/protocol.md` once hardware formats and latency behaviour are validated.
 
 ---
 
@@ -505,25 +505,16 @@ The exact framing and schemas should be documented in `docs/protocol.md` once th
 
 The gateway should initially be written in Go.
 
-Reasons:
-
-- shared protocol models with the device;
-- strong concurrency primitives;
-- simple WebSocket/audio streaming;
-- single static binary deployment;
-- easy ARM64 deployment later;
-- ability to embed the compiled management UI.
-
 ### Major modules
 
 #### Discovery Service
 
-Owns local gateway advertisement and discovery-related identity:
+Owns:
 
 - stable `server_id`;
 - `_echo-satellite._tcp.local.` advertisement;
-- advertised protocol version and WSS endpoint metadata;
-- service lifecycle when network interfaces change;
+- advertised protocol/WSS endpoint metadata;
+- service lifecycle across network-interface changes;
 - optional diagnostic browsing of satellite advertisements.
 
 #### Device Manager
@@ -532,14 +523,15 @@ Maintains:
 
 - connected devices;
 - capabilities;
+- installed/active wake-model metadata reported by devices;
 - current state;
 - last-seen time;
 - configuration revisions;
-- commands and audio streams.
+- commands and active audio streams.
 
 #### Turn Manager
 
-Owns the voice-turn state machine:
+Owns the server-side turn state after a device trigger:
 
 ```text
 IDLE
@@ -549,7 +541,7 @@ IDLE
   -> IDLE
 ```
 
-One logical owner should mutate turn state to avoid races between audio, backend events, user cancellation and playback completion.
+The gateway never transitions `IDLE -> LISTENING` because of wake inference of its own; it does so only after `turn.start` from a device or simulator.
 
 #### Speech Router
 
@@ -561,15 +553,15 @@ Selects an assistant adapter. Hermes is the first implementation.
 
 #### Conversation Manager
 
-Owns persistent local conversation identity and maps local conversations to backend-specific sessions/threads.
+Owns local conversation identity and maps it to backend-specific sessions/threads.
 
 ---
 
 ## 10. Speech Recognition and Generation
 
-### STT interface
+### STT
 
-Conceptually:
+Conceptual interface:
 
 ```go
 type STT interface {
@@ -583,18 +575,18 @@ type Transcript struct {
 }
 ```
 
-Initial provider candidates:
+Initial candidates:
 
 - local Whisper/faster-whisper worker;
 - Hermes-provided STT if available.
 
-English and Ukrainian must both be supported. Auto language detection should be the initial default, with optional per-device or global language hints.
+English and Ukrainian must both be supported. Auto language detection is the default, with optional language hints.
+
+If the selected STT provider needs whole utterances, the gateway buffers the active turn until endpointing. Streaming STT can be added later without changing the satellite trigger model.
 
 ### Python speech worker
 
-If local Whisper is used, keep ML concerns in a separate Python service instead of embedding Python into the gateway.
-
-Example:
+If local Whisper is used:
 
 ```text
 Gateway (Go)
@@ -602,11 +594,9 @@ Gateway (Go)
        -> faster-whisper
 ```
 
-This keeps the gateway small and makes speech implementation independently replaceable.
+### TTS
 
-### TTS interface
-
-Conceptually:
+Conceptual interface:
 
 ```go
 type TTS interface {
@@ -614,15 +604,13 @@ type TTS interface {
 }
 ```
 
-Initial TTS can come from Hermes. Local/cloud alternatives can be added later without changing the device protocol.
+TTS may initially come from Hermes or a local provider.
 
 ---
 
 ## 11. Assistant Backend Abstraction
 
-Hermes must be implemented behind an internal backend interface, not called directly throughout the gateway.
-
-Conceptual interface:
+Hermes is implemented behind an internal backend interface.
 
 ```go
 type AssistantBackend interface {
@@ -659,15 +647,15 @@ assistant/openclaw
 assistant/http
 ```
 
-The mock backend is important for proving the complete voice pipeline before Hermes integration is introduced.
+The mock backend should prove the complete voice loop before Hermes integration.
 
 ---
 
 ## 12. Conversation Model
 
-Conversation identity belongs to Echo Satellite, not to Hermes.
+Conversation identity belongs to Echo Satellite, not Hermes.
 
-Suggested persistence model:
+Suggested entities:
 
 ### Conversation
 
@@ -694,6 +682,8 @@ backend_metadata
 id
 conversation_id
 device_id
+trigger_type
+wake_model_id
 started_at
 finished_at
 language
@@ -715,13 +705,7 @@ last_seen
 config
 ```
 
-A local conversation can therefore map to different backend representations without changing its identity.
-
-For backends without persistent sessions, the adapter may reconstruct context from locally stored turns.
-
-### Voice conversation controls
-
-Infrastructure-level utterances can be intercepted before the assistant, for example:
+Infrastructure-level utterances may be intercepted before the assistant, for example:
 
 ```text
 "New conversation"
@@ -731,80 +715,156 @@ Infrastructure-level utterances can be intercepted before the assistant, for exa
 "Переключись на подорож"
 ```
 
-The device's active conversation is only a pointer. Conversation history should not belong to a physical Dot, allowing future cross-device continuation.
+Conversation history is not owned by a physical Dot, enabling future cross-device continuation.
 
 ---
 
-## 13. Wake Word and Endpointing
+## 13. Wake Word
 
-### Initial recommendation
+### Architecture decision
 
-Keep wake-word detection and VAD/endpointing gateway-side for the first version.
+**Wake-word detection is local-only. Gateway-side wake detection is intentionally unsupported.**
 
-Initial pipeline:
+The initial implementation should reuse/adapt EchoLocal's current local wake stack instead of developing a separate detector.
+
+The reference implementation already supports two useful model families:
+
+- **openWakeWord** classifiers using TFLite models and a shared on-device feature/embedding pipeline;
+- **microWakeWord** TFLite models using the existing microWakeWord runtime.
+
+The model-loading layer should preserve the useful reference behaviour:
+
+- discover/install `.tflite` wake models;
+- support optional sidecar metadata describing phrase and trained languages;
+- identify which local engine should run a model;
+- expose a configurable sensitivity/threshold;
+- allow models to be selected by stable ID;
+- keep wake configuration independent of Hermes or any other assistant backend.
+
+### v0.1 behaviour
+
+Start with one active wake model per device to keep behaviour and CPU usage predictable. The internal API should not prevent multiple simultaneously active models later.
+
+The local detector runs continuously while the device is `idle` and not muted.
 
 ```text
-Echo microphone
-  -> gateway audio stream
-  -> wake-word detector
-  -> VAD / endpointing
-  -> STT
-  -> assistant
-  -> TTS
-  -> Echo speaker
+mic capture
+  -> optional DSP/beamforming
+  -> local wake engine
+  -> threshold reached
+  -> immediate local wake feedback
+  -> create turn_id
+  -> send turn.start
+  -> stream command audio
 ```
 
-Advantages:
+The openWakeWord-compatible path should preserve the reference project's 16 kHz input expectations rather than introducing an unnecessary resampling/model format of our own.
 
-- easier debugging;
-- easier model replacement;
-- easier tuning;
-- fewer device builds;
-- less CPU pressure on old hardware.
+### Pre-roll and speech clipping
 
-### Later modes
+The device should maintain a short PCM ring buffer while idle. When a wake word fires, a small configurable tail of pre-trigger audio can be included at the beginning of the active turn so the first word after the wake phrase is not clipped.
 
-Make wake mode configurable:
+The initial value should be conservative and tuned from recordings. If the pre-roll frequently contains the wake phrase itself, reduce it or strip the configured wake phrase from STT output rather than moving wake inference to the gateway.
+
+### Endpointing
+
+Wake detection and endpointing are separate concerns.
+
+For v0.1:
+
+- wake detection: **device only**;
+- command VAD/endpointing: gateway;
+- STT: gateway-side provider.
+
+Local endpointing can be explored later if it gives useful latency/bandwidth benefits, but it is not required to keep wake detection local.
+
+### Action button
+
+The Action button should start the same voice-turn pipeline without running a synthetic wake detector:
+
+```text
+button press
+  -> turn.start(trigger=button)
+  -> command audio stream
+```
+
+This is useful during development and when wake models are misconfigured.
+
+### Configuration
+
+Example device configuration:
 
 ```yaml
 wake:
-  mode: gateway   # gateway | device | push-to-talk
+  enabled: true
+  model: okay_nabu
+  threshold: 0.80
+  preroll_ms: 250
 ```
 
-`push-to-talk` should exist early as a debugging mode, using the Echo action button to begin a turn.
+There is deliberately no `gateway` wake mode.
+
+### Wake model distribution
+
+For the first implementation, `echoctl` may install/update wake-model files on the device while the gateway manages selection and sensitivity.
+
+Later, authenticated model delivery through the gateway can be added if useful. Model binaries must not be fetched from arbitrary unauthenticated network locations by the Dot.
+
+### Diagnostics
+
+Useful wake diagnostics:
+
+```text
+active model id
+model kind (openWakeWord / microWakeWord)
+trained language metadata
+threshold
+last wake score
+wake count
+false-trigger test recordings (opt-in)
+inference timing / CPU usage
+```
+
+Raw continuous microphone audio must not be uploaded merely for wake scoring.
 
 ---
 
 ## 14. Management UI
 
-The first UI should be intentionally small.
+The first UI should remain small.
 
 ### Devices
 
 - online/offline state;
 - version and capabilities;
-- discovered/paired gateway state where relevant;
+- discovered/paired gateway state;
 - current voice state;
 - volume/mute;
 - microphone test;
 - speaker test;
-- recent logs;
-- restart/update actions later.
+- recent logs.
 
-### Voice
+### Voice / Wake
 
-- wake mode/model;
+- installed local wake models reported by each device;
+- active model;
+- model kind and language metadata;
+- wake sensitivity/threshold;
+- wake enable/disable;
+- pre-roll setting;
 - STT provider;
-- language hints;
+- STT language hints;
 - TTS provider;
 - basic audio tuning.
+
+The UI must not offer a gateway-side wake mode.
 
 ### Assistants
 
 - configured backend;
 - endpoint/configuration;
 - health check;
-- backend capability display.
+- backend capabilities.
 
 ### Conversations
 
@@ -812,8 +872,7 @@ The first UI should be intentionally small.
 - recent conversations;
 - create new;
 - rename;
-- switch/resume;
-- delete/archive later.
+- switch/resume.
 
 ### Network / Discovery
 
@@ -822,15 +881,13 @@ The first UI should be intentionally small.
 - current host/port;
 - connected/discovered satellites;
 - discovery diagnostics;
-- explicit gateway override configuration guidance.
+- explicit gateway override guidance.
 
-A React/Vite SPA is acceptable, with production assets embedded in the Go gateway binary.
+A React/Vite SPA can be embedded in the production Go gateway binary.
 
 ---
 
 ## 15. `echoctl` Provisioning and Diagnostics CLI
-
-The host CLI should work on Windows and Linux.
 
 Suggested commands:
 
@@ -850,6 +907,9 @@ echoctl logs
 echoctl restart
 
 echoctl mic record
+echoctl wake list
+echoctl wake install <model>
+echoctl wake test <wav-or-live>
 echoctl speaker test
 echoctl led test
 echoctl buttons test
@@ -857,142 +917,121 @@ echoctl buttons test
 echoctl update        # later
 ```
 
-`echoctl discover` should browse the same mDNS service types used by the runtime and show gateway/device records for troubleshooting.
+`echoctl wake test` should make it possible to evaluate local models and thresholds independently from STT/Hermes.
 
 ### Install flow
 
-Because the expected starting point is an already rooted/Magisk-enabled Dot, normal installation should avoid reflashing the boot image.
-
-Suggested flow:
+The expected starting point is an already rooted/Magisk-enabled Dot. Normal installation should avoid reflashing the boot image.
 
 ```text
 find ADB device
-  -> verify expected hardware
-  -> verify root
+  -> verify expected hardware/root
   -> inspect existing installation
-  -> back up changed files/state
+  -> back up changed state
   -> push echod
-  -> push device config/credentials
-  -> install or configure supervised startup
-  -> disable/avoid conflicting services as required
+  -> install default wake model/assets
+  -> push config/credentials
+  -> configure supervised startup
+  -> handle conflicting Alexa services as required
   -> start echod
   -> discover/configure gateway
   -> verify gateway connectivity
-  -> microphone health test
-  -> speaker health test
+  -> microphone test
+  -> local wake test
+  -> speaker test
 ```
 
-Destructive rooting/flashing procedures should remain separate from normal application installation.
+Rooting/flashing remains separate from normal application installation.
 
 ---
 
-## 16. Security
+## 16. Security and Privacy
 
 Initial model:
 
 - WSS for device/gateway traffic;
-- mDNS used for endpoint discovery only, never authentication;
-- stable serial for identity, but not authentication;
-- stable gateway `server_id` for preference/pairing, but not as a secret;
+- mDNS for endpoint discovery only;
+- serial for identity, not authentication;
+- stable gateway `server_id` for preference/pairing, not as a secret;
 - per-device random credential/token;
 - gateway stores Hermes/assistant/speech secrets;
-- Echo stores only its own device credential;
+- Echo stores only device credentials and local wake models/configuration;
 - management API requires authentication before non-local deployment.
 
-Future improvement:
+Local wake detection also gives a useful privacy property: while idle, microphone audio required for wake recognition remains on the device rather than being continuously sent to the gateway.
 
-- per-device client certificates / mTLS.
+Future improvement: per-device client certificates / mTLS.
 
-A browser-exposed root shell should not be part of v1. ADB is sufficient for development and recovery.
+A browser-exposed root shell is not part of v1; ADB is sufficient for development and recovery.
 
 ---
 
 ## 17. Persistence
 
-SQLite is sufficient for the first releases.
+SQLite is sufficient initially.
 
-Expected data:
+Expected gateway data:
 
 - devices;
-- per-device config;
+- per-device configuration;
+- reported wake-model inventory and selected model;
 - gateway/server identity;
-- preferred/paired gateway metadata where applicable;
+- preferred/paired gateway metadata;
 - conversations;
 - backend bindings;
 - turns;
-- selected diagnostic metadata;
+- selected diagnostics;
 - system configuration.
 
-Schema migrations must be ordered and append-only once released.
-
-Do not store raw microphone audio by default. Development/debug mode may optionally persist selected turns.
+Raw microphone audio is not stored by default. Development/debug mode may optionally persist selected turns or explicit wake-test recordings.
 
 ---
 
 ## 18. Observability and Record/Replay
 
-Every turn should have a generated `turn_id` used consistently through the pipeline.
+Every turn gets a `turn_id` propagated through the pipeline.
 
-Useful correlation fields:
+Useful fields:
 
 ```text
 device_id
 connection_id
 turn_id
 conversation_id
+trigger_type
+wake_model_id
+wake_score
 audio_stream_id
 backend
 state
 ```
 
-Discovery logs should separately capture:
+Development artifacts may optionally include:
 
 ```text
-mDNS browse started/stopped
-discovered service instance
-server_id
-resolved host/port
-candidate selected/rejected
-explicit gateway override used
-pairing/authentication result
-```
-
-In development mode, optionally persist:
-
-```text
-raw/input audio
-processed audio
+turn input WAV
+processed WAV
 transcript
-assistant request metadata
-assistant events
+assistant request/event log
 TTS output
 timing information
 ```
 
-This enables repeated debugging of STT and assistant behaviour without repeatedly speaking the same phrase into the physical device.
+Wake testing should support explicitly captured fixtures so thresholds/models can be evaluated offline without adding gateway-side real-time wake detection.
 
 ---
 
 ## 19. Device Simulator (`dotsim`)
 
-Build `dotsim` early.
-
-It should implement the same gateway protocol as `echod` but replace hardware with files/terminal events.
+`dotsim` implements the same protocol as `echod` but replaces hardware with files/terminal events.
 
 Example:
 
 ```text
 dotsim
-  --gateway ws://localhost:8080/device
-  --mic testdata/audio/uk/question.wav
-  --speaker-out ./response.wav
-```
-
-It should also support discovery mode:
-
-```text
-dotsim
   --discover mdns
+  --trigger wake
+  --wake-model okay_nabu
   --mic testdata/audio/uk/question.wav
   --speaker-out ./response.wav
 ```
@@ -1000,18 +1039,17 @@ dotsim
 Capabilities to simulate:
 
 - mDNS discovery;
-- multiple discovered gateways;
+- multiple gateways;
 - registration;
-- microphone streams;
+- local wake event and score;
+- button-triggered turns;
+- microphone turn streams;
 - speaker playback;
-- button events;
 - reconnects;
-- gateway IP/hostname changes;
 - network failures;
-- partial/older capability sets;
-- device logs and state.
+- partial/older capability sets.
 
-The simulator should be used for gateway integration tests and local development.
+The simulator does not need to run a real wake model for ordinary gateway tests. Local wake-engine correctness is tested separately with device/unit/audio-fixture tests.
 
 ---
 
@@ -1022,8 +1060,7 @@ Recommended environment:
 ```text
 Windows 11
   |
-  +-- VS Code
-  |     +-- Remote WSL
+  +-- VS Code + Remote WSL
   |
   +-- WSL2 Ubuntu
   |     +-- Go
@@ -1036,21 +1073,19 @@ Windows 11
   +-- Docker Desktop / WSL backend
   |     +-- gateway
   |     +-- speech-worker
-  |     +-- Hermes / test dependencies
+  |     +-- Hermes/test dependencies
   |
   +-- Windows Android Platform Tools
         +-- adb.exe -> Echo Dot
 ```
 
-Prefer using Windows `adb.exe` from WSL rather than requiring USB passthrough for normal iteration.
-
-Example configuration:
+Prefer Windows `adb.exe` called from WSL for normal iteration:
 
 ```bash
 export ADB=/mnt/c/Android/platform-tools/adb.exe
 ```
 
-The Go build should keep the Echo binary pure Go if feasible:
+Keep the device binary pure Go where feasible:
 
 ```text
 GOOS=linux
@@ -1058,37 +1093,34 @@ GOARCH=arm64
 CGO_ENABLED=0
 ```
 
-A fast device loop should look like:
+A fast loop:
 
 ```text
 build echod
-  -> adb push /data/local/tmp/echod
-  -> run/restart
+  -> adb push
+  -> restart foreground/service
   -> tail logs
+  -> run mic/wake fixture tests
 ```
 
-Use structured logging and diagnostic commands instead of depending on an interactive debugger on FireOS.
-
-mDNS must be tested both from native/host networking and from the intended Docker/WSL deployment because multicast visibility can differ depending on network mode. The gateway must remain usable with explicit host/port configuration even when mDNS is unavailable inside the development environment.
+mDNS must be tested from the actual Docker/WSL deployment because multicast visibility can differ by network mode. Explicit host/port remains the fallback.
 
 ---
 
 ## 21. Deployment
 
-Initial deployment target for gateway-side services: Docker Compose.
-
-Example components:
+Initial gateway deployment: Docker Compose.
 
 ```text
 gateway
 speech-worker
-Hermes integration / dependencies
+Hermes integration/dependencies
 persistent data volume
 ```
 
-The gateway should also remain runnable as a native Go binary.
+The gateway should also run as a native Go binary.
 
-The deployment must document how mDNS advertisement reaches the physical LAN. Where container networking prevents multicast advertisement, supported alternatives should include host networking where appropriate or running discovery/advertisement through a host-side mechanism. Static gateway configuration remains the universal fallback.
+Deployment documentation must explain how mDNS advertisement reaches the physical LAN. Static gateway configuration remains the universal fallback.
 
 Future target: Raspberry Pi / ARM64 host without architectural changes.
 
@@ -1098,150 +1130,136 @@ Future target: Raspberry Pi / ARM64 host without architectural changes.
 
 ### Milestone 0 — Repository and development foundation
 
-- establish Go module and package layout;
-- add formatting/lint/test CI;
-- create `echod`, `gateway`, `echoctl` and `dotsim` entrypoints;
-- define initial protocol types;
-- define discovery interfaces and mDNS service records;
-- add Windows/WSL development documentation.
+- establish Go module/package layout;
+- CI for format/test/vet/lint;
+- create `echod`, `gateway`, `echoctl`, `dotsim` entrypoints;
+- define protocol/discovery interfaces;
+- add Windows/WSL docs.
 
-### Milestone 1 — Hardware vertical slice
+### Milestone 1 — Hardware + local wake vertical slice
 
-Prove real Echo hardware independently from speech/assistant integration:
+Prove locally on the Dot:
 
 ```text
-Echo mic -> gateway -> WAV file
-WAV/PCM -> gateway -> Echo speaker
-Gateway -> Echo LED state
-Echo buttons -> gateway event
+mic -> WAV
+mic -> reused/adapted local wake engine -> wake event
+WAV/PCM -> speaker
+LED/button access
 ```
 
-Success criterion: microphone and speaker round-trip are reliable and observable.
+Success criterion: the Dot can detect a selected local wake model repeatedly without any gateway wake processing.
 
 ### Milestone 2 — Discovery, protocol and simulator
 
 - gateway mDNS advertisement;
-- satellite mDNS browsing/resolution;
+- satellite mDNS browse/resolution;
 - explicit gateway override;
-- previous/preferred gateway selection using `server_id`;
-- multiple-gateway handling;
-- device registration;
-- capabilities;
+- preferred `server_id`;
+- registration/capabilities;
 - reconnect/backoff;
 - config push;
 - structured logs;
-- health reporting;
-- binary audio framing;
-- `dotsim` discovery/integration tests.
+- `turn.start` triggers;
+- binary turn-audio framing;
+- `dotsim` integration tests.
 
-### Milestone 3 — Local speech
+### Milestone 3 — Local-wake speech loop
 
 ```text
-Echo/dotsim
-  -> wake or push-to-talk
-  -> VAD/endpointing
+Echo local wake / simulator trigger
+  -> turn audio
+  -> gateway VAD/endpointing
   -> STT
   -> transcript
 ```
 
-Validate at least:
-
-- English test utterances;
-- Ukrainian test utterances;
-- recorded/replayable fixtures.
+Validate English and Ukrainian utterances using replayable fixtures.
 
 ### Milestone 4 — Complete mock voice loop
 
-Before Hermes:
-
 ```text
-STT
+local wake
+ -> STT
  -> MockBackend("You said: ...")
  -> TTS
  -> Echo speaker
 ```
 
-Success criterion: complete two-way spoken interaction without an external assistant dependency.
-
 ### Milestone 5 — Hermes adapter
 
-- implement `AssistantBackend` adapter for Hermes;
-- map local conversation IDs to Hermes sessions;
-- expose backend health/capabilities;
-- keep Hermes credentials server-side.
+- implement `AssistantBackend` adapter;
+- map local conversations to Hermes sessions;
+- backend health/capabilities;
+- secrets remain server-side.
 
 ### Milestone 6 — Persistent conversations
 
 - SQLite schema;
-- conversation creation;
 - turn storage;
-- active conversation per device;
-- new/switch/resume operations;
-- infrastructure-level voice commands for conversation switching.
+- create/switch/resume conversations;
+- infrastructure voice commands.
 
 ### Milestone 7 — Management UI
 
 - device list/status;
 - discovery/network diagnostics;
+- local wake model/sensitivity configuration;
 - audio diagnostics;
-- speech/provider configuration;
-- assistant backend configuration;
+- STT/TTS configuration;
+- assistant configuration;
 - conversation management.
 
 ### Milestone 8 — Productization
 
-- stable bootstrap/install flow;
+- stable bootstrap/install;
+- wake-model update workflow;
 - upgrades/rollback;
 - stronger device authentication;
-- deployment documentation;
 - Raspberry Pi/ARM64 validation;
 - multi-Dot arbitration;
-- optional device-side wake word.
+- optional local endpointing / barge-in improvements.
 
 ---
 
 ## 23. First Engineering Tasks
 
-A sensible first implementation order is:
+1. Create Go module/package skeleton and CI.
+2. Port/adapt the minimum EchoLocal microphone path.
+3. Port/adapt the EchoLocal local wake-model layer and one known working model.
+4. Build `echoctl mic record` and `echoctl wake test` before gateway integration.
+5. Verify local wake inference CPU, stability and false-trigger behaviour on the real Dot.
+6. Define `_echo-satellite._tcp.local.` discovery record and implement gateway advertisement.
+7. Implement minimal gateway WSS server and satellite discovery/connection.
+8. Define `turn.start` + binary audio framing.
+9. On local wake, stream command PCM to gateway and write it to WAV.
+10. Implement gateway-to-Echo speaker playback and semantic LED state.
+11. Implement `dotsim` with synthetic wake/button triggers.
+12. Add VAD/endpointing and STT/TTS interfaces.
+13. Add local Whisper integration.
+14. Add mock assistant end-to-end loop.
+15. Add Hermes only after hardware, local wake and transport are proven.
 
-1. Create the Go module and package skeleton.
-2. Add CI for `go test`, `go vet` and linting.
-3. Define the discovery interface and `_echo-satellite._tcp.local.` record format.
-4. Implement gateway mDNS advertisement and a small `echoctl discover` diagnostic.
-5. Port/adapt only the minimum Echo hardware code required to capture microphone audio.
-6. Implement a minimal gateway WebSocket server.
-7. Add satellite mDNS discovery with explicit URL override.
-8. Stream mic PCM from Echo to gateway and write it to WAV.
-9. Implement gateway-to-Echo speaker playback.
-10. Add LED state and action-button events.
-11. Extract protocol types into a shared package.
-12. Implement `dotsim` against the same discovery and transport behaviour.
-13. Add record/replay fixtures.
-14. Add a mock assistant backend.
-15. Add STT/TTS provider interfaces.
-16. Add local Whisper integration.
-17. Add Hermes only after the voice transport is proven.
-
-This sequence intentionally reduces the number of systems being debugged at once.
+This sequence avoids debugging wake inference, audio transport, STT and Hermes simultaneously.
 
 ---
 
 ## 24. Architectural Questions to Validate on Hardware
 
-The following should remain decisions under test rather than assumptions:
-
-- Which mDNS implementation works reliably on the Echo's FireOS environment without introducing unnecessary native dependencies?
-- Whether gateway advertisement from Docker/WSL is visible to Echo devices on the physical LAN in the preferred development/deployment configuration.
-- Which Echo microphone path/channel arrangement provides the best initial mono stream?
-- Whether beamforming should be reused from EchoLocal or implemented differently.
-- Whether AEC is necessary in the initial conversational model or only for barge-in/full-duplex behaviour.
-- Exact native speaker format and whether resampling belongs on the Dot or gateway.
+- Which Echo microphone path/channel arrangement is best for both local wake inference and command capture?
+- How directly can EchoLocal's current openWakeWord/microWakeWord code be reused while keeping Echo Satellite's dependencies and licensing clean?
+- Which wake model should ship as the default?
+- What thresholds give acceptable false-positive/false-negative behaviour in a real room?
+- How much pre-roll prevents clipped command speech without polluting STT with the wake phrase?
+- What is the CPU/memory cost of one versus multiple active local wake models?
+- Whether beamforming should be reused from EchoLocal or initially bypassed.
+- Whether AEC is required only for barge-in/full-duplex behaviour or earlier.
+- Exact speaker format and best resampling location.
 - Best supervised startup mechanism on the existing Magisk-rooted FireOS installation.
-- Whether continuous audio streaming is acceptable on the target LAN and CPU profile.
-- Which gateway wake-word implementation works best for English/Ukrainian household use.
-- Whether Hermes should provide STT/TTS in the initial integration or only the assistant response.
+- Which mDNS implementation works reliably on FireOS without unnecessary native dependencies?
+- Whether Docker/WSL mDNS advertisement is visible on the physical LAN in the preferred deployment.
+- Whether Hermes should provide STT/TTS initially or only assistant reasoning.
 
-These should be resolved with small diagnostics and recorded evidence rather than buried inside the main daemon.
+Resolve these with focused diagnostics and recordings rather than hidden complexity inside the daemon.
 
 ---
 
@@ -1251,45 +1269,52 @@ These should be resolved with small diagnostics and recorded evidence rather tha
 |---|---|
 | Echo daemon | Go |
 | Echo hardware reference | EchoLocal |
+| Wake detection | **Local on Echo only** |
+| Wake engines | EchoLocal-derived openWakeWord + microWakeWord support |
+| Wake models | local TFLite models |
+| Manual trigger | Action button / simulator |
 | Local discovery | mDNS / DNS-SD, static URL fallback |
 | Gateway service | `_echo-satellite._tcp.local.` |
 | Device transport | WSS |
 | Control frames | JSON |
-| Audio frames | binary PCM |
+| Audio frames | binary PCM during active turns |
 | Gateway | Go |
+| Endpointing | gateway-side initially |
 | Persistence | SQLite |
 | Management UI | React + Vite, embedded in Go |
 | Provisioning CLI | Go + Cobra |
 | STT | local faster-whisper worker initially |
 | Languages | English + Ukrainian |
-| Wake word | gateway-side / push-to-talk first |
-| TTS | provider abstraction; Hermes or local initially |
+| TTS | provider abstraction; Hermes or local |
 | Assistant | Hermes adapter + mock adapter |
 | Local dev | Windows + WSL2 |
 | Device iteration | Windows ADB called from WSL |
-| Integration testing | `dotsim` + recorded WAV fixtures |
+| Integration testing | `dotsim` + WAV/wake fixtures |
 | Deployment | Docker Compose |
 
 ---
 
 ## 26. Core Boundary
 
-The most important architectural boundary is:
-
 ```text
 Echo Dot
+    |
+    | local microphone -> local wake inference
+    |                    (audio stays on device while idle)
     |
     | mDNS discovery (or static configuration)
     v
 Voice Gateway endpoint
     |
     | Echo Satellite Protocol over WSS
+    | turn audio only after local wake/button trigger
     v
 Voice Gateway
     |
+    +-- VAD / endpointing
     +-- STT Provider       -> Whisper / Hermes / other
     +-- Assistant Backend -> Hermes / OpenClaw / other
     +-- TTS Provider       -> Hermes / local / other
 ```
 
-If this boundary remains clean, the Echo Dot becomes a reusable local voice terminal rather than a Hermes-specific appliance.
+The key architectural rule is that **wake recognition belongs to the satellite**. The gateway begins processing only after the device has decided that a voice turn has started.
