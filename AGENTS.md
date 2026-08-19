@@ -4,7 +4,36 @@ Universal instructions for AI coding agents working in this repository. They app
 
 ## Repository state
 
-This repository currently contains **documentation only** — no Go module, build system, or source code exists yet. `docs/DESIGN.md` is the approved design; the code described below is the target, not the present state. When creating the first code, follow the layout, naming, and stack choices in `docs/DESIGN.md` §6 and §27 rather than inventing alternatives, and add the build/test commands to this file at that point.
+Milestone 0 has landed: the Go module, build, CI, and the shared contracts (`internal/protocol`, `internal/discovery`, `internal/release`) exist, and `echod`, `gateway`, `echoctl`, and `dotsim` build. No microphone, wake model, WebSocket endpoint, mDNS advertisement, supervisor, or persistence exists yet — those arrive with Milestones 1 and later. Follow the layout, naming, and stack choices in `docs/DESIGN.md` §6 and §27 rather than inventing alternatives.
+
+## Build and test commands
+
+```sh
+make all           # test, then build
+make test          # go test -race with coverage, mocks excluded from the profile
+make race          # go test -race -timeout=100s ./...
+make lint          # golangci-lint run
+make fmt           # gofmt -l -w .
+make build         # host binaries into .bin/
+make build-device  # static linux/arm64 echod into .bin/linux_arm64/
+make version       # print the git-derived revision the build stamps in
+
+go test ./internal/<pkg>/...   # one package
+go generate ./...              # regenerate moq mocks
+go test ./internal/release -run TestFixtures_Regenerate -update-fixtures   # rewrite release fixtures
+```
+
+Run `make lint` while working, not only at the end: `.golangci.yml` is strict and `nolintlint` requires every suppression to name a specific linter and give a reason.
+
+## Code conventions
+
+- **CLI:** `jessevdk/go-flags` in all four binaries. Each command has `main.go` (`main`, `run`, `var revision`) and `config.go` (`opts` struct plus a unit-tested `parseArgs`). Precedence is flag, then environment, then ini config file, then default.
+- **Tests:** `stretchr/testify` — `require` for preconditions and error assertions, `assert` for the rest. One `_test.go` per source file.
+- **Mocks:** `matryer/moq` via `//go:generate`, into a `mocks/` subpackage. Never hand-edit generated files. Prefer a hand-written stub when the interface has one method.
+- **Errors:** wrap errors crossing a package boundary with `%w`; compare with `errors.Is`/`errors.As`; sentinels are exported `Err*` variables.
+- **No `init()`.** Wiring belongs in the composition root (`main`).
+- **Interfaces are declared by the consumer,** with the concrete implementation in the provider package and injection at the composition root. Keep the exported surface minimal.
+- Version is injected at link time (`-X main.revision`); there is no build-info package.
 
 ## Sources of truth
 

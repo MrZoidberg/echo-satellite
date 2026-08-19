@@ -2064,7 +2064,7 @@ Resolve these with focused diagnostics, intentionally broken update builds and r
 | Release sources | GitHub Releases + local uploaded builds |
 | Persistence | SQLite |
 | Management UI | React + Vite, embedded in Go |
-| Provisioning CLI | Go + Cobra |
+| Provisioning CLI | Go + go-flags |
 | STT | local faster-whisper worker initially |
 | Languages | English + Ukrainian |
 | TTS | provider abstraction; Hermes or local |
@@ -2074,6 +2074,11 @@ Resolve these with focused diagnostics, intentionally broken update builds and r
 | Normal device iteration | gateway A/B OTA once implemented |
 | Integration testing | `dotsim` + WAV/wake/VAD/update fixtures |
 | Gateway deployment | Docker Compose |
+
+All four binaries use `jessevdk/go-flags` rather than a per-command flag library, so
+CLI flags, environment variables and ini config files share one precedence model
+(flag, then environment, then config file, then default). This supersedes the earlier
+`Go + Cobra` choice for the provisioning CLI.
 
 ---
 
