@@ -1,13 +1,13 @@
 # Milestone 0 — Repository and development foundation implementation plan
 
-**Status:** in-progress
-**Owner or active agent:** Claude Code (branch `milestone-0-foundation`)
+**Status:** finished
+**Owner or active agent:** none (completed)
 **Created:** 2026-08-19
 **Updated:** 2026-08-19
 **Started:** 2026-08-19
-**Completed:** not completed
+**Completed:** 2026-08-19
 
-**Remaining work:** every task is implemented and verified locally. The plan stays in `in-progress/` for one open item only: the branch has not been pushed, so the GitHub Actions build job has never run. Push `milestone-0-foundation`, confirm the job is green, record the run in the completion evidence, then set the status to `finished` and `git mv` this file to `docs/plans/finished/`.
+**Remaining work:** none. Every task is implemented and verified, CI is green on GitHub Actions, and PR #1 merged to `master` as `a43c848`.
 
 ## Objective
 
@@ -436,7 +436,7 @@ All work is additive on the `milestone-0-foundation` branch off `master`. Nothin
 ## Final acceptance criteria
 
 - [x] `make lint test build build-device` passes locally.
-- [ ] The GitHub Actions build job is green. **Open:** the branch has not been pushed yet.
+- [x] The GitHub Actions build job is green — run `32264150084` (push, 1m18s) and run `32280569204` (pull request, 1m9s), both `build` / success.
 - [x] `.bin/linux_arm64/echod` is a statically linked `linux/arm64` binary, and all four binaries report the git-derived revision via `--version`.
 - [x] `internal/protocol`, `internal/discovery`, and `internal/release` are covered by tests for the behaviors listed in Tasks 4–6, and `golangci-lint run` is clean with no blanket suppressions.
 - [x] `echoctl release verify` accepts the valid fixture and rejects the tampered fixture.
@@ -456,6 +456,7 @@ All work is additive on the `milestone-0-foundation` branch off `master`. Nothin
 - 2026-08-19: Task 7 complete. All four binaries use go-flags with a unit-tested `parseArgs`; `echod` and `gateway` load an ini file underneath the command line by parsing twice, so an explicit flag always wins over a config value. Deviation from the plan's documented verification command: `echoctl release verify` needs `--pubkey` for the fixtures, because this build embeds no release key and the secure default rejects an unverifiable signature. The command is `--manifest --sig --pubkey --artifact`; the plan's shorter form would have failed by design.
 - 2026-08-19: Tasks 8, 9 and 10 complete. `docs/protocol.md` covers every `MessageType` (verified by the grep in Task 8) and states the boundary guarantees as protocol properties. `docs/DESIGN.md` §27 now reads `Go + go-flags` with a sentence recording why. `AGENTS.md` no longer claims the repository is documentation-only and gained "Build and test commands" and "Code conventions" sections.
 - 2026-08-19: Full verification run: `make fmt-check`, `make lint` (0 issues), `make test` (all packages pass, 74.5% statement coverage), `make build`, `make build-device` (static ARM aarch64 ELF), all four `--version` commands, `echoctl release verify` on the valid and tampered fixtures, and SIGTERM/SIGINT shutdown of `gateway` and `echod`. CI was not observed on GitHub: the branch has not been pushed, which is the one acceptance item verified locally only.
+- 2026-08-19: Last open item closed. `milestone-0-foundation` was pushed; the GitHub Actions `build` job passed on the push (run `32264150084`) and on PR #1 (run `32280569204`). PR #1 merged to `master` as merge commit `a43c848` at 17:20:59Z. Status set to `finished` and this document moved to `docs/plans/finished/`. Milestone 0 is complete; the next plan is Milestone 1 per `docs/DESIGN.md` §24.
 
 ## Completion evidence
 
@@ -477,7 +478,7 @@ All checks were run on macOS (darwin/arm64) with Go 1.26.5 and golangci-lint 2.1
 
 ### Limitations and follow-up work
 
-- **CI has not been observed green.** `.github/workflows/ci.yml` is written and its steps were run locally, but the branch has not been pushed, so the GitHub Actions run itself is unverified. Confirm on first push.
+- **CI observed green.** `.github/workflows/ci.yml` passed on GitHub Actions for both the branch push (run `32264150084`) and PR #1 (run `32280569204`); no open CI item remains.
 - **No hardware verification, and none required.** Nothing in this milestone touches a device. The first hardware-dependent checks belong to Milestone 1.
 - `moq` was not needed: the only interface introduced this milestone (`discovery.Browser`) has one method and is stubbed by hand. The `go generate` convention is documented but currently exercises nothing.
 - `internal/release` has no `//go:generate` mocks and `EmbeddedPublicKey` is only covered on its empty-key path, since no build injects a release key yet. Signing infrastructure and a release workflow are deliberately deferred.
