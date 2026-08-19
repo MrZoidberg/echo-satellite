@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "version": "0.4.0",
+  "build_id": "git-abc123",
+  "architecture": "linux-arm64",
+  "size": 36,
+  "sha256": "37d01c70b075c629cacba941873e3bc9907d6f7203aecd404f573b809f77ae46",
+  "protocol_min": 1,
+  "protocol_max": 1,
+  "supervisor_min": 99,
+  "released_at": "2026-08-18T00:00:00Z"
+}

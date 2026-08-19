@@ -4,7 +4,36 @@ Universal instructions for AI coding agents working in this repository. They app
 
 ## Repository state
 
-This repository currently contains **documentation only** — no Go module, build system, or source code exists yet. `docs/DESIGN.md` is the approved design; the code described below is the target, not the present state. When creating the first code, follow the layout, naming, and stack choices in `docs/DESIGN.md` §6 and §27 rather than inventing alternatives, and add the build/test commands to this file at that point.
+Milestone 0 has landed: the Go module, build, CI, and the shared contracts (`internal/protocol`, `internal/discovery`, `internal/release`) exist, and `echod`, `gateway`, `echoctl`, and `dotsim` build. No microphone, wake model, WebSocket endpoint, mDNS advertisement, supervisor, or persistence exists yet — those arrive with Milestones 1 and later. Follow the layout, naming, and stack choices in `docs/DESIGN.md` §6 and §27 rather than inventing alternatives.
+
+## Build and test commands
+
+```sh
+make all           # test, then build
+make test          # go test -race with coverage, mocks excluded from the profile
+make race          # go test -race -timeout=100s ./...
+make lint          # golangci-lint run
+make fmt           # gofmt -l -w .
+make build         # host binaries into .bin/
+make build-device  # static linux/arm64 echod into .bin/linux_arm64/
+make version       # print the git-derived revision the build stamps in
+
+go test ./internal/<pkg>/...   # one package
+go generate ./...              # regenerate moq mocks
+go test ./internal/release -run TestFixtures_Regenerate -update-fixtures   # rewrite release fixtures
+```
+
+Run `make lint` while working, not only at the end: `.golangci.yml` is strict and `nolintlint` requires every suppression to name a specific linter and give a reason.
+
+## Code conventions
+
+- **CLI:** `jessevdk/go-flags` in all four binaries. Each command has `main.go` (`main`, `run`, `var revision`) and `config.go` (`opts` struct plus a unit-tested `parseArgs`). Precedence is flag, then environment, then ini config file, then default.
+- **Tests:** `stretchr/testify` — `require` for preconditions and error assertions, `assert` for the rest. One `_test.go` per source file.
+- **Mocks:** `matryer/moq` via `//go:generate`, into a `mocks/` subpackage. Never hand-edit generated files. Prefer a hand-written stub when the interface has one method.
+- **Errors:** wrap errors crossing a package boundary with `%w`; compare with `errors.Is`/`errors.As`; sentinels are exported `Err*` variables.
+- **No `init()`.** Wiring belongs in the composition root (`main`).
+- **Interfaces are declared by the consumer,** with the concrete implementation in the provider package and injection at the composition root. Keep the exported surface minimal.
+- Version is injected at link time (`-X main.revision`); there is no build-info package.
 
 ## Sources of truth
 
@@ -16,6 +45,73 @@ Before planning or implementing, read:
 Do not replace explicit decisions in these documents with assumptions. When implementation reveals that an operational behavior or design assumption must change, update the relevant document as part of the same change.
 
 `docs/DESIGN.md` §26 lists open questions that must be resolved by experiment on real hardware, not by guessing. If work depends on one of them, resolve it with a focused diagnostic and record the answer in the design document.
+
+## How work gets done
+
+The loop below is the default for any change beyond a typo or a one-line fix. Skip a step only when it genuinely does not apply, and say which step you skipped and why.
+
+### 1. Decide whether it needs a plan
+
+A plan is required when the work spans more than one package, changes a documented behavior or boundary, or cannot be verified by a single command. A plan is not required for an isolated bug fix, a test addition, or a documentation edit — do those directly and report what you verified.
+
+If it needs a plan and the request is ambiguous in a way that changes the work, ask before writing the plan, not after implementing.
+
+### 2. Write the plan to `docs/plans/`
+
+Follow [docs/plans/README.md](docs/plans/README.md) — it is authoritative for the template and the lifecycle. Create the plan in `future/`, then move it to `in-progress/` with an owner and start date when execution actually begins. Every task carries its own status, dependencies, files in scope, concrete changes, and exact verification.
+
+The plan document is the durable record. A plan that lives only in the conversation does not count.
+
+### 3. Implement — use subagents when executing several tasks in one session
+
+When more than one plan task will be implemented in the same session, dispatch a subagent per task rather than doing them all inline. Each subagent gets: the plan path, its task number, the files in scope, and the task's verification command. It implements and verifies that task only.
+
+- One task, one agent. Never let two agents claim the same task.
+- Run agents in parallel only when their file sets do not overlap. Tasks with a stated dependency run in order.
+- A subagent that cannot finish reports the blocker; it does not widen its scope to work around it.
+- The orchestrating session owns the shared state: the plan document, the cross-cutting checks in step 4, and the final report.
+
+For a single task, or for work whose steps are tightly coupled, implement inline. Delegation is for parallelism and context isolation, not ceremony.
+
+### 4. Get the static checks and coverage clean
+
+Before review, all of these pass:
+
+```sh
+make fmt-check   # or make fmt
+make lint        # 0 issues
+make test        # race detector, prints per-function coverage
+```
+
+`golangci-lint` findings are fixed, not suppressed. A `nolint` needs a specific linter and a reason that says why the code is correct as written; if you cannot write that sentence, fix the code.
+
+Coverage: read the per-function output for the code you touched, not the repository total. Every new exported function, every error path, and every rule that encodes a design boundary has a test. A new package landing below roughly 70% of statements needs either more tests or an explicit note saying which paths are deliberately untested and why. Do not add assertions that only move the number.
+
+Hardware-dependent behavior is not verified by a passing `dotsim` run. Say which checks ran against real hardware and which did not.
+
+### 5. Self-review in a separate agent
+
+Dispatch a review agent with fresh context — the implementing session is the worst reviewer of its own diff. Give it the diff, the plan, and `docs/DESIGN.md`, and ask it to look for:
+
+- correctness bugs and unhandled error paths;
+- violations of the two boundaries above, of the discovery rules, or of the security constraints;
+- drift between code and `docs/DESIGN.md` / `docs/protocol.md` / the plan;
+- tests that assert the implementation rather than the requirement;
+- unnecessary complexity and dead exported surface.
+
+### 6. Triage every finding, explicitly
+
+Each finding gets one of three dispositions, and none of them is silence:
+
+- **fix** — do it now, then re-run step 4;
+- **decline** — state why it is not a defect (wrong premise, intended behavior, out of scope for this change);
+- **postpone** — record it in the plan as a follow-up task or in the plan's limitations section, so it survives the session.
+
+Correctness and security findings are not postponed without saying so in the final report.
+
+### 7. Present results
+
+Report what was actually done and actually verified: the commands run and their outcomes, deviations from the plan and why, findings declined or postponed, and anything left open. If a check did not run, say it did not run. A plan with an unverified acceptance item stays in `in-progress/` with that item named as the blocker — it is not filed as finished.
 
 ## Architecture: the two boundaries that govern everything
 
@@ -57,7 +153,7 @@ The gateway advertises `_echo-satellite._tcp.local.`; TXT records carry discover
 
 ## Implementation planning
 
-All non-trivial work is tracked as a plan document under `docs/plans/`. **Read [docs/plans/README.md](docs/plans/README.md) before creating or executing one** — it is authoritative and contains the required template.
+All non-trivial work is tracked as a plan document under `docs/plans/`. **Read [docs/plans/README.md](docs/plans/README.md) before creating or executing one** — it is authoritative and contains the required template. Steps 1–2 of "How work gets done" decide when a plan is needed; the rules below apply once one exists.
 
 Working rules that apply whenever a plan is active:
 
