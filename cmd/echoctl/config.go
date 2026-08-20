@@ -14,6 +14,7 @@ type opts struct {
 	Release releaseCommand `command:"release" description:"inspect and verify release artifacts"`
 	Mic     micCommand     `command:"mic" description:"diagnose microphone capture"`
 	Speaker speakerCommand `command:"speaker" description:"diagnose speaker playback"`
+	LED     ledCommand     `command:"led" description:"diagnose the LED ring"`
 }
 
 type versionCommand struct{}
@@ -49,6 +50,19 @@ type speakerTestCommand struct {
 	NoAmp     bool    `long:"no-amp" description:"do not enable the speaker amplifier"`
 	Card      int     `long:"card" default:"0" description:"ALSA card number"`
 	Device    int     `long:"device" default:"23" description:"ALSA playback device number"`
+}
+
+type ledCommand struct {
+	Test ledTestCommand `command:"test" description:"render semantic LED states"`
+}
+
+type ledTestCommand struct {
+	Root      string  `long:"root" default:"/sys/bus/i2c/devices/0-003f" description:"LED controller sysfs root"`
+	State     string  `long:"state" default:"idle" description:"semantic device state"`
+	AllStates bool    `long:"all-states" description:"render every semantic device state in order"`
+	Seconds   float64 `long:"seconds" default:"1" description:"seconds to render each state"`
+	Current   uint8   `long:"current" default:"255" description:"global LED current from 0 to 255"`
+	Clear     bool    `long:"clear" description:"clear the ring after the test"`
 }
 
 // verifyCommand checks a release bundle exactly the way a gateway or a device

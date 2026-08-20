@@ -52,6 +52,18 @@ func TestTurnTrigger_Valid(t *testing.T) {
 	assert.False(t, TurnTrigger("").Valid())
 }
 
+func TestAllDeviceStates_ReturnsDocumentedStatesAndACopy(t *testing.T) {
+	want := []DeviceState{
+		StateIdle, StateListening, StateThinking, StateSpeaking, StateMuted,
+		StateOffline, StateError, StateUpdating, StateUpdateTrial,
+	}
+	first := AllDeviceStates()
+	assert.Equal(t, want, first)
+	require.NotEmpty(t, first)
+	first[0] = "mutated"
+	assert.Equal(t, StateIdle, AllDeviceStates()[0])
+}
+
 func TestError_ErrorString(t *testing.T) {
 	assert.Equal(t, "unauthorized: unknown device", Error{Code: "unauthorized", Message: "unknown device"}.Error())
 	assert.Equal(t, "unknown device", Error{Message: "unknown device"}.Error())

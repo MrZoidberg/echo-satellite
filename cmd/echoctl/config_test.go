@@ -59,6 +59,17 @@ func TestParseArgs_Commands(t *testing.T) {
 		assert.Equal(t, "linear", o.Speaker.Test.Resampler)
 	})
 
+	t.Run("led test", func(t *testing.T) {
+		o, command, err := parseArgs([]string{"led", "test", "--root=/tmp/led", "--state=muted", "--seconds=2", "--current=42", "--clear"})
+		require.NoError(t, err)
+		assert.Equal(t, "led test", command)
+		assert.Equal(t, "/tmp/led", o.LED.Test.Root)
+		assert.Equal(t, "muted", o.LED.Test.State)
+		assert.InDelta(t, 2.0, o.LED.Test.Seconds, 0.001)
+		assert.Equal(t, uint8(42), o.LED.Test.Current)
+		assert.True(t, o.LED.Test.Clear)
+	})
+
 	t.Run("mic record requires out", func(t *testing.T) {
 		_, _, err := parseArgs([]string{"mic", "record"})
 		require.Error(t, err)

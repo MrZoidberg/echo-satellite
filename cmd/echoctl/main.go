@@ -43,6 +43,8 @@ func dispatch(w io.Writer, command string, o opts) error {
 		return micRecord(w, o.Mic.Record)
 	case "speaker test":
 		return speakerTest(w, o.Speaker.Test)
+	case "led test":
+		return ledTest(w, o.LED.Test)
 	default:
 		return fmt.Errorf("unknown command %q", command)
 	}
