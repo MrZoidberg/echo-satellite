@@ -30,6 +30,12 @@ Planned adapted paths for Milestone 1:
 - `internal/device/audio/alsa/pcm_linux.go`
 - `internal/device/mixer/control_linux.go`
 - `internal/device/wake/vadlevel/detector.go`
+- `internal/device/wake/tflite/*.go`
+
+The TFLite interpreter and its reference vectors are adapted from EchoLocal
+commit `be6b0b00d7d5d765d859b3cbe0e19e127a0c2031`. The generated synthetic
+`.tflite` fixtures contain only repository-authored analytical constants; see
+`testdata/wake/ATTRIBUTION.md`.
 
 ## openWakeWord model assets
 
