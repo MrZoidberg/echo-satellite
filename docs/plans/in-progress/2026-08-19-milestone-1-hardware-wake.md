@@ -1,13 +1,13 @@
 # Milestone 1 — Hardware + local wake vertical slice implementation plan
 
-**Status:** in-progress
-**Owner or active agent:** Claude Code (session started by mmerk)
+**Status:** in-progress (paused)
+**Owner or active agent:** unassigned; workflow prerequisite verified by Codex
 **Created:** 2026-08-19
-**Updated:** 2026-08-19
+**Updated:** 2026-08-20
 **Started:** 2026-08-19
 **Completed:** not completed
 
-**Remaining work:** Tasks 2–25. Task 1 is complete; no implementation code has landed yet.
+**Remaining work:** Tasks 2–25. No Milestone 1 implementation code has landed yet.
 
 ## Objective
 
@@ -184,7 +184,7 @@ Four layers, with hardware confined to the bottom.
 
 ### Task 1: Repository-tracked plan document exists
 
-**Status:** not started
+**Status:** completed 2026-08-19
 
 **Purpose:** `AGENTS.md` and `docs/plans/README.md` require this work to be tracked in-repository before execution begins. A plan that lives only in a conversation does not count.
 
@@ -210,6 +210,57 @@ git status --short docs/plans
 ```
 
 Expected: the file is tracked in `docs/plans/in-progress/`, and its `**Status:**` field reads `in-progress`.
+
+#### Task 1 review remediation: Verify the Windows/WSL device iteration loop
+
+**Status:** completed 2026-08-20
+
+**Purpose:** Establish and prove the manual ADB workflow before Milestone 1
+hardware implementation depends on it.
+
+**Dependencies:** Task 1 and one rooted/Magisk-enabled Echo Dot connected over
+USB.
+
+**Hardware required:** **yes** — an authorized Echo Dot with Magisk `su`, writable
+`/data/local/tmp`, and Windows platform-tools reachable from WSL.
+
+**Files or components:**
+
+- Modify: `Makefile`, `docs/development-windows-wsl.md`
+- Create: `.gitattributes`
+- Create: `.vscode/tasks.json`
+
+**Concrete changes:**
+
+- Add shared Make targets for device preflight, cross-build, staging, execution,
+  and argument forwarding, following EchoLocal's temporary foreground iteration
+  pattern without its `/system` service installation.
+- Add Remote WSL VS Code tasks that invoke those Make targets through the Windows
+  ADB client.
+- Document Windows versus WSL ADB ownership, Magisk root, serial selection,
+  troubleshooting, Codex access, and the deliberately experimental Delve path.
+- Enforce LF checkouts so WSL formatting and byte-sensitive release fixtures do
+  not fail under Windows `core.autocrlf=true`.
+
+**Expected outcome:** The same commands used by VS Code and a WSL terminal build,
+push, execute, and foreground-log `echod` on the Dot without modifying `/system`.
+
+**Verification:**
+
+```sh
+ADB=/mnt/c/tools/android-platform-tools/adb.exe \
+DEVICE_SERIAL=G090LF0964060EHP make device-check
+ADB=/mnt/c/tools/android-platform-tools/adb.exe \
+DEVICE_SERIAL=G090LF0964060EHP make push-device
+ADB=/mnt/c/tools/android-platform-tools/adb.exe \
+DEVICE_SERIAL=G090LF0964060EHP make run-device
+```
+
+Expected: preflight reports `biscuit`, `arm64-v8a`, root UID 0, and permissive
+SELinux; the pushed binary reports its stamped revision; foreground execution
+prints the Milestone 0 startup, capabilities, and gateway-resolution records;
+Ctrl+C stops the remote process without leaving it running. LED and speaker
+checks remain Tasks 12 and 15 and are not claimed by this remediation.
 
 ### Task 2: Notices, licences, and the build and benchmark gates
 
@@ -1182,6 +1233,19 @@ Two device-state caveats: `speaker test` changes `Ext_Speaker_Amp_Switch` and mu
 
 ## Progress log
 
+- 2026-08-20: Task 1 workflow remediation completed on physical device
+  `G090LF0964060EHP`. Windows ADB 37.0.1, invoked both directly and from WSL2,
+  reported `biscuit`, `arm64-v8a`, Magisk UID 0 and permissive SELinux. The new
+  Make targets built, pushed and executed the stamped binary from
+  `/data/local/tmp`; foreground logs showed startup, capabilities and gateway
+  resolution, and Ctrl+C ended with the postcondition `echod stopped`. Native
+  WSL ADB 34.0.4 saw no USB device and remains excluded from the workflow.
+  Review found that preflight initially printed rather than enforced device
+  identity and that ADB exit 58 was accepted without a process postcondition;
+  both findings were fixed and reverified. `make fmt-check`, `make lint` (0
+  issues), and `make test` (race enabled, 74.5% total coverage) passed after LF
+  enforcement corrected Windows checkout corruption of byte-sensitive release
+  fixtures. LED and speaker hardware checks remain Tasks 12 and 15.
 - 2026-08-19: Plan created from `docs/DESIGN.md` §24 Milestone 1 and §25 tasks 2–6, after a research pass over EchoLocal, openWakeWord and the available CGO-free ONNX runtimes. Decisions recorded before execution: openWakeWord only, with microWakeWord deferred behind an unchanged `Engine` interface; **wake VAD via the adapted EchoLocal level/AGC speech-over-floor detector**, because Silero is blocked under `CGO_ENABLED=0` (evidence table in "Why the wake VAD is new work"); DSP bypassed with a `Preprocessor` seam; diagnostics delivered by a cross-built `linux/arm64` `echoctl` run over `adb shell`, plus `status --json`; `echod --wake-only` runs the real pipeline because §24 requires *repeated* detection; **NEON assembly borrowed with a `noasm` fallback**, since Go assembly needs no cgo; build tags confined to `internal/device/audio/alsa` and `internal/device/mixer`, while LED, buttons and system use injected roots; EchoLocal code copied and adapted with MIT attribution because its packages are `internal/` and cannot be imported; **no new Go module dependencies**, only `golang.org/x/sys` promoted to direct.
 
 ## Completion evidence

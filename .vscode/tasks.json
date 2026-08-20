@@ -1,0 +1,41 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "device: check",
+            "type": "shell",
+            "command": "make",
+            "args": ["device-check"],
+            "options": {
+                "env": {
+                    "ADB": "/mnt/c/tools/android-platform-tools/adb.exe"
+                }
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "device: push",
+            "type": "shell",
+            "command": "make",
+            "args": ["push-device"],
+            "options": {
+                "env": {
+                    "ADB": "/mnt/c/tools/android-platform-tools/adb.exe"
+                }
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "device: run",
+            "type": "shell",
+            "command": "make",
+            "args": ["run-device"],
+            "options": {
+                "env": {
+                    "ADB": "/mnt/c/tools/android-platform-tools/adb.exe"
+                }
+            },
+            "problemMatcher": []
+        }
+    ]
+}
