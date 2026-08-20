@@ -45,6 +45,8 @@ func dispatch(w io.Writer, command string, o opts) error {
 		return speakerTest(w, o.Speaker.Test)
 	case "led test":
 		return ledTest(w, o.LED.Test)
+	case "buttons test":
+		return buttonsTest(w, o.Buttons.Test)
 	default:
 		return fmt.Errorf("unknown command %q", command)
 	}

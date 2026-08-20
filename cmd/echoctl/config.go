@@ -15,6 +15,7 @@ type opts struct {
 	Mic     micCommand     `command:"mic" description:"diagnose microphone capture"`
 	Speaker speakerCommand `command:"speaker" description:"diagnose speaker playback"`
 	LED     ledCommand     `command:"led" description:"diagnose the LED ring"`
+	Buttons buttonsCommand `command:"buttons" description:"diagnose device buttons"`
 }
 
 type versionCommand struct{}
@@ -63,6 +64,17 @@ type ledTestCommand struct {
 	Seconds   float64 `long:"seconds" default:"1" description:"seconds to render each state"`
 	Current   uint8   `long:"current" default:"255" description:"global LED current from 0 to 255"`
 	Clear     bool    `long:"clear" description:"clear the ring after the test"`
+}
+
+type buttonsCommand struct {
+	Test buttonsTestCommand `command:"test" description:"print recognized button presses"`
+}
+
+type buttonsTestCommand struct {
+	InputDir    string  `long:"input-dir" default:"/dev/input" description:"input event device directory"`
+	SysClassDir string  `long:"sys-class-dir" default:"/sys/class/input" description:"input sysfs class directory"`
+	FromFile    string  `long:"from-file" description:"replay recorded input events instead of live devices"`
+	Seconds     float64 `long:"seconds" default:"30" description:"seconds to watch for events"`
 }
 
 // verifyCommand checks a release bundle exactly the way a gateway or a device

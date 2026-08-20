@@ -70,6 +70,16 @@ func TestParseArgs_Commands(t *testing.T) {
 		assert.True(t, o.LED.Test.Clear)
 	})
 
+	t.Run("buttons test", func(t *testing.T) {
+		o, command, err := parseArgs([]string{"buttons", "test", "--input-dir=/tmp/input", "--sys-class-dir=/tmp/sys", "--from-file=events.bin", "--seconds=2"})
+		require.NoError(t, err)
+		assert.Equal(t, "buttons test", command)
+		assert.Equal(t, "/tmp/input", o.Buttons.Test.InputDir)
+		assert.Equal(t, "/tmp/sys", o.Buttons.Test.SysClassDir)
+		assert.Equal(t, "events.bin", o.Buttons.Test.FromFile)
+		assert.InDelta(t, 2.0, o.Buttons.Test.Seconds, 0.001)
+	})
+
 	t.Run("mic record requires out", func(t *testing.T) {
 		_, _, err := parseArgs([]string{"mic", "record"})
 		require.Error(t, err)

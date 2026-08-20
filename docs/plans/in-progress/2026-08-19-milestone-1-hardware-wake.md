@@ -7,7 +7,7 @@
 **Started:** 2026-08-19
 **Completed:** not completed
 
-**Remaining work:** Tasks 13–25. Tasks 2–12 completed.
+**Remaining work:** Tasks 15–25. Tasks 2–14 completed.
 
 ## Objective
 
@@ -702,7 +702,7 @@ Expected: exit 0. `TestRender_CoversEveryDeviceState` iterates `protocol.AllDevi
 
 ### Task 14: `internal/device/buttons` and `echoctl buttons test`
 
-**Status:** not started
+**Status:** completed 2026-08-20
 
 **Purpose:** §24's button access leg, with the tap and hold semantics Action and Mute need. The Action button is Milestone 2's manual turn trigger (§16), so its semantics must be right now.
 
@@ -720,7 +720,7 @@ Expected: exit 0. `TestRender_CoversEveryDeviceState` iterates `protocol.AllDevi
 **Concrete changes:**
 
 - `codes.go`: `Key` with `KeyMute = 113`, `KeyVolumeDown = 114`, `KeyVolumeUp = 115`, `KeyAction = 138`, plus `String()` and `evTypeKey = 1`.
-- `evdev.go`: `eventSize = 16`, `decodeEvent([]byte) (rawEvent, error)` reading two 64-bit kernel-long timeval words, a `uint16` type, a `uint16` code and an `int32` value, and `Reader{r io.Reader}` with `Read() (rawEvent, error)`; `ErrShortEvent`. The doc records that both build targets are 64-bit, which is why no build tag is needed, and `Reader` works over any `io.Reader` so `bytes.Reader` is a complete test double.
+- `evdev.go`: `eventSize = 24`, `decodeEvent([]byte) (rawEvent, error)` reading two 64-bit kernel-long timeval words, a `uint16` type, a `uint16` code and an `int32` value, and `Reader{r io.Reader}` with `Read() (rawEvent, error)`; `ErrShortEvent`. The doc records that both build targets are 64-bit, which is why no build tag is needed, and `Reader` works over any `io.Reader` so `bytes.Reader` is a complete test double. This corrects the original plan's internally inconsistent 16-byte size: those fields occupy 24 bytes in the 64-bit Linux ABI used by the Dot.
 - `discover.go`: `FindDevices(inputDir, sysClassDir string, wantNames []string) ([]string, error)` globbing `event*` and reading `<sysClassDir>/<node>/device/name`, matching case-insensitively; `DefaultInputDir`, `DefaultSysClassDir`, `ErrNoInputDevice`. Both roots are injected so `t.TempDir()` tests the whole discovery path.
 - `semantics.go`: `HoldThreshold = 700 * time.Millisecond`; `Action` with `ActionTap`, `ActionHoldStart`, `ActionHoldEnd`, `ActionRepeat`; `Press{Key; Action; Held time.Duration; At time.Time}`; and `Recognizer.Feed(k Key, value int32, at time.Time) []Press` where value 1 is press, 0 release and 2 the kernel auto-repeat. Mute and Action emit `ActionTap` on release when held under the threshold, otherwise `ActionHoldStart` at the threshold and `ActionHoldEnd` on release with the duration; volume keys emit on press and then one `ActionRepeat` per auto-repeat, which is the ramp. The clock is a parameter and `time.Now()` is never called inside, so the state machine is table-testable.
 - `watcher.go`: `Watcher` with `Run(ctx, chan<- Press) error`.
@@ -736,7 +736,7 @@ go test ./internal/device/buttons/... -v -race
 golangci-lint run ./internal/device/buttons/...
 ```
 
-Expected: exit 0, with `TestDecodeEvent_ParsesTypeCodeValueFrom16ByteRecord`, `TestDecodeEvent_RejectsShortRecordWithErrShortEvent`, `TestFindDevices_MatchesByDeviceName`, `TestFindDevices_ReturnsErrNoInputDeviceWhenNoNameMatches`, `TestRecognizer_ActionHeldBelow700msEmitsTapOnRelease`, `TestRecognizer_ActionHeldAbove700msEmitsHoldStartThenHoldEnd`, `TestRecognizer_MuteFollowsTapHoldSemantics`, `TestRecognizer_VolumeKeyRepeatRamps`, `TestRecognizer_IgnoresNonKeyEventTypes` and `TestWatcher_StopsOnContextCancel`.
+Expected: exit 0, with `TestDecodeEvent_ParsesTypeCodeValueFrom24ByteRecord`, `TestDecodeEvent_RejectsShortRecordWithErrShortEvent`, `TestFindDevices_MatchesByDeviceName`, `TestFindDevices_ReturnsErrNoInputDeviceWhenNoNameMatches`, `TestRecognizer_ActionHeldBelow700msEmitsTapOnRelease`, `TestRecognizer_ActionHeldAbove700msEmitsHoldStartThenHoldEnd`, `TestRecognizer_MuteFollowsTapHoldSemantics`, `TestRecognizer_VolumeKeyRepeatRamps`, `TestWatcher_IgnoresNonKeyEventTypes` and `TestWatcher_StopsOnContextCancel`.
 
 ### Task 15: HARDWARE — LED ring and buttons on the Dot
 
@@ -1235,6 +1235,10 @@ Two device-state caveats: `speaker test` changes `Ext_Speaker_Amp_Switch` and mu
 
 ## Progress log
 
+- 2026-08-20: Task 14 claimed for inline implementation. Scope is confined to `internal/device/buttons`, `echoctl buttons test`, generated button fixtures, CLI wiring and tests, and this plan document.
+- 2026-08-20: Task 14 corrected the planned evdev record size from 16 to 24 bytes. Two 64-bit timeval words plus type, code, and value total 24 bytes on the Dot's 64-bit Linux ABI; keeping 16 would truncate the value field and make real device decoding impossible.
+- 2026-08-20: Task 14 completed. Added 64-bit evdev decoding, injected-root case-insensitive input discovery, deterministic Action/Mute tap and real-time hold semantics, VolumeUp/VolumeDown press-repeat semantics, cancelable closable-stream watchers, generated event fixtures, and `echoctl buttons test` for fixture and live multi-device input. Fresh-context review found three medium issues: hold-start was initially delayed until release, blocked reads were not interrupted by cancellation, and an early multi-device error could be suppressed at timeout. All three were fixed with threshold timers, watcher-owned closable streams, concurrent error handling with peer cancellation, and requirement-level regression tests. Re-review resolved every finding; none were declined or postponed. Repository formatting, lint, and race/coverage tests passed; `internal/device/buttons` reports 87.4% statement coverage. No hardware verification ran; real device names, nodes, and key codes remain Task 15.
+
 - 2026-08-20: Task 13 completed. Added the 12-segment/36-channel RGB frame codec, injected-root sysfs device with duplicate-write suppression and current/boot-animation controls, exhaustive semantic-state rendering with visible unknown-state fallback, tick-driven animator, and `echoctl led test` with single/all-state, current, duration, clear, and absent fake-root support. Added the missing `muted`, `offline`, and `update_trial` protocol states plus a copy-returning documentation-order inventory and updated the wire protocol documentation. Focused race tests, fake-root CLI verification, package lint, and repository formatting/lint/race tests passed; `internal/device/led` reports 97.6% statement coverage. Fresh-context review found two medium acceptance gaps: the initial exhaustiveness test could not distinguish a missing state case from the unknown-state fallback, and the exact fake-root command failed when its directory was absent. Both were fixed with an explicit known-case signal covered against `AllDeviceStates()` and safe creation of non-default diagnostic roots. No findings were declined or postponed. Hardware was not required; visual and sysfs verification on the Dot remains Task 15.
 - 2026-08-20: Task 13 claimed for inline implementation. Scope is confined to `internal/device/led`, the additive protocol state constants and documentation, `echoctl led test`, their tests, and this plan document. Implementation and repository-wide checks passed; fresh-context review is in progress before the task is marked complete.
 - 2026-08-20: Task 12 completed. After the physical mute GPIO was cleared, spoken capture raised all seven physical channels to peaks between -34.36 and -28.69 dBFS while loopback channels 7–8 remained digital zero. A separate five-second mic0 capture peaked at -37.00 dBFS, played 240,000 frames at 48 kHz stereo, and a nearby human confirmed the speech was clear and intelligible. Together with the previously confirmed audible tone, PCM formats, loopback identification, serial source, real fixture, ALSA playback-start correction, and review remediation, every Task 12 verification item is complete.
@@ -1274,6 +1278,8 @@ Two device-state caveats: `speaker test` changes `Ext_Speaker_Amp_Switch` and mu
 ## Completion evidence
 
 To be filled in during execution: the exact commands from each task's Verification block, their outcomes, and the date, with hardware and non-hardware checks recorded separately per `docs/plans/README.md`.
+
+- 2026-08-20, Task 14: `go test ./internal/device/buttons/... -v -race`; `.bin/echoctl buttons test --from-file testdata/buttons/action_tap.bin --seconds 1`; `golangci-lint run ./internal/device/buttons/... ./cmd/echoctl/...`; `make fmt-check`; `make lint`; and `make test` all passed. The fixture CLI printed `action tap held=250ms`; generated-fixture drift, 24-byte event decoding, injected-root discovery, tap/hold/repeat semantics, real-time hold-start delivery, in-flight cancellation, and multi-device error preservation are covered. Race-enabled `internal/device/buttons` statement coverage was 87.4%. Fresh-context review's three findings were fixed and re-reviewed; none were declined or postponed. No hardware verification ran; Task 15 owns real input-node discovery and physical key-code confirmation.
 
 - 2026-08-20, Task 13: `go test -race ./internal/device/led/... ./internal/protocol/... ./cmd/echoctl/...`; `golangci-lint run ./internal/device/led/... ./internal/protocol/... ./cmd/echoctl/...`; `.bin/echoctl led test --root <absent-temporary-root>/ledfake --all-states --seconds 0.01`; `make fmt-check`; `make lint`; and `make test` all passed. The CLI rendered all nine states and left a `frame` file containing exactly 72 hexadecimal characters. Race-enabled `internal/device/led` statement coverage was 97.6%. Fresh-context review's two findings were fixed and reverified; none were declined or postponed. No hardware verification ran; Task 15 owns real LED controller access and visual pattern confirmation.
 - 2026-08-20, Task 12: `make device-check ADB=/mnt/c/tools/android-platform-tools/adb.exe DEVICE_SERIAL=G090LF0964060EHP`; `make build-device-ctl build-device`; device `mic record` for all channels and mic0; concurrent all-channel capture plus `speaker test`; live capture/playback `hw_params`; recorded-input playback; focused `go test -race ./internal/device/audio/... -count=1`; package lint; `make fmt-check`; `make lint`; and `make test` passed. Hardware confirmed serial fallback and both PCM formats/channel counts/period and buffer sizes; concurrent playback raised channels 7–8 from digital zero to -12.07 dBFS peak while 0–6 remained physical-mic room channels. EchoLocal's MTK pin 87 physical mute line resolved to GPIO 444, read high, and was driven low; the red ring went out. Spoken capture then raised channels 0–6 to peaks from -34.36 through -28.69 dBFS while 7–8 remained digital zero. Playback completed 144,000 generated-tone frames and 240,000 recorded-input frames after the playback-start fix; a nearby human confirmed both the tone and recorded speech were clear and audible. Repository-wide coverage was 72.0%; `internal/device/audio` was 83.7% and `internal/device/audio/alsa` was 41.6%. Task 12 verification is complete.
