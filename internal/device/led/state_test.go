@@ -32,3 +32,15 @@ func TestRender_AnimatedStatesAdvanceAndNegativeTicksAreSafe(t *testing.T) {
 	assert.NotEqual(t, Render(protocol.StateUpdateTrial, 0), Render(protocol.StateUpdateTrial, 1))
 	assert.NotPanics(t, func() { Render(protocol.StateListening, -1) })
 }
+
+func TestRender_ThinkingInterpolatesCometBetweenSegments(t *testing.T) {
+	first := Render(protocol.StateThinking, 0)
+	between := Render(protocol.StateThinking, 1)
+	second := Render(protocol.StateThinking, 2)
+
+	assert.NotEqual(t, first, between)
+	assert.NotEqual(t, between, second)
+	assert.Less(t, between[0].B, first[0].B)
+	assert.Greater(t, between[1].B, first[1].B)
+	assert.Equal(t, second[1].B, first[0].B)
+}

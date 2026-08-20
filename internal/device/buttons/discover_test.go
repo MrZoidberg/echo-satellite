@@ -36,3 +36,17 @@ func TestFindDevices_ReturnsErrNoInputDeviceWhenNoNameMatches(t *testing.T) {
 	_, err := FindDevices(inputDir, sysDir, []string{"buttons"})
 	assert.ErrorIs(t, err, ErrNoInputDevice)
 }
+
+func TestFindControlDevicesAssignsNonOverlappingHardwareKeys(t *testing.T) {
+	root := t.TempDir()
+	inputDir, sysDir := filepath.Join(root, "input"), filepath.Join(root, "sys")
+	require.NoError(t, os.MkdirAll(inputDir, 0o750))
+	addTestDevice(t, inputDir, sysDir, "event1", DeviceNameKeypad)
+	addTestDevice(t, inputDir, sysDir, "event2", DeviceNameGPIOKeys)
+
+	got, err := FindControlDevices(inputDir, sysDir)
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+	assert.Equal(t, []Key{KeyAction, KeyMute}, got[0].Keys)
+	assert.Equal(t, []Key{KeyVolumeUp, KeyVolumeDown}, got[1].Keys)
+}

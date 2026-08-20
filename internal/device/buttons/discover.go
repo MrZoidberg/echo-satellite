@@ -12,7 +12,16 @@ import (
 const (
 	DefaultInputDir    = "/dev/input"
 	DefaultSysClassDir = "/sys/class/input"
+	DeviceNameKeypad   = "mtk-kpd"
+	DeviceNameGPIOKeys = "keys"
 )
+
+// Device identifies one measured button input node and the keys consumed from it.
+type Device struct {
+	Path string
+	Name string
+	Keys []Key
+}
 
 // ErrNoInputDevice means no event node matched the requested device names.
 var ErrNoInputDevice = errors.New("no matching input device")
@@ -44,4 +53,26 @@ func FindDevices(inputDir, sysClassDir string, wantNames []string) ([]string, er
 	}
 	slices.Sort(matches)
 	return matches, nil
+}
+
+// FindControlDevices returns the two measured Dot button nodes with per-node
+// key filters. Volume Down is advertised by both nodes, but only the gpio-keys
+// node provides the complete volume press/release stream.
+func FindControlDevices(inputDir, sysClassDir string) ([]Device, error) {
+	keypad, err := FindDevices(inputDir, sysClassDir, []string{DeviceNameKeypad})
+	if err != nil {
+		return nil, err
+	}
+	gpioKeys, err := FindDevices(inputDir, sysClassDir, []string{DeviceNameGPIOKeys})
+	if err != nil {
+		return nil, err
+	}
+	devices := make([]Device, 0, len(keypad)+len(gpioKeys))
+	for _, path := range keypad {
+		devices = append(devices, Device{Path: path, Name: DeviceNameKeypad, Keys: []Key{KeyAction, KeyMute}})
+	}
+	for _, path := range gpioKeys {
+		devices = append(devices, Device{Path: path, Name: DeviceNameGPIOKeys, Keys: []Key{KeyVolumeUp, KeyVolumeDown}})
+	}
+	return devices, nil
 }

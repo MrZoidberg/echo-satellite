@@ -53,7 +53,7 @@ func TestWatchButtons_PreservesFirstDeviceErrorAndCancelsBlockedPeer(t *testing.
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	started := time.Now()
-	err := watchButtons(ctx, io.Discard, []io.ReadCloser{blocked, errorReadCloser{err: want}})
+	err := watchButtons(ctx, io.Discard, []buttonReader{{ReadCloser: blocked}, {ReadCloser: errorReadCloser{err: want}}})
 	require.ErrorIs(t, err, want)
 	assert.Less(t, time.Since(started), 500*time.Millisecond)
 }

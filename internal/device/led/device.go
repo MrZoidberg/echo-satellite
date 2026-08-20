@@ -41,6 +41,9 @@ func (d *Device) WriteFrame(frame Frame) error {
 
 // SetCurrent sets the controller's global LED current.
 func (d *Device) SetCurrent(current uint8) error {
+	if current > 3 {
+		return fmt.Errorf("LED current attenuation index %d: must be between 0 and 3", current)
+	}
 	return d.write("led_current", strconv.FormatUint(uint64(current), 10))
 }
 
@@ -58,7 +61,7 @@ func (d *Device) Clear() error { return d.WriteFrame(Frame{}) }
 
 func (d *Device) write(name, value string) error {
 	path := filepath.Join(d.root, name)
-	if err := os.WriteFile(path, []byte(value), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(value+"\n"), 0o600); err != nil {
 		return fmt.Errorf("write LED %s: %w", name, err)
 	}
 	return nil

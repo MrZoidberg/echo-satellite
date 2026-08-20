@@ -2,7 +2,10 @@ package buttons
 
 import "time"
 
-const HoldThreshold = 700 * time.Millisecond
+const (
+	HoldThreshold  = 700 * time.Millisecond
+	RepeatInterval = 200 * time.Millisecond
+)
 
 type Action string
 
@@ -88,4 +91,12 @@ func (r *Recognizer) startHold(key Key) []Press {
 	state.holdStarted = true
 	r.pressed[key] = state
 	return []Press{{Key: key, Action: ActionHoldStart, Held: HoldThreshold, At: state.started.Add(HoldThreshold)}}
+}
+
+func (r *Recognizer) repeat(key Key, held time.Duration) []Press {
+	state, ok := r.pressed[key]
+	if !ok || (key != KeyVolumeDown && key != KeyVolumeUp) {
+		return nil
+	}
+	return []Press{{Key: key, Action: ActionRepeat, Held: held, At: state.started.Add(held)}}
 }

@@ -60,6 +60,18 @@ func TestRecognizer_VolumeKeyRepeatRamps(t *testing.T) {
 	assert.Empty(t, r.Feed(KeyVolumeUp, 0, start.Add(time.Second)))
 }
 
+func TestRecognizer_GeneratedVolumeRepeatStopsAfterRelease(t *testing.T) {
+	var r Recognizer
+	start := time.Unix(1, 0)
+	r.Feed(KeyVolumeDown, 1, start)
+	repeated := r.repeat(KeyVolumeDown, RepeatInterval)
+	require.Len(t, repeated, 1)
+	assert.Equal(t, ActionRepeat, repeated[0].Action)
+	assert.Equal(t, RepeatInterval, repeated[0].Held)
+	r.Feed(KeyVolumeDown, 0, start.Add(RepeatInterval+time.Millisecond))
+	assert.Empty(t, r.repeat(KeyVolumeDown, 2*RepeatInterval))
+}
+
 func TestRecognizer_IgnoresUnknownKeysAndValues(t *testing.T) {
 	var r Recognizer
 	assert.Empty(t, r.Feed(Key(999), 1, time.Now()))

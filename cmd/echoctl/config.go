@@ -62,7 +62,7 @@ type ledTestCommand struct {
 	State     string  `long:"state" default:"idle" description:"semantic device state"`
 	AllStates bool    `long:"all-states" description:"render every semantic device state in order"`
 	Seconds   float64 `long:"seconds" default:"1" description:"seconds to render each state"`
-	Current   uint8   `long:"current" default:"255" description:"global LED current from 0 to 255"`
+	Current   uint8   `long:"current" default:"0" description:"LED current attenuation index from 0 (full) to 3 (quarter)"`
 	Clear     bool    `long:"clear" description:"clear the ring after the test"`
 }
 

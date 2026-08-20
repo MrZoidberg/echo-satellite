@@ -23,32 +23,37 @@ func buttonsTest(w io.Writer, command buttonsTestCommand) error {
 			return fmt.Errorf("open button event file: %w", err)
 		}
 		defer func() { _ = file.Close() }()
-		return watchButtons(ctx, w, []io.ReadCloser{file})
+		return watchButtons(ctx, w, []buttonReader{{ReadCloser: file}})
 	}
-	paths, err := buttons.FindDevices(command.InputDir, command.SysClassDir, nil)
+	devices, err := buttons.FindControlDevices(command.InputDir, command.SysClassDir)
 	if err != nil {
 		return fmt.Errorf("discover button devices: %w", err)
 	}
-	readers := make([]io.ReadCloser, 0, len(paths))
-	for _, path := range paths {
-		file, openErr := os.Open(path) //nolint:gosec // Paths are event nodes returned by injected-root discovery.
+	readers := make([]buttonReader, 0, len(devices))
+	for _, device := range devices {
+		file, openErr := os.Open(device.Path)
 		if openErr != nil {
 			closeReaders(readers)
-			return fmt.Errorf("open input device %s: %w", path, openErr)
+			return fmt.Errorf("open input device %s: %w", device.Path, openErr)
 		}
-		readers = append(readers, file)
+		readers = append(readers, buttonReader{ReadCloser: file, keys: device.Keys})
 	}
 	defer closeReaders(readers)
 	return watchButtons(ctx, w, readers)
 }
 
-func watchButtons(ctx context.Context, w io.Writer, readers []io.ReadCloser) error {
+type buttonReader struct {
+	io.ReadCloser
+	keys []buttons.Key
+}
+
+func watchButtons(ctx context.Context, w io.Writer, readers []buttonReader) error {
 	watchCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	presses := make(chan buttons.Press)
 	results := make(chan error, len(readers))
 	for _, reader := range readers {
-		go func() { results <- buttons.NewWatcher(reader).Run(watchCtx, presses) }()
+		go func() { results <- buttons.NewWatcher(reader, reader.keys...).Run(watchCtx, presses) }()
 	}
 	remaining := len(readers)
 	var firstErr error
@@ -80,7 +85,7 @@ func watchButtons(ctx context.Context, w io.Writer, readers []io.ReadCloser) err
 	return nil
 }
 
-func closeReaders(readers []io.ReadCloser) {
+func closeReaders(readers []buttonReader) {
 	for _, reader := range readers {
 		_ = reader.Close()
 	}

@@ -22,16 +22,25 @@ func TestDevice_WriteFrameSkipsIdenticalFrame(t *testing.T) {
 func TestDevice_ControlsAndClear(t *testing.T) {
 	root := t.TempDir()
 	device := New(root)
-	require.NoError(t, device.SetCurrent(42))
+	require.NoError(t, device.SetCurrent(2))
 	require.NoError(t, device.SetBootAnimation(true))
 	require.NoError(t, device.Clear())
 	current, err := os.ReadFile(filepath.Join(root, "led_current")) //nolint:gosec // Test reads a fixed name under its private temporary directory.
 	require.NoError(t, err)
-	assert.Equal(t, "42", string(current))
+	assert.Equal(t, "2\n", string(current))
 	boot, err := os.ReadFile(filepath.Join(root, "boot_animation")) //nolint:gosec // Test reads a fixed name under its private temporary directory.
 	require.NoError(t, err)
-	assert.Equal(t, "1", string(boot))
+	assert.Equal(t, "1\n", string(boot))
 	encoded, err := os.ReadFile(filepath.Join(root, "frame")) //nolint:gosec // Test reads a fixed name under its private temporary directory.
 	require.NoError(t, err)
-	assert.Equal(t, Frame{}.EncodeHex(), string(encoded))
+	assert.Equal(t, Frame{}.EncodeHex()+"\n", string(encoded))
+}
+
+func TestDevice_SetCurrentRejectsInvalidAttenuationIndex(t *testing.T) {
+	device := New(t.TempDir())
+
+	err := device.SetCurrent(4)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "between 0 and 3")
 }

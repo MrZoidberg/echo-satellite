@@ -171,3 +171,55 @@ The commands and frame counts prove successful ALSA playback and amplifier
 control. A nearby human confirmed on 2026-08-20 that the generated three-second
 1 kHz tone was clearly audible and that spoken mic0 capture played back clearly
 and intelligibly.
+
+## 2026-08-20 LED ring and button session
+
+The session used the same rooted device and `/data/local/tmp/echoctl` staging
+workflow as the microphone and speaker session.
+
+### LED ring
+
+The controller is `/sys/bus/i2c/devices/0-003f`. Its `frame`, `led_current`,
+and `boot_animation` attributes all exist. This FireOS driver requires writes
+to be newline terminated; otherwise even valid values fail with `EINVAL`.
+
+Amazon's init-managed `/system/bin/ledcontroller` process continuously rewrites
+the frame even when `boot_animation` reads `0`. Direct control therefore
+requires both `stop ledcontroller` and writing `0` to `boot_animation`. Stopping
+the service is reversible with `start ledcontroller` or a reboot. With it
+stopped, `echoctl led test --clear` writes an all-zero frame that remains dark
+after the process exits.
+
+`led_current` is an attenuation index, not a PWM value: `0` is full current and
+`3` is quarter current. A human confirmed that the same solid-red frame was
+visibly dimmer at index 3 than index 0. Values outside 0 through 3 are invalid.
+
+All 12 segments responded. Walking one blue segment established the physical
+mapping: segment 0 is at the bottom-right of the top face, between the
+microphone and Volume Down buttons, and increasing segment numbers move
+clockwise. Channels are consecutive RGB triplets. A human confirmed the solid
+red muted state across all segments and the nine semantic patterns. Hardware
+feedback found the original 100 ms hard-edged chase visibly stepped; matching
+EchoLocal's 40 ms frame interval and two-frames-per-segment comet with a fading
+tail produced acceptably smooth motion.
+
+### Buttons
+
+The button-capable nodes and measured key assignments are:
+
+| Node | `device/name` | Consumed keys |
+|---|---|---|
+| `/dev/input/event1` | `mtk-kpd` | Mute 113, Action/`KEY_HELP` 138 |
+| `/dev/input/event2` | `keys` | Volume Down 114, Volume Up 115 |
+
+`mtk-kpd` also advertises Volume Down, but the complete Volume Down
+press/release stream is consumed from `keys`; per-node filtering prevents a
+duplicate or orphaned press. A raw `keys` capture measured one Volume Down tap
+as DOWN followed by UP 180 ms later.
+
+The keypad emits no kernel autorepeat. Following EchoLocal, the watcher emits a
+volume tap immediately and generates repeats every 200 ms until release. The
+live acceptance run produced Action tap and hold-start/hold-end, Mute tap and
+hold-start/hold-end, a Volume Up tap followed by 200 ms repeats during a hold,
+and exactly one Volume Down tap in the isolated prompt-release check. No key was
+mapped to the wrong name and no spurious event remained after release.

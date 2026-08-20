@@ -13,7 +13,7 @@ import (
 	"github.com/MrZoidberg/echo-satellite/internal/protocol"
 )
 
-const ledTickInterval = 100 * time.Millisecond
+const ledTickInterval = 40 * time.Millisecond
 
 func ledTest(w io.Writer, command ledTestCommand) error {
 	if command.Seconds <= 0 {
@@ -29,15 +29,18 @@ func ledTest(w io.Writer, command ledTestCommand) error {
 		}
 	}
 	device := led.New(command.Root)
+	if bootErr := device.SetBootAnimation(false); bootErr != nil {
+		return fmt.Errorf("disable LED boot animation: %w", bootErr)
+	}
 	if currentErr := device.SetCurrent(command.Current); currentErr != nil {
 		return fmt.Errorf("set LED current: %w", currentErr)
 	}
 	for _, state := range states {
-		if renderErr := renderLEDState(device, state, time.Duration(command.Seconds*float64(time.Second))); renderErr != nil {
-			return renderErr
-		}
 		if _, err = fmt.Fprintf(w, "state: %s\n", state); err != nil {
 			return fmt.Errorf("write LED test report: %w", err)
+		}
+		if renderErr := renderLEDState(device, state, time.Duration(command.Seconds*float64(time.Second))); renderErr != nil {
+			return renderErr
 		}
 	}
 	if command.Clear {

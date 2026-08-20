@@ -37,7 +37,7 @@ func renderKnown(state protocol.DeviceState, tick int) (Frame, bool) {
 		color.B = blueLevels[phase]
 		return Uniform(color), true
 	case protocol.StateThinking:
-		return chase(tick, colorThinking, 1), true
+		return comet(tick, colorThinking, 5), true
 	case protocol.StateSpeaking:
 		return Uniform(colorSpeaking), true
 	case protocol.StateMuted:
@@ -47,21 +47,53 @@ func renderKnown(state protocol.DeviceState, tick int) (Frame, bool) {
 	case protocol.StateError:
 		return errorPattern(tick), true
 	case protocol.StateUpdating:
-		return chase(tick, colorUpdating, 3), true
+		return comet(tick, colorUpdating, 4), true
 	case protocol.StateUpdateTrial:
-		return chase(tick, colorTrial, 2), true
+		return comet(tick, colorTrial, 4), true
 	default:
 		return Frame{}, false
 	}
 }
 
-func chase(tick int, color RGB, width int) Frame {
+func comet(tick int, color RGB, tailLength int) Frame {
+	const framesPerSegment = 2
+	step := positiveMod(tick, SegmentCount*framesPerSegment)
+	head := step / framesPerSegment
+	fraction := float64(step%framesPerSegment) / framesPerSegment
+	return blendFrames(cometAt(head, color, tailLength), cometAt(head+1, color, tailLength), fraction)
+}
+
+func cometAt(head int, color RGB, tailLength int) Frame {
+	tail := [...]float64{1, 0.55, 0.3, 0.16, 0.08}
 	var frame Frame
-	start := positiveMod(tick, SegmentCount)
-	for offset := range width {
-		frame[(start+offset)%SegmentCount] = color
+	for offset := 0; offset < tailLength && offset < len(tail); offset++ {
+		frame[positiveMod(head-offset, SegmentCount)] = scale(color, tail[offset])
 	}
 	return frame
+}
+
+func blendFrames(from, to Frame, fraction float64) Frame {
+	var frame Frame
+	for i := range frame {
+		frame[i] = RGB{
+			R: blendChannel(from[i].R, to[i].R, fraction),
+			G: blendChannel(from[i].G, to[i].G, fraction),
+			B: blendChannel(from[i].B, to[i].B, fraction),
+		}
+	}
+	return frame
+}
+
+func blendChannel(from, to uint8, fraction float64) uint8 {
+	return uint8(float64(from)*(1-fraction) + float64(to)*fraction)
+}
+
+func scale(color RGB, factor float64) RGB {
+	return RGB{
+		R: uint8(float64(color.R) * factor),
+		G: uint8(float64(color.G) * factor),
+		B: uint8(float64(color.B) * factor),
+	}
 }
 
 func errorPattern(tick int) Frame {

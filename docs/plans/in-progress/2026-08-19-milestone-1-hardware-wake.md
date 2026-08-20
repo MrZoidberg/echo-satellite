@@ -738,9 +738,21 @@ golangci-lint run ./internal/device/buttons/...
 
 Expected: exit 0, with `TestDecodeEvent_ParsesTypeCodeValueFrom24ByteRecord`, `TestDecodeEvent_RejectsShortRecordWithErrShortEvent`, `TestFindDevices_MatchesByDeviceName`, `TestFindDevices_ReturnsErrNoInputDeviceWhenNoNameMatches`, `TestRecognizer_ActionHeldBelow700msEmitsTapOnRelease`, `TestRecognizer_ActionHeldAbove700msEmitsHoldStartThenHoldEnd`, `TestRecognizer_MuteFollowsTapHoldSemantics`, `TestRecognizer_VolumeKeyRepeatRamps`, `TestWatcher_IgnoresNonKeyEventTypes` and `TestWatcher_StopsOnContextCancel`.
 
+#### Task 14 review remediation: generate volume repeats on the Dot
+
+**Status:** completed 2026-08-20
+
+**Dependencies:** Task 14 and Task 15 hardware evidence.
+
+**Files or components:** `internal/device/buttons/{semantics.go,watcher.go}` and their tests.
+
+**Concrete changes:** The real keypad emits press and release but no evdev autorepeat. Preserve support for kernel value `2`, but also generate `ActionRepeat` every 200 ms while Volume Up or Volume Down remains pressed, matching EchoLocal's measured implementation. Stop repeats immediately on release or cancellation.
+
+**Verification:** `go test -race ./internal/device/buttons/... -v`; then rerun Task 15's live Volume Up hold and confirm repeats appear about every 200 ms and stop on release.
+
 ### Task 15: HARDWARE — LED ring and buttons on the Dot
 
-**Status:** not started
+**Status:** completed 2026-08-20
 
 **Purpose:** §24's `LED/button access` leg. Confirms the sysfs path, the 12-segment RGB mapping, and the real key codes on this device revision.
 
@@ -751,9 +763,9 @@ Expected: exit 0, with `TestDecodeEvent_ParsesTypeCodeValueFrom24ByteRecord`, `T
 **Files or components:**
 
 - Modify: `docs/device-diagnostics.md`
-- Modify: `internal/device/led/device.go` or `internal/device/buttons/codes.go` **only if** measurement contradicts the assumed values
+- Modify: `internal/device/led/{device.go,state.go}`, `cmd/echoctl/{config.go,led.go}` and their tests, or `internal/device/buttons/codes.go` **only if** measurement contradicts the assumed values
 
-**Concrete changes:** Record in `docs/device-diagnostics.md` the confirmed LED sysfs root, whether all 12 segments respond and in what physical order, the visible effect of `led_current`, whether `boot_animation` must be disabled, the discovered `/dev/input/event*` node and its `device/name`, and the observed key codes for all four buttons. Correct any constant measurement contradicts.
+**Concrete changes:** Record in `docs/device-diagnostics.md` the confirmed LED sysfs root, whether all 12 segments respond and in what physical order, the visible effect of `led_current`, whether `boot_animation` must be disabled, the discovered `/dev/input/event*` node and its `device/name`, and the observed key codes for all four buttons. Correct any measured hardware contract that contradicts the implementation, including the diagnostic CLI when it prevents the planned hardware verification.
 
 **Expected outcome:** All 12 LED segments and all four buttons confirmed working through the new packages.
 
@@ -1235,6 +1247,9 @@ Two device-state caveats: `speaker test` changes `Ext_Speaker_Amp_Switch` and mu
 
 ## Progress log
 
+- 2026-08-20: Task 15 hardware execution confirmed the IS31FL3236 sysfs attributes, all 12 RGB segments, segment 0 between the microphone and Volume Down buttons, clockwise ordering, `led_current` attenuation indices 0 through 3, and the two real input nodes/key codes. Hardware contradicted three assumptions: sysfs writes require trailing newlines; Amazon's `ledcontroller` must be stopped in addition to disabling `boot_animation`; and the keypad emits no autorepeat. LED control and diagnostics were corrected to the measured contract, animation pacing and comet smoothing were aligned with EchoLocal's 40 ms approach after human feedback, and Task 14 remediation added local 200 ms volume repeats plus per-node key filtering. Focused race tests and lint pass; final repository checks and fresh-context review remain before completion.
+- 2026-08-20: Task 15 and the Task 14 hardware remediation completed. `make fmt-check`, `make lint`, and `make test` passed; touched-package race coverage is 90.4% for `internal/device/buttons` and 98.0% for `internal/device/led`. Fresh-context review found two medium timer issues: stale callbacks could attach to a rapid repress, and kernel value-2 repeats could overlap synthetic repeats. Both were fixed with per-press generation tokens, kernel-repeat takeover, and deterministic release/repress regression coverage for volume and Action. Re-review found one test-quality issue, which was fixed by routing DOWN/UP/DOWN through the event handler and checking observable output; final re-review found no remaining issues. No findings were declined or postponed. The final all-zero frame persisted after process exit, and Amazon's `ledcontroller` was restored to its original running state.
+
 - 2026-08-20: Task 14 claimed for inline implementation. Scope is confined to `internal/device/buttons`, `echoctl buttons test`, generated button fixtures, CLI wiring and tests, and this plan document.
 - 2026-08-20: Task 14 corrected the planned evdev record size from 16 to 24 bytes. Two 64-bit timeval words plus type, code, and value total 24 bytes on the Dot's 64-bit Linux ABI; keeping 16 would truncate the value field and make real device decoding impossible.
 - 2026-08-20: Task 14 completed. Added 64-bit evdev decoding, injected-root case-insensitive input discovery, deterministic Action/Mute tap and real-time hold semantics, VolumeUp/VolumeDown press-repeat semantics, cancelable closable-stream watchers, generated event fixtures, and `echoctl buttons test` for fixture and live multi-device input. Fresh-context review found three medium issues: hold-start was initially delayed until release, blocked reads were not interrupted by cancellation, and an early multi-device error could be suppressed at timeout. All three were fixed with threshold timers, watcher-owned closable streams, concurrent error handling with peer cancellation, and requirement-level regression tests. Re-review resolved every finding; none were declined or postponed. Repository formatting, lint, and race/coverage tests passed; `internal/device/buttons` reports 87.4% statement coverage. No hardware verification ran; real device names, nodes, and key codes remain Task 15.
@@ -1280,6 +1295,8 @@ Two device-state caveats: `speaker test` changes `Ext_Speaker_Amp_Switch` and mu
 To be filled in during execution: the exact commands from each task's Verification block, their outcomes, and the date, with hardware and non-hardware checks recorded separately per `docs/plans/README.md`.
 
 - 2026-08-20, Task 14: `go test ./internal/device/buttons/... -v -race`; `.bin/echoctl buttons test --from-file testdata/buttons/action_tap.bin --seconds 1`; `golangci-lint run ./internal/device/buttons/... ./cmd/echoctl/...`; `make fmt-check`; `make lint`; and `make test` all passed. The fixture CLI printed `action tap held=250ms`; generated-fixture drift, 24-byte event decoding, injected-root discovery, tap/hold/repeat semantics, real-time hold-start delivery, in-flight cancellation, and multi-device error preservation are covered. Race-enabled `internal/device/buttons` statement coverage was 87.4%. Fresh-context review's three findings were fixed and re-reviewed; none were declined or postponed. No hardware verification ran; Task 15 owns real input-node discovery and physical key-code confirmation.
+
+- 2026-08-20, Task 15 and Task 14 remediation: Windows ADB against `G090LF0964060EHP` confirmed `/sys/bus/i2c/devices/0-003f/{frame,led_current,boot_animation}`, newline-terminated writes, the required `stop ledcontroller`, attenuation indices 0 and 3, all 12 RGB segments with segment 0 between microphone and Volume Down and clockwise ordering, all nine semantic patterns at the revised 40 ms cadence, and persistent clear-after-exit. `/dev/input/event1` (`mtk-kpd`) supplied Mute 113 and Action 138; `/dev/input/event2` (`keys`) supplied Volume Down 114 and Volume Up 115. Live runs confirmed Action/Mute tap and hold, generated Volume Up repeats at 200 ms, and one prompt Volume Down tap; raw `getevent` confirmed its DOWN/UP pair. `go test -race -count=10 ./internal/device/buttons/...`, `make fmt-check`, `make lint`, and `make test` passed; coverage was 90.4% for buttons and 98.0% for LED. Fresh review's two timer findings and one test-quality finding were fixed and re-reviewed; none were declined or postponed. `ledcontroller` was restored to `running` after verification.
 
 - 2026-08-20, Task 13: `go test -race ./internal/device/led/... ./internal/protocol/... ./cmd/echoctl/...`; `golangci-lint run ./internal/device/led/... ./internal/protocol/... ./cmd/echoctl/...`; `.bin/echoctl led test --root <absent-temporary-root>/ledfake --all-states --seconds 0.01`; `make fmt-check`; `make lint`; and `make test` all passed. The CLI rendered all nine states and left a `frame` file containing exactly 72 hexadecimal characters. Race-enabled `internal/device/led` statement coverage was 97.6%. Fresh-context review's two findings were fixed and reverified; none were declined or postponed. No hardware verification ran; Task 15 owns real LED controller access and visual pattern confirmation.
 - 2026-08-20, Task 12: `make device-check ADB=/mnt/c/tools/android-platform-tools/adb.exe DEVICE_SERIAL=G090LF0964060EHP`; `make build-device-ctl build-device`; device `mic record` for all channels and mic0; concurrent all-channel capture plus `speaker test`; live capture/playback `hw_params`; recorded-input playback; focused `go test -race ./internal/device/audio/... -count=1`; package lint; `make fmt-check`; `make lint`; and `make test` passed. Hardware confirmed serial fallback and both PCM formats/channel counts/period and buffer sizes; concurrent playback raised channels 7–8 from digital zero to -12.07 dBFS peak while 0–6 remained physical-mic room channels. EchoLocal's MTK pin 87 physical mute line resolved to GPIO 444, read high, and was driven low; the red ring went out. Spoken capture then raised channels 0–6 to peaks from -34.36 through -28.69 dBFS while 7–8 remained digital zero. Playback completed 144,000 generated-tone frames and 240,000 recorded-input frames after the playback-start fix; a nearby human confirmed both the tone and recorded speech were clear and audible. Repository-wide coverage was 72.0%; `internal/device/audio` was 83.7% and `internal/device/audio/alsa` was 41.6%. Task 12 verification is complete.
