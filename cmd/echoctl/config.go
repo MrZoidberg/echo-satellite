@@ -12,12 +12,43 @@ import (
 type opts struct {
 	Version versionCommand `command:"version" description:"show version"`
 	Release releaseCommand `command:"release" description:"inspect and verify release artifacts"`
+	Mic     micCommand     `command:"mic" description:"diagnose microphone capture"`
+	Speaker speakerCommand `command:"speaker" description:"diagnose speaker playback"`
 }
 
 type versionCommand struct{}
 
 type releaseCommand struct {
 	Verify verifyCommand `command:"verify" description:"verify a release bundle: manifest, artifact digest and signature"`
+}
+
+type micCommand struct {
+	Record micRecordCommand `command:"record" description:"record microphone PCM to WAV"`
+}
+
+type micRecordCommand struct {
+	Seconds     float64 `long:"seconds" default:"5" description:"recording duration in seconds"`
+	Out         string  `long:"out" required:"true" description:"output WAV path"`
+	Channels    string  `long:"channels" default:"mic0" description:"mic0..mic6, all, or a comma-separated list"`
+	FromFile    string  `long:"from-file" description:"replay raw device PCM instead of ALSA"`
+	Card        int     `long:"card" default:"0" description:"ALSA card number"`
+	Device      int     `long:"device" default:"24" description:"ALSA capture device number"`
+	PrintLevels bool    `long:"print-levels" description:"print peak and RMS dBFS per selected channel"`
+}
+
+type speakerCommand struct {
+	Test speakerTestCommand `command:"test" description:"play a WAV or generated test tone"`
+}
+
+type speakerTestCommand struct {
+	In        string  `long:"in" description:"input WAV; defaults to a generated 1 kHz tone"`
+	Seconds   float64 `long:"seconds" default:"1" description:"generated tone or playback duration in seconds"`
+	ToFile    string  `long:"to-file" description:"write playback PCM to a WAV instead of ALSA"`
+	Resampler string  `long:"resampler" choice:"sinc" choice:"linear" choice:"hold" default:"sinc"`
+	Volume    float64 `long:"volume" default:"1" description:"linear volume gain from 0 to 1"`
+	NoAmp     bool    `long:"no-amp" description:"do not enable the speaker amplifier"`
+	Card      int     `long:"card" default:"0" description:"ALSA card number"`
+	Device    int     `long:"device" default:"23" description:"ALSA playback device number"`
 }
 
 // verifyCommand checks a release bundle exactly the way a gateway or a device

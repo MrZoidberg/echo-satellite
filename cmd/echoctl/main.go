@@ -39,6 +39,10 @@ func dispatch(w io.Writer, command string, o opts) error {
 		return writeReport(w, []string{"version: " + revision})
 	case "release verify":
 		return verifyRelease(w, o.Release.Verify)
+	case "mic record":
+		return micRecord(w, o.Mic.Record)
+	case "speaker test":
+		return speakerTest(w, o.Speaker.Test)
 	default:
 		return fmt.Errorf("unknown command %q", command)
 	}

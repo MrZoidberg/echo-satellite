@@ -42,6 +42,29 @@ func TestParseArgs_Commands(t *testing.T) {
 		assert.False(t, isHelpRequest(err))
 	})
 
+	t.Run("mic record", func(t *testing.T) {
+		o, command, err := parseArgs([]string{"mic", "record", "--out=mic.wav", "--channels=all", "--seconds=2"})
+		require.NoError(t, err)
+		assert.Equal(t, "mic record", command)
+		assert.Equal(t, "mic.wav", o.Mic.Record.Out)
+		assert.Equal(t, "all", o.Mic.Record.Channels)
+		assert.InDelta(t, 2.0, o.Mic.Record.Seconds, 0.001)
+	})
+
+	t.Run("speaker test", func(t *testing.T) {
+		o, command, err := parseArgs([]string{"speaker", "test", "--to-file=spk.wav", "--resampler=linear"})
+		require.NoError(t, err)
+		assert.Equal(t, "speaker test", command)
+		assert.Equal(t, "spk.wav", o.Speaker.Test.ToFile)
+		assert.Equal(t, "linear", o.Speaker.Test.Resampler)
+	})
+
+	t.Run("mic record requires out", func(t *testing.T) {
+		_, _, err := parseArgs([]string{"mic", "record"})
+		require.Error(t, err)
+		assert.False(t, isHelpRequest(err))
+	})
+
 	t.Run("unknown command", func(t *testing.T) {
 		_, _, err := parseArgs([]string{"wake", "score"})
 		require.Error(t, err)

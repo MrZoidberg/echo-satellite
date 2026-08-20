@@ -1,13 +1,13 @@
 # Milestone 1 — Hardware + local wake vertical slice implementation plan
 
-**Status:** in-progress (paused)
-**Owner or active agent:** unassigned; workflow prerequisite verified by Codex
+**Status:** in-progress
+**Owner or active agent:** Codex (/root)
 **Created:** 2026-08-19
 **Updated:** 2026-08-20
 **Started:** 2026-08-19
 **Completed:** not completed
 
-**Remaining work:** Tasks 2–25. No Milestone 1 implementation code has landed yet.
+**Remaining work:** Tasks 13–25. Tasks 2–12 completed.
 
 ## Objective
 
@@ -264,7 +264,7 @@ checks remain Tasks 12 and 15 and are not claimed by this remediation.
 
 ### Task 2: Notices, licences, and the build and benchmark gates
 
-**Status:** not started
+**Status:** completed 2026-08-20
 
 **Purpose:** Adapted EchoLocal code — including assembly — arrives in this milestone, so the notices must exist before the first ported file. The `!linux` stub path is invisible to linux/amd64 CI unless a cross-compile gate exists, `echoctl` must be cross-built to be usable on the Dot, and both inference paths must ship so Task 17 can measure them.
 
@@ -297,7 +297,7 @@ Expected: exit 0; `file` reports a statically linked ARM aarch64 Linux ELF; `doc
 
 ### Task 3: `internal/device/vec` — NEON kernels with a portable fallback
 
-**Status:** not started
+**Status:** completed 2026-08-20
 
 **Purpose:** The interpreter's hot loops are dot products and scaled accumulations. EchoLocal already has hand-written NEON for exactly these, and Go assembly requires no cgo, so this is measurable speed at no cost to the pure-Go constraint. The `noasm` tag is what lets Task 17 measure both paths on the hardware that matters.
 
@@ -332,7 +332,7 @@ Expected: exit 0 on all four. `TestDot_MatchesReferenceImplementation` and `Test
 
 ### Task 4: Portable audio core and the `testdata/audio` fixture generator
 
-**Status:** not started
+**Status:** completed 2026-08-20
 
 **Purpose:** Every later audio and wake task depends on canonical frames, 24-bit decoding, channel selection, the pre-roll ring, WAV I/O and deterministic fixtures. All of it is pure and must be provably correct with no hardware.
 
@@ -369,7 +369,7 @@ Expected: all tests pass, including `TestDecodeS24_3LE_SignExtendsNegativeSample
 
 ### Task 5: Wake VAD — the adapted level/AGC speech-over-floor scorer
 
-**Status:** not started
+**Status:** completed 2026-08-20
 
 **Purpose:** §25 task 4 and the §16 VAD gate. EchoLocal has no VAD, so this is genuinely new work, and Silero is unavailable under `CGO_ENABLED=0`. The interface lands before the implementation so the scorer is swappable.
 
@@ -401,7 +401,7 @@ Expected: exit 0, with `TestDetector_SilenceScoresBelowSpeechFixture` asserting 
 
 ### Task 6: Resamplers and the playback path
 
-**Status:** not started
+**Status:** completed 2026-08-20
 
 **Purpose:** The speaker accepts only 48 kHz stereo S16_LE while everything internal is 16 kHz mono, and §26 asks where resampling belongs. Answer it in portable code with measurable quality.
 
@@ -433,7 +433,7 @@ Expected: exit 0, with `TestSincResampler_16kTo48kKeepsToneSNRAbove40dB` compari
 
 ### Task 7: Pure-Go ALSA layer with a non-linux stub
 
-**Status:** not started
+**Status:** completed 2026-08-20
 
 **Purpose:** The only genuinely un-unit-testable code in the milestone. Isolate it, make its hardest part pure and tested everywhere, and guarantee the tree still builds and tests on darwin.
 
@@ -473,7 +473,7 @@ Expected: exit 0 on all four. `TestHWParams_EncodesS24_3LE9ChannelMicConfig` and
 
 ### Task 8: `Capturer`, `Fanout`, `FileSource` and the DSP bypass seam
 
-**Status:** not started
+**Status:** completed 2026-08-20
 
 **Purpose:** Realize the §7.2 guarantee that one capture path feeds wake processing and, later, active-turn streaming without reopening or reconfiguring ALSA — and make the whole capture chain runnable from a file so wake development needs no hardware.
 
@@ -506,7 +506,7 @@ Expected: exit 0, with `TestCapturer_ConvertsDeviceFramesToCanonicalMono16k`, `T
 
 ### Task 9: `internal/device/system` — identity, resource sampling, bounded logging
 
-**Status:** not started
+**Status:** completed 2026-08-20
 
 **Purpose:** §7.1's first responsibility is a stable device identity, and §7.1 and §20 together require health reporting and device logs that cannot fill storage. All three are pure file I/O over an injected root, so none of it needs a build tag.
 
@@ -539,7 +539,7 @@ Expected: exit 0, with `TestSerial_PrefersSoc0OverCmdline`, `TestSerial_ParsesAn
 
 ### Task 10: `internal/device/mixer` — the speaker amplifier gate
 
-**Status:** not started
+**Status:** completed 2026-08-20
 
 **Purpose:** `speaker test` is silent unless `Ext_Speaker_Amp_Switch` is on. This is the minimum mixer surface the milestone needs, and it must restore whatever it found.
 
@@ -574,7 +574,7 @@ Expected: exit 0, with `TestNames_SpeakerAmpControlMatchesHardwareName` and `Tes
 
 ### Task 11: `echoctl mic record` and `echoctl speaker test`
 
-**Status:** not started
+**Status:** completed 2026-08-20
 
 **Purpose:** §18 and §25 task 5 require these two diagnostics before any gateway work. They are also the human-observable proof for Task 12.
 
@@ -610,7 +610,7 @@ Expected: `mic record` writes a 9-channel WAV and prints nine level lines whose 
 
 ### Task 12: HARDWARE — microphone and speaker on the Dot; §26 channel and format answers
 
-**Status:** not started
+**Status:** completed 2026-08-20
 
 **Purpose:** §24's `mic -> WAV` and `WAV/PCM -> speaker` legs, and the measurements answering §26's "which microphone path/channel arrangement", "exact speaker format and best resampling location", and the Task 9 serial-source question.
 
@@ -623,11 +623,13 @@ Expected: `mic record` writes a 9-channel WAV and prints nine level lines whose 
 - Create: `docs/device-diagnostics.md`
 - Create: `testdata/audio/dot_mic_9ch_s24le_room.raw` — recorded, at most 2 seconds, exempt from the generator drift guard and documented as such in `fixtures_test.go`
 - Modify: `internal/device/audio/alsa/config.go` and `internal/device/system/serial.go` **only if** measurement contradicts the assumed values
+- Modify: `internal/device/audio/alsa/pcm_linux.go` and `config_test.go` if hardware exposes an invalid capture/playback ioctl sequence
 
 **Concrete changes:**
 
 - `docs/device-diagnostics.md` records the reproducible session: the push commands, each diagnostic invocation, and the measured results — the working serial source, per-channel mic levels with the ordering of the 7 microphone and 2 loopback channels, confirmation of the mic and speaker `hw_params`, the mic channel chosen for wake, and any `ErrDeviceBusy` workaround including which service was stopped and how.
 - Any constant that measurement contradicts is changed here, and the change is called out in the progress log.
+- A hardware-exposed ALSA sequencing defect may be corrected here with a focused regression test; broader audio refactoring remains out of scope.
 
 **Expected outcome:** Real audio in and out of the Dot, with the exact microphone channel arrangement recorded and one real device-shaped capture committed as a fixture.
 
@@ -1233,6 +1235,25 @@ Two device-state caveats: `speaker test` changes `Ext_Speaker_Amp_Switch` and mu
 
 ## Progress log
 
+- 2026-08-20: Task 12 completed. After the physical mute GPIO was cleared, spoken capture raised all seven physical channels to peaks between -34.36 and -28.69 dBFS while loopback channels 7–8 remained digital zero. A separate five-second mic0 capture peaked at -37.00 dBFS, played 240,000 frames at 48 kHz stereo, and a nearby human confirmed the speech was clear and intelligible. Together with the previously confirmed audible tone, PCM formats, loopback identification, serial source, real fixture, ALSA playback-start correction, and review remediation, every Task 12 verification item is complete.
+- 2026-08-20: Task 12 confirmed the red mute ring represented EchoLocal's physical microphone-cut line, not ALSA's `MFP Gpio Mute` control. The GPIO controller base measured 357; MTK pin 87 therefore resolved to GPIO 444. It was initially unexported and high. Exporting it and driving it low connected the microphones, and a nearby human confirmed the red ring went out. The reproducible diagnostic records the measurement and warns production code to resolve the base rather than hardcode GPIO 444; Task 23 retains ownership of mute-button behavior.
+- 2026-08-20: Task 12 human verification confirmed the three-second 1 kHz speaker test was clearly audible. Remaining human checks are speech raising the physical microphone channels and intelligible recorded-speech playback.
+- 2026-08-20: Task 12 hardware execution completed except for human audibility and intelligibility observations, so the task remains in progress. Device `G090LF0964060EHP` confirmed the `/proc/cmdline` serial fallback, seven physical mic channels at indices 0–6, playback-loopback channels at 7–8, 16 kHz/9-channel/S24_3LE capture with 320-frame periods and eight periods, and 48 kHz/stereo/S16_LE playback with 1024-frame periods and four periods. The real two-second room fixture and reproducible session notes were added. Hardware exposed unconditional playback `START` as invalid (`EPIPE` on an empty prepared stream); fixed by explicitly starting capture only and letting playback autostart on write. Fresh-context review found that XRun recovery also needed to restart capture and that the real fixture needed an integrity assertion; both were fixed with direction-specific recovery tests and a pinned SHA-256. The review's remaining acceptance finding is retained: a nearby human must confirm the tone is audible, speech raises channels 0–6, and recorded speech is intelligible on host and device before Task 12 can be completed. No findings were declined or postponed.
+- 2026-08-20: Task 11 completed. Added the `echoctl mic record` and `echoctl speaker test` command groups, shared ALSA/file source and sink wiring, selected/all-channel S24_3LE capture into 16 kHz WAV, per-channel peak/RMS dBFS reporting, generated or WAV-backed playback, selectable sinc/linear/hold resampling into 48 kHz stereo, volume control, and amplifier read/enable/restore with signal cancellation. File-backed CLI verification, focused race tests, package lint, and repository formatting/lint/race tests passed; `cmd/echoctl` reports 72.6% statement coverage. Fresh-context review found three issues: simultaneous playback and amplifier-restore failures hid the restoration error, final close errors could be discarded, and the fixture-level test checked labels without checking amplitudes. All were fixed by joining errors and retrying failed restoration from the deferred safety path, explicitly closing successful outputs/sources, and asserting all nine known fixture peaks. No findings were declined or postponed. Hardware was not required; real ALSA capture, playback, and amplifier behavior remain Task 12.
+- 2026-08-20: Task 10 completed. Added the EchoLocal-attributed, cgo-free Linux ALSA mixer control wrapper for `Ext_Speaker_Amp_Switch`, supporting Boolean and enumerated `On`/`Off` controls, explicit control-not-found errors, and a signature-compatible non-Linux stub. The exported API documents the read-before-write and restore-on-every-exit-path contract used by diagnostics. Focused race tests, 64-bit ALSA UAPI size/ioctl assertions, package lint, Darwin/arm64 and Linux/arm64 portability builds, and repository formatting/lint/race tests passed. Fresh-context review found two issues: the ALSA value union was initially undersized, producing invalid READ/WRITE ioctl numbers, and syscall argument liveness was not explicit. Both were fixed with the correct 1024-byte union, ABI regression assertions, and `runtime.KeepAlive`; no findings were declined or postponed. The Linux ioctl path remains deliberately hardware-untested here and reports 1.2% statement coverage; real amplifier read/set/restore verification remains Task 12.
+- 2026-08-20: Task 9 completed. Added injected-root device serial resolution with the required three-source precedence; stable explicit, serial-derived, persisted, or atomically generated identity; `/proc` CPU/RSS parsing and successive CPU-percentage sampling; canonical device paths; and a fixed-count rotating writer that bounds both new and pre-existing numeric log generations. Focused race tests, package lint, and repository formatting/lint/race tests passed; `internal/device/system` reports 78.4% statement coverage. Fresh-context review found three issues: generated IDs were initially written directly to the final path, valid repeated hyphens were collapsed, and reducing the log file count left stale generations. All three were fixed with fsynced same-directory temporary-file publication, regex-faithful sanitization, and stale numeric-generation cleanup; no findings were declined or postponed. Hardware was not required; the real Dot serial source remains Task 12.
+- 2026-08-20: Task 9 claimed for inline implementation. Scope is confined to `internal/device/system/{paths.go,serial.go,identity.go,resources.go,logrotate.go}`, their one-per-source tests, and this plan document.
+- 2026-08-20: Task 8 completed. Added the consumer-owned `PCMSource` contract and paced raw/WAV `FileSource`; the DSP `Preprocessor` seam with deliberate `Bypass`; canonical capture conversion with selected-channel downmix, immutable frame ownership, contiguous offsets, XRun logging/counting/recovery, and provider frame-count validation; and non-blocking single-source `Fanout` with pre-run subscriptions and per-subscriber drop counters. Focused race tests, package lint, and repository formatting/lint/race tests passed; `internal/device/audio` reports 83.7% statement coverage. Fresh-context review found unchecked source frame counts, insufficiently explicit proof that one source read sequence feeds all subscribers, and an undocumented shared-sample contract. All three were fixed with bounds validation/tests, a read-count assertion across subscribers, and an immutable `Frame.Samples` contract; no findings were declined or postponed. Hardware was not required; the composition root that opens ALSA once lands in Task 22.
+- 2026-08-20: Task 7 completed. Added the cgo-free ALSA PCM provider with validated measured microphone and speaker configurations, fixed `/dev/snd` path construction, exact 64-bit `snd_pcm_hw_params` encoding, Linux/arm64 ioctl-backed capture/playback, busy and xrun error mapping, whole-frame transfers, driver-grant validation, and signature-compatible non-Linux stubs. Promoted `golang.org/x/sys` to a direct dependency. Focused tests, arm64 vet, package lint, Darwin/arm64 and Linux/arm64 portability builds, and repository formatting/lint/race tests passed; the ALSA package reports 39.5% statement coverage because the Linux open/ioctl paths require hardware, as anticipated by the task's coverage exception. Fresh-context review found one medium-severity unsafe-pointer lifetime issue; fixed with `runtime.KeepAlive` after transfer ioctls and reran all checks. No findings were declined or postponed. Hardware was not required; real device capture/open remains Task 12.
+- 2026-08-20: Task 6 completed. Added allocation-free-after-warmup hold, linear, and 32-tap/1024-phase Blackman-windowed sinc resamplers, with the sinc accumulation routed through `vec.Dot`; consumer-owned `PCMSink`, `WAVSink`, and `NullSink`; and device-side `Player` conversion from canonical 16 kHz mono into validated sink-rate, interleaved S16_LE period writes. The 16-to-48 kHz 1 kHz tone measured 80.07 dB SNR both directly and end to end through `Player` into `WAVSink`; the sinc downsampling path reduced above-Nyquist sweep RMS versus sample-and-hold. Focused tests, package lint, repository formatting/lint/race tests, and darwin/arm64 plus linux/arm64 portability builds passed; `internal/device/audio` reports 87.0% statement coverage. Fresh-context review found three issues: cancellation was checked only after resampling, the resampler ratio was not validated against the sink rate, and the required end-to-end Player-to-WAVSink quality test was absent. All three were fixed with pre/post-resample cancellation checks, finite/exact ratio validation, and a 48 kHz stereo WAV integration test; none were declined or postponed. Hardware was not required; speaker audibility remains Task 12.
+- 2026-08-20: Task 6 claimed for inline implementation. Scope is confined to `internal/device/audio/{resample.go,sink.go,playback.go}`, their one-per-source tests, and this plan document.
+- 2026-08-20: Task 5 completed. Added the swappable `wake.VAD` contract, `AlwaysSpeech`, the canonical 16 kHz/1280-sample wake step, and an EchoLocal-adapted clock-free level detector with fast-falling/slow-rising room-floor tracking, a 12 dB speech margin, bounded AGC gain, and a 0..1 speech score. The `vadlevel.Scorer` validates fixed-size wake steps and supports deterministic reset/close behavior. Focused tests, package lint, repository formatting/lint/race tests, and darwin/arm64 plus linux/arm64 portability builds passed; both new wake packages report 100% statement coverage. Fresh-context review found one medium-severity acceptance gap: separability and reset tests used ideal generated frames instead of committed fixtures. Fixed by reading the checked-in silence and 1 kHz tone WAVs and asserting their score trace and margin; no findings were declined or postponed. Hardware was not required; real-room behavior remains Task 23.
+- 2026-08-20: Task 4 completed. Added the portable `internal/device/audio` core with validated PCM formats, canonical 16 kHz mono frames, S24_3LE/S16LE decoding, physical-channel selection, mono downmix, a bounded overwrite-oldest pre-roll ring, validated 16-bit PCM WAV reading/writing, and deterministic two-second WAV/raw fixtures. Focused verification, fixture regeneration with before/after SHA-256 comparison, package lint, portability builds, and repository-wide formatting/lint/race tests all passed; the new package reports 86.4% statement coverage. Fresh-context review found three issues: the raw device fixture used 48 kHz instead of the verified 16 kHz format, malformed WAV chunk sizes could cause excessive allocation, and PCM byte-rate/block-alignment/whole-frame consistency was not checked. All three findings were fixed and covered by tests; none were declined or postponed. Hardware was not required for this task.
+- 2026-08-20: Execution resumed by Codex (/root) after the physical-device workflow prerequisite completed. Task 2 claimed for implementation.
+- 2026-08-20: Task 2 completed. Added third-party notices, EchoLocal MIT license text, wake-model asset documentation with verified upstream URLs and SHA-256 digests, the device `echoctl` build, `noasm` device build, portability and benchmark Make targets, CI portability/device artifact steps, and model-binary ignore rules. Verification passed: `make check-portability build-device-ctl build-device-noasm`; `file .bin/linux_arm64/echoctl` reports a statically linked ARM aarch64 Linux ELF. `make fmt-check`, `make lint`, and `make test` also passed. Local `go build` emitted non-fatal sandbox warnings about a read-only module stat cache, but each command exited 0. Self-review found one low-severity mutable provenance issue for `okay_nabu`; fixed by pinning the rhasspy/pyopen-wakeword raw URL to commit `6bc5c5f5c9c71e46a723b6c9277b1d50f2ba13fd`.
+- 2026-08-20: Task 3 claimed for inline implementation. Scope is confined to `internal/device/vec` and this plan document.
+- 2026-08-20: Task 3 completed. Added `internal/device/vec` with EchoLocal-adapted arm64 NEON `Dot` and `AXPY`, portable `noasm` fallbacks, and tests covering empty slices, short-slice panics, SIMD-boundary lengths, exact inputs, bounds preservation, and benchmarks. Verification passed: `go test ./internal/device/vec/... -v`; `GOOS=linux GOARCH=arm64 go build ./internal/device/vec/...`; `GOOS=linux GOARCH=arm64 go build -tags noasm ./internal/device/vec/...`; `go test ./internal/device/vec -bench . -benchmem`; `make fmt-check`; `make lint`; `make test`; `make check-portability build-device build-device-noasm build-device-ctl`. The new package reports 100% statement coverage on the portable path; arm64 assembly is build-checked here and measured later on hardware in Task 17.
+- 2026-08-20: Self-review found two low-severity documentation drift issues after Task 3: the `okay_nabu` install example still used the old mutable-source model ID, and the third-party notice omitted the adapted Go wrapper files. Both were fixed. The review also asked whether CI should upload `echod-noasm`; declined for Task 2 because the plan requires CI to build both variants but only requires uploading `echoctl` alongside the existing `echod` artifact.
 - 2026-08-20: Task 1 workflow remediation completed on physical device
   `G090LF0964060EHP`. Windows ADB 37.0.1, invoked both directly and from WSL2,
   reported `biscuit`, `arm64-v8a`, Magisk UID 0 and permissive SELinux. The new
@@ -1251,6 +1272,15 @@ Two device-state caveats: `speaker test` changes `Ext_Speaker_Amp_Switch` and mu
 ## Completion evidence
 
 To be filled in during execution: the exact commands from each task's Verification block, their outcomes, and the date, with hardware and non-hardware checks recorded separately per `docs/plans/README.md`.
+
+- 2026-08-20, Task 12: `make device-check ADB=/mnt/c/tools/android-platform-tools/adb.exe DEVICE_SERIAL=G090LF0964060EHP`; `make build-device-ctl build-device`; device `mic record` for all channels and mic0; concurrent all-channel capture plus `speaker test`; live capture/playback `hw_params`; recorded-input playback; focused `go test -race ./internal/device/audio/... -count=1`; package lint; `make fmt-check`; `make lint`; and `make test` passed. Hardware confirmed serial fallback and both PCM formats/channel counts/period and buffer sizes; concurrent playback raised channels 7–8 from digital zero to -12.07 dBFS peak while 0–6 remained physical-mic room channels. EchoLocal's MTK pin 87 physical mute line resolved to GPIO 444, read high, and was driven low; the red ring went out. Spoken capture then raised channels 0–6 to peaks from -34.36 through -28.69 dBFS while 7–8 remained digital zero. Playback completed 144,000 generated-tone frames and 240,000 recorded-input frames after the playback-start fix; a nearby human confirmed both the tone and recorded speech were clear and audible. Repository-wide coverage was 72.0%; `internal/device/audio` was 83.7% and `internal/device/audio/alsa` was 41.6%. Task 12 verification is complete.
+- 2026-08-20, Task 11: `make build`; `.bin/echoctl mic record --from-file testdata/audio/dot_mic_9ch_s24le.raw --channels all --seconds 2 --out /tmp/mic9.wav --print-levels`; `.bin/echoctl speaker test --in testdata/audio/tone_1k_16k_mono.wav --to-file /tmp/spk.wav`; `file /tmp/mic9.wav /tmp/spk.wav`; `go test ./cmd/echoctl/... -race -count=1`; `golangci-lint run ./cmd/echoctl/...`; `make fmt-check`; `make lint`; and `make test` all passed. The capture produced a 32,000-frame, 16 kHz, nine-channel 16-bit PCM WAV and reported the expected nine fixture peaks from -24.29 through -10.31 dBFS; playback produced a 48,000-frame, 48 kHz stereo 16-bit PCM WAV. Race-enabled `cmd/echoctl` statement coverage was 72.6%. Build commands emitted non-fatal read-only Go module stat-cache warnings and exited 0. No hardware verification ran; Task 12 owns the real Dot checks.
+- 2026-08-20, Task 10: `make check-portability`; `go test -race ./internal/device/mixer/... -v`; `golangci-lint run ./internal/device/mixer/...`; Darwin/arm64 non-Linux test-binary cross-compilation; `make fmt-check`; `make lint`; and `make test` all passed. ABI tests assert the 64-bit Linux UAPI structure sizes and exact INFO/READ/WRITE ioctl request values. Race-enabled package coverage was 1.2%, matching the task's explicit hardware-ioctl coverage exception. No hardware verification ran; amplifier read/set/restore on the Dot remains Task 12 as planned. Cross-builds emitted non-fatal read-only Go module stat-cache warnings and exited 0.
+- 2026-08-20, Task 9: `go test ./internal/device/system/... -race -count=1 -v` passed, including serial precedence/absence/error behavior, explicit/serial/persisted/generated identity and blank-file recovery, regex-faithful sanitization, `/proc` CPU/RSS parsing, CPU percentage sampling, oversized log writes, pre-existing file bounds, and stale-generation cleanup; `golangci-lint run ./internal/device/system/...` and `make lint` reported 0 issues; `make fmt-check` and `make test` passed. Race-enabled package coverage was 78.4%. No hardware verification applies; identifying the actual Dot serial source is deferred to Task 12 as planned.
+- 2026-08-20, Task 8: `go test ./internal/device/audio -run 'TestCapturer|TestFanout|TestFileSource|TestBypass' -v -race` passed, including S24_3LE conversion, channel selection/downmix, contiguous offsets, XRun recovery, invalid provider frame-count rejection, raw/WAV replay, every-subscriber delivery from one source read sequence, late-subscription rejection, and non-blocking slow-subscriber drops; `golangci-lint run ./internal/device/audio/...` and `make lint` reported 0 issues; `make fmt-check` and `make test` passed. Race-enabled `internal/device/audio` statement coverage was 83.7%. No hardware verification applies.
+- 2026-08-20, Task 4: `go test ./internal/device/audio/... -run 'TestDecode|TestSelect|TestRing|TestWAV|TestFixtures' -v` passed; `go test ./internal/device/audio -run TestFixtures_Regenerate -update-fixtures` produced byte-identical fixture SHA-256 hashes; `golangci-lint run ./internal/device/audio/...` reported 0 issues; `make check-portability`, `make fmt-check`, `make lint`, and `make test` passed. Race-enabled package coverage was 86.4%. No hardware verification applies.
+- 2026-08-20, Task 5: `go test ./internal/device/wake/vadlevel/... ./internal/device/wake -run 'TestDetector|TestScorer|TestAlwaysSpeech' -v` passed, including committed-fixture separability and reset-trace coverage; `golangci-lint run ./internal/device/wake/...` and `make lint` reported 0 issues; `make fmt-check`, `make test`, and `make check-portability` passed. Race-enabled statement coverage was 100.0% for `internal/device/wake` and `internal/device/wake/vadlevel`. No hardware verification applies; real-room tuning is deferred to Task 23 as planned.
+- 2026-08-20, Task 6: `go test ./internal/device/audio -run 'TestSinc|TestLinear|TestHold|TestPlayer' -v` passed, including 80.07 dB direct and Player-to-WAVSink tone SNR, stereo equality, exact 3x length, period chunking, cancellation/error propagation, sink-rate ratio validation, and sweep anti-aliasing coverage; `golangci-lint run ./internal/device/audio/...` and `make lint` reported 0 issues; `make fmt-check`, `make test`, and `make check-portability` passed. Race-enabled `internal/device/audio` statement coverage was 87.0%. No hardware verification applies; audible device playback is deferred to Task 12 as planned.
 
 ### Limitations and follow-up work (expected at completion)
 

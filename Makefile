@@ -26,6 +26,19 @@ build:
 build-device:
 	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o .bin/linux_arm64/echod ./cmd/echod
 
+build-device-ctl:
+	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o .bin/linux_arm64/echoctl ./cmd/echoctl
+
+build-device-noasm:
+	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -tags noasm -ldflags "$(LDFLAGS)" -o .bin/linux_arm64/echod-noasm ./cmd/echod
+
+check-portability:
+	GOOS=darwin GOARCH=arm64 go build ./...
+	GOOS=linux GOARCH=arm64 go build ./...
+
+bench:
+	go test -bench . -benchmem ./...
+
 device-check:
 	@state=$$($(ADB_DEVICE) get-state | tr -d '\r'); \
 		[ "$$state" = device ] || { echo "ADB state is '$$state', want 'device'"; exit 1; }; \
@@ -85,4 +98,4 @@ version:
 	@echo "branch: $(BRANCH), hash: $(HASH), timestamp: $(TIMESTAMP)"
 	@echo "revision: $(REV)"
 
-.PHONY: all build build-device device-check push-device run-device device-stopped test race lint fmt fmt-check version
+.PHONY: all build build-device build-device-ctl build-device-noasm check-portability bench device-check push-device run-device device-stopped test race lint fmt fmt-check version
