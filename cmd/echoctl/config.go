@@ -16,6 +16,7 @@ type opts struct {
 	Speaker speakerCommand `command:"speaker" description:"diagnose speaker playback"`
 	LED     ledCommand     `command:"led" description:"diagnose the LED ring"`
 	Buttons buttonsCommand `command:"buttons" description:"diagnose device buttons"`
+	Bench   benchCommand   `command:"bench" description:"benchmark on-device mel, embedding, classifier and VAD inference"`
 }
 
 type versionCommand struct{}
@@ -75,6 +76,17 @@ type buttonsTestCommand struct {
 	SysClassDir string  `long:"sys-class-dir" default:"/sys/class/input" description:"input sysfs class directory"`
 	FromFile    string  `long:"from-file" description:"replay recorded input events instead of live devices"`
 	Seconds     float64 `long:"seconds" default:"30" description:"seconds to watch for events"`
+}
+
+// benchCommand runs the mel, embedding and classifier models plus the VAD over N synthetic or
+// fixture-replayed 80 ms steps and reports per-stage timing, CPU and RSS. This is Task 17's
+// on-device inference budget measurement, done ahead of building the wake pipeline on it.
+type benchCommand struct {
+	Model    string `long:"model" required:"true" description:"wake classifier model name (without .tflite) under --model-dir"`
+	ModelDir string `long:"model-dir" default:".assets/wake-models" description:"directory containing melspectrogram.tflite, embedding_model.tflite and the classifier model"`
+	Steps    int    `long:"steps" default:"500" description:"number of 80ms wake steps to benchmark"`
+	FromFile string `long:"from-file" description:"16 kHz mono s16 PCM (raw or WAV) fixture to replay instead of a synthetic waveform"`
+	JSON     bool   `long:"json" description:"print a machine-readable JSON report instead of text"`
 }
 
 // verifyCommand checks a release bundle exactly the way a gateway or a device

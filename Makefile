@@ -26,8 +26,10 @@ build:
 build-device:
 	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o .bin/linux_arm64/echod ./cmd/echod
 
+TAGS ?=
+
 build-device-ctl:
-	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o .bin/linux_arm64/echoctl ./cmd/echoctl
+	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build $(if $(TAGS),-tags $(TAGS),) -ldflags "$(LDFLAGS)" -o .bin/linux_arm64/echoctl ./cmd/echoctl
 
 build-device-noasm:
 	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -tags noasm -ldflags "$(LDFLAGS)" -o .bin/linux_arm64/echod-noasm ./cmd/echod

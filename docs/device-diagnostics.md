@@ -5,6 +5,137 @@ Dot Gen 2 used during Milestone 1. Commands that access audio devices run
 through Magisk because the normal ADB shell is UID 2000 and the PCM nodes are
 owned by `system:audio`.
 
+## 2026-08-21 wake inference hardware benchmark (Task 17)
+
+Device: same rooted `G090LF0964060EHP` (`csm_biscuit`/`biscuit`, `arm64-v8a`,
+Magisk root) used throughout Milestone 1.
+
+Vetted assets per `docs/wake-models.md` were downloaded to the host and their
+SHA-256 digests confirmed against the table before pushing:
+
+```text
+c0aea21eb84a4ce90a08c870da41b7a7173b45269e6a3207c71d67c40f3a59d8  embedding_model.tflite
+96fa0adccb6e8cf95cb14465409a1a2898ee4a96a85bb9ed3c7eb0e68bf163e8  melspectrogram.tflite
+2982cecde4ee81cc7a2573d2602a7d54f0669425c94a7b64af77e0ff92b03a18  okay_nabu.tflite
+```
+
+Both `echoctl` variants were built and pushed, then each ran 500 synthetic
+steps of `bench --model okay_nabu --model-dir wake-models --json`:
+
+```sh
+make build-device-ctl && adb -s G090LF0964060EHP push .bin/linux_arm64/echoctl /data/local/tmp/echoctl-neon
+make build-device-ctl TAGS=noasm && adb -s G090LF0964060EHP push .bin/linux_arm64/echoctl /data/local/tmp/echoctl-noasm
+adb -s G090LF0964060EHP shell './echoctl-neon  bench --model okay_nabu --model-dir wake-models --steps 500 --json'
+adb -s G090LF0964060EHP shell './echoctl-noasm bench --model okay_nabu --model-dir wake-models --steps 500 --json'
+```
+
+Measured p50/p95/max per stage, in milliseconds, over 500 steps:
+
+| Stage | NEON p50 | NEON p95 | NEON max | `noasm` p50 | `noasm` p95 | `noasm` max |
+|---|---:|---:|---:|---:|---:|---:|
+| mel | 6.882 | 11.681 | 12.127 | 17.778 | 25.965 | 26.729 |
+| embedding | 337.541 | 532.969 | 543.621 | 499.159 | 729.087 | 773.668 |
+| classifier | 0.234 | 0.347 | 0.532 | 0.467 | 0.701 | 0.779 |
+| VAD (level detector) | 0.023 | 0.039 | 0.110 | 0.026 | 0.039 | 0.098 |
+| **total** | **345.357** | **543.946** | **555.259** | **514.868** | **753.812** | **799.863** |
+
+CPU and RSS during the run: NEON 100.3% CPU, 17,068,032 bytes RSS; `noasm`
+100.3% CPU, 16,113,664 bytes RSS (`system.Sampler`/`system.ReadUsage` against
+`/proc/self`, single core saturated throughout).
+
+**Result: FAIL against the ≤ 20 ms combined wake + VAD budget**, by roughly
+17× (NEON p95) to 27× (`noasm` p95). NEON is faster everywhere it applies
+(mel is ~2.6× faster with NEON; classifier and VAD, both light `FULLY_CONNECTED`/
+scalar work, are ~2× faster), but the embedding stage — the `CONV2D`-heavy
+openWakeWord backbone — dominates total time and only sees a ~1.5× win from
+NEON, because `internal/device/vec`'s NEON kernels cover only `Dot` and `AXPY`
+(used by `FULLY_CONNECTED`), not the convolution kernel. Mel and classifier
+individually are within budget; embedding alone is not, so this is a NEON
+convolution-kernel gap rather than a general "pure Go is too slow" result.
+
+**Escalation decision (recorded before further wake-pipeline code is
+written, per the plan's stated ladder):** the first escalation step —
+**extend `internal/device/vec`'s NEON kernels to accelerate `CONV2D`** in
+`internal/device/wake/tflite`'s embedding-model execution path — is the
+recorded next action. It is out of scope for Task 17 itself and is tracked as
+a follow-up in the plan's Limitations section; Task 18 (the wake pipeline
+built on this interpreter) inherits this as a blocking prerequisite for
+meeting the per-step budget, though it is not blocked from proceeding with
+correctness work using the interpreter as-is. If a `CONV2D` NEON kernel does
+not close enough of the gap, the next ladder rungs are int8 quantization,
+then cgo with `libtensorflowlite`/XNNPACK (breaks the pure-Go constraint),
+then a Python `tflite_runtime` sidecar (breaks pure Go and the single-binary
+A/B model).
+
+Raw JSON reports: `bench-neon.json`, `bench-noasm.json` (not committed;
+reproduce with the commands above).
+
+**Correction (found during post-Task-17 review, before this task's results
+were committed): the embedding stage above was measured with the wrong
+evaluation strategy.** `echoctl bench` ran the embedding model through a
+plain `Interpreter.Invoke()` over the full 76-row window on every step. That
+is not what Task 18's `oww.Engine` is specified to do (§16 of the plan, "the
+embedding model ... slides 8 mel frames per step") and it is not what
+EchoLocal's own reference `oww.Engine` does: EchoLocal feeds its embedding
+model through an incremental `tflite.Stream` that recomputes only the rows
+the 8 new mel frames touch, not the whole window — this repository's
+`internal/device/wake/tflite/stream.go` already implements the identical
+mechanism (ported from EchoLocal) and is proven bit-identical to the windowed
+model in `TestStreamMatchesWindowedModel`, but Task 17's `bench.go` did not
+use it for the embedding stage.
+
+This matters because the two are not close: on this host (amd64, not the
+target hardware, so only the *ratio* is informative), the windowed
+`Invoke()` cost was measured at 22.38 ms/step against 2.91 ms/step through
+`tflite.Stream` for the same model and the same step shape — roughly a
+**7.7× reduction**. Applying that ratio to the NEON on-device p50 above
+(337.541 ms) as a rough order-of-magnitude estimate gives roughly **44 ms**,
+which is still over the remaining budget (mel + classifier + VAD already
+consume ~7.2 ms of the 20 ms combined target, leaving ~12.8 ms for
+embedding) but by roughly 2–3×, not 17–27×. This does not replace an
+on-device measurement — `bench.go` has been fixed to evaluate the embedding
+stage through `tflite.Stream` (matching Task 18's planned architecture). The
+corrected on-device re-run below is the measurement used to make the final
+decision. The recorded
+"extend NEON to CONV2D" escalation step may still be needed to close the
+remainder, but a brand-new NEON kernel should not be written against a
+benchmark that was measuring a different, more expensive computation than
+the pipeline it was meant to gate.
+
+### Corrected on-device re-run
+
+The corrected `tflite.Stream` benchmark was built on 2026-08-21 and run for
+500 steps on the same Dot and model assets:
+
+```sh
+make build-device-ctl
+adb -s G090LF0964060EHP push .bin/linux_arm64/echoctl /data/local/tmp/echoctl-neon
+adb -s G090LF0964060EHP shell '/data/local/tmp/echoctl-neon bench --model okay_nabu --model-dir /data/local/tmp/wake-models --steps 500 --json'
+
+make build-device-ctl TAGS=noasm
+adb -s G090LF0964060EHP push .bin/linux_arm64/echoctl /data/local/tmp/echoctl-noasm
+adb -s G090LF0964060EHP shell '/data/local/tmp/echoctl-noasm bench --model okay_nabu --model-dir /data/local/tmp/wake-models --steps 500 --json'
+```
+
+Measured p50/p95/max per stage, in milliseconds:
+
+| Stage | NEON p50 | NEON p95 | NEON max | `noasm` p50 | `noasm` p95 | `noasm` max |
+|---|---:|---:|---:|---:|---:|---:|
+| mel | 5.686 | 11.658 | 12.128 | 12.103 | 25.876 | 26.777 |
+| embedding | 34.332 | 68.313 | 70.391 | 47.653 | 99.321 | 100.806 |
+| classifier | 0.200 | 0.336 | 0.748 | 0.347 | 0.670 | 0.830 |
+| VAD (level detector) | 0.020 | 0.039 | 1.351 | 0.020 | 0.037 | 0.264 |
+| **total** | **42.616** | **80.361** | **82.516** | **65.342** | **125.880** | **126.841** |
+
+CPU and RSS during the run: NEON 100.6% CPU and 14,553,088 bytes RSS;
+`noasm` 100.6% CPU and 16,019,456 bytes RSS. The corrected streaming path is
+about 9.8x faster at NEON embedding p50 than the prior full-window result, but
+it still fails the <= 20 ms combined wake + VAD budget (2.1x at p50 and 4.0x
+at p95). NEON is faster than `noasm` for every material stage, but its p95
+also exceeds the 80 ms step interval. The escalation decision is therefore
+confirmed: optimize the streaming embedding path's small-vector hot loops
+before considering the later int8, cgo/XNNPACK, or Python-sidecar rungs.
+
 ## 2026-08-20 microphone and speaker session
 
 Device:
