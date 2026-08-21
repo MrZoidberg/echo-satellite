@@ -239,6 +239,17 @@ func syntheticFixtures() map[string][]byte {
 			inputs:  []int{0}, outputs: []int{3}, op: syntheticOp{OpConv2D, []int{0, 1, 2}, []int{3}, convOptions},
 			buffers: [][]byte{floats(2), floats(0.5)},
 		}),
+		"oww_embedding.tflite": buildSynthetic(syntheticModel{
+			tensors: []syntheticTensor{
+				{[]int{1, 76, 32, 1}, Float32, 0},
+				{[]int{96, 2, 32, 1}, Float32, 1},
+				{[]int{1, 75, 1, 96}, Float32, 0},
+			},
+			inputs:  []int{0},
+			outputs: []int{2},
+			op:      syntheticOp{OpConv2D, []int{0, 1}, []int{2}, convOptions},
+			buffers: [][]byte{owwEmbeddingWeights()},
+		}),
 		"add.tflite": buildSynthetic(syntheticModel{
 			tensors: []syntheticTensor{{[]int{2}, Float32, 0}, {[]int{2}, Float32, 1}, {[]int{2}, Float32, 0}}, inputs: []int{0}, outputs: []int{2},
 			op: syntheticOp{OpAdd, []int{0, 1}, []int{2}, activationOptions}, buffers: [][]byte{floats(10, 20)},
@@ -278,6 +289,12 @@ func syntheticFixtures() map[string][]byte {
 			op: syntheticOp{OpBatchMatMul, []int{0, 1}, []int{2}, activationOptions}, buffers: [][]byte{floats(2, 3)},
 		}),
 	}
+}
+
+func owwEmbeddingWeights() []byte {
+	weights := make([]float32, 96*2*32)
+	weights[0] = 1
+	return floats(weights...)
 }
 
 func binaryFixture(op Op, constant []byte) []byte {
