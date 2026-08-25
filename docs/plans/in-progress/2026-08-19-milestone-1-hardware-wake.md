@@ -3,11 +3,11 @@
 **Status:** in-progress
 **Owner or active agent:** Codex (/root)
 **Created:** 2026-08-19
-**Updated:** 2026-08-21
+**Updated:** 2026-08-25
 **Started:** 2026-08-19
 **Completed:** not completed
 
-**Remaining work:** Tasks 15–25. Tasks 2–14 completed.
+**Remaining work:** Tasks 20–25. Tasks 2–19 completed.
 
 ## Objective
 
@@ -906,7 +906,7 @@ Expected: exit 0, with `TestFeatures_ProducesEightMelFramesPerStep`, `TestFeatur
 
 ### Task 19: Model store, sidecar metadata, configuration, and `echoctl wake list|install`
 
-**Status:** not started
+**Status:** completed 2026-08-25
 
 **Purpose:** §16's model-distribution and model-loading requirements — stable model IDs, sidecar metadata, engine detection, configurable threshold, backend-independent configuration — plus the trust rule that models are never fetched from arbitrary unauthenticated locations, and the opcode check that keeps an unsupported model off the device.
 
@@ -1252,6 +1252,8 @@ Two device-state caveats: `speaker test` changes `Ext_Speaker_Amp_Switch` and mu
 
 ## Progress log
 
+- 2026-08-25: Task 19 completed. Added strict schema-v1 wake sidecars, stable metadata validation, backend-independent wake/VAD configuration and protocol projection, a locked model store with digest-first local-only validation, TFLite shape-based kind detection, unsupported-op rejection, and `echoctl wake install|list`. The implementation deliberately strengthened the plan's publication detail: classifier and sidecar generations are immutable and full-digest-named, while atomic `index.json` replacement is the commit point, so overwrite cannot destroy the prior indexed generation on a crash or pre-commit failure. Two synthetic classifier fixtures cover supported and unsupported graphs without third-party weights. Fresh review found reserved-name collisions, non-transactional overwrite, a concurrent no-overwrite race, non-finite threshold acceptance, incomplete index path containment, and unsafe reuse of pre-existing generation files; all were fixed and the final re-review found no remaining issues. No findings were declined or postponed. Hardware verification does not apply; Tasks 23 and 24 own on-device installation and switching.
+
 - 2026-08-20: Task 16 claimed for inline implementation. Scope is confined to `internal/device/wake/tflite`, generated synthetic TFLite fixtures, committed reference vectors and attribution, third-party notices, and this plan document. The interpreter is adapted from EchoLocal commit `be6b0b00d7d5d765d859b3cbe0e19e127a0c2031`.
 - 2026-08-20: Task 16 completed. Added the attributed pure-Go FlatBuffers/TFLite interpreter, row-safe streaming evaluator, `vec.Dot`/`vec.AXPY` hot paths, bad-model/shape/unsupported-op sentinels, custom-op-preserving opcode inventory, 18 generated analytical model fixtures covering every operator family used by the pinned mel and embedding graphs, and TensorFlow Lite reference-vector proofs. The pinned models matched at maximum absolute deviations `0.000551224` (mel) and `0.0000257492` (embedding), and streaming matched windowed inference. Fresh review found malformed-model panic paths, over-broad stream admission, incomplete model-free operator coverage, and custom-op identity loss; all were fixed with structural/constant validation, conservative row-local checks, expanded fixtures, and exact names. Re-review found constant-size, dynamic stream-parameter/final-output, and one-input `RESHAPE` gaps; all were fixed and the final re-review found no remaining issues. No findings were declined or postponed.
 
@@ -1302,6 +1304,8 @@ Two device-state caveats: `speaker test` changes `Ext_Speaker_Amp_Switch` and mu
 ## Completion evidence
 
 To be filled in during execution: the exact commands from each task's Verification block, their outcomes, and the date, with hardware and non-hardware checks recorded separately per `docs/plans/README.md`.
+
+- 2026-08-25, Task 19: `go test ./internal/device/wake -run 'TestParseSidecar|TestStore|TestConfig' -v`; `go test -race ./internal/device/wake ./cmd/echoctl`; `golangci-lint run ./internal/device/wake/... ./cmd/echoctl/...`; `make fmt-check`; `make lint`; and `make test` passed. Race-enabled statement coverage was 76.3% for `internal/device/wake` and 77.1% for `cmd/echoctl`. A built `.bin/echoctl` installed the vetted local `.assets/wake-models/okay_nabu.tflite` into `/tmp/echo-task19-wm3`, and `wake list` reported `okay_nabu`, `openwakeword`, phrase `okay nabu`, language `en`, 206380 bytes, and digest prefix `2982cecde4ee`. The deliberately all-zero digest exited non-zero with `wake: digest mismatch` and left `/tmp/echo-task19-wm2` absent. Fresh review's six storage/configuration findings were all fixed; two remediation reviews concluded with no remaining findings. No findings were declined or postponed. No hardware verification applies.
 
 - 2026-08-20, Task 16: `go test ./internal/device/wake/tflite/... -v`; `ECHO_WAKE_MODEL_DIR=/tmp/echo-task16-models go test -race ./internal/device/wake/tflite/... -v`; `go test -tags noasm ./internal/device/wake/tflite/...`; fixture regeneration plus before/after SHA-256 comparison; `golangci-lint run ./internal/device/wake/...`; `make check-portability build-device build-device-noasm`; `make fmt-check`; `make lint`; and `make test` passed. The three downloaded temporary models matched the documented SHA-256 digests, all required only supported opcodes, mel/embedding maximum deviations were `0.000551224`/`0.0000257492`, and stream/windowed inference agreed. CI-style race coverage for `internal/device/wake/tflite` was 77.2%. Synthetic regeneration was byte-identical. Fresh review and two remediation re-reviews resolved every finding; none were declined or postponed. No hardware verification applies; arm64 numeric agreement and timing remain Tasks 17 and 23.
 - 2026-08-21, Task 18: `go test ./internal/device/wake/oww -v -cover` passed (60.5% coverage); `ECHO_WAKE_MODEL_DIR=$PWD/.assets/wake-models go test ./internal/device/wake/oww -v` passed with real mel, embedding and `okay_nabu` classifier assets; `go test ./internal/device/wake/tflite -run TestFixtures_Regenerate -update-fixtures` passed with no post-generation diff; and `golangci-lint run ./internal/device/wake/...` passed with 0 issues. No hardware verification applies. Repository-wide `make fmt-check`, `make lint` and `make test` were also attempted but remain blocked by unrelated Windows/baseline failures: `fmt-check` invokes an unavailable `out` command, lint reports six existing findings outside Task 18, and tests fail in existing `/proc` resource, directory-sync and CLI paths.

@@ -16,6 +16,7 @@ type opts struct {
 	Speaker speakerCommand `command:"speaker" description:"diagnose speaker playback"`
 	LED     ledCommand     `command:"led" description:"diagnose the LED ring"`
 	Buttons buttonsCommand `command:"buttons" description:"diagnose device buttons"`
+	Wake    wakeCommand    `command:"wake" description:"manage local wake models"`
 	Bench   benchCommand   `command:"bench" description:"benchmark on-device mel, embedding, classifier and VAD inference"`
 }
 
@@ -76,6 +77,26 @@ type buttonsTestCommand struct {
 	SysClassDir string  `long:"sys-class-dir" default:"/sys/class/input" description:"input sysfs class directory"`
 	FromFile    string  `long:"from-file" description:"replay recorded input events instead of live devices"`
 	Seconds     float64 `long:"seconds" default:"30" description:"seconds to watch for events"`
+}
+
+type wakeCommand struct {
+	List    wakeListCommand    `command:"list" description:"list installed wake models"`
+	Install wakeInstallCommand `command:"install" description:"verify and install a local wake model"`
+}
+
+type wakeListCommand struct {
+	ModelDir string `long:"model-dir" default:"/data/local/etc/echo-satellite/wake-models" description:"wake model store directory"`
+}
+
+type wakeInstallCommand struct {
+	Args struct {
+		ID string `positional-arg-name:"id" required:"true"`
+	} `positional-args:"true"`
+	From      string `long:"from" required:"true" description:"local TFLite classifier path"`
+	Metadata  string `long:"metadata" description:"sidecar JSON path; defaults beside --from"`
+	SHA256    string `long:"sha256" description:"expected SHA-256; defaults to the sidecar digest"`
+	ModelDir  string `long:"model-dir" default:"/data/local/etc/echo-satellite/wake-models" description:"wake model store directory"`
+	Overwrite bool   `long:"overwrite" description:"replace an installed model with the same id"`
 }
 
 // benchCommand runs the mel, embedding and classifier models plus the VAD over N synthetic or

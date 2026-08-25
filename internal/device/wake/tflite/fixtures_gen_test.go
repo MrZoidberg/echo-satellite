@@ -220,6 +220,15 @@ func leakyOptions(w *flatWriter) uint32 {
 
 func syntheticFixtures() map[string][]byte {
 	return map[string][]byte{
+		"oww_classifier.tflite": buildSynthetic(syntheticModel{
+			tensors: []syntheticTensor{{[]int{1, 1, 96}, Float32, 0}, {[]int{1, 96}, Float32, 1}, {[]int{1}, Float32, 2}, {[]int{1, 1}, Float32, 0}},
+			inputs:  []int{0}, outputs: []int{3}, op: syntheticOp{OpFullyConnected, []int{0, 1, 2}, []int{3}, activationOptions},
+			buffers: [][]byte{floats(make([]float32, 96)...), floats(0)},
+		}),
+		"oww_unsupported.tflite": buildSynthetic(syntheticModel{
+			tensors: []syntheticTensor{{[]int{1, 1, 96}, Float32, 0}, {[]int{1, 1, 96}, Float32, 0}},
+			inputs:  []int{0}, outputs: []int{1}, op: syntheticOp{Op(999), []int{0}, []int{1}, nil},
+		}),
 		"fully_connected.tflite": buildSynthetic(syntheticModel{
 			tensors: []syntheticTensor{{[]int{1, 2}, Float32, 0}, {[]int{1, 2}, Float32, 1}, {[]int{1}, Float32, 2}, {[]int{1, 1}, Float32, 0}},
 			inputs:  []int{0}, outputs: []int{3}, op: syntheticOp{OpFullyConnected, []int{0, 1, 2}, []int{3}, activationOptions},

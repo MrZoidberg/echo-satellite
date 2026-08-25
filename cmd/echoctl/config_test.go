@@ -80,6 +80,28 @@ func TestParseArgs_Commands(t *testing.T) {
 		assert.InDelta(t, 2.0, o.Buttons.Test.Seconds, 0.001)
 	})
 
+	t.Run("wake install", func(t *testing.T) {
+		o, command, err := parseArgs([]string{"wake", "install", "okay_nabu", "--from=model.tflite", "--metadata=model.json", "--sha256=abcd", "--model-dir=/tmp/models", "--overwrite"})
+		require.NoError(t, err)
+		assert.Equal(t, "wake install", command)
+		assert.Equal(t, "okay_nabu", o.Wake.Install.Args.ID)
+		assert.Equal(t, "model.tflite", o.Wake.Install.From)
+		assert.Equal(t, "/tmp/models", o.Wake.Install.ModelDir)
+		assert.True(t, o.Wake.Install.Overwrite)
+	})
+
+	t.Run("wake list", func(t *testing.T) {
+		o, command, err := parseArgs([]string{"wake", "list", "--model-dir=/tmp/models"})
+		require.NoError(t, err)
+		assert.Equal(t, "wake list", command)
+		assert.Equal(t, "/tmp/models", o.Wake.List.ModelDir)
+	})
+
+	t.Run("wake install requires id and source", func(t *testing.T) {
+		_, _, err := parseArgs([]string{"wake", "install"})
+		require.Error(t, err)
+	})
+
 	t.Run("mic record requires out", func(t *testing.T) {
 		_, _, err := parseArgs([]string{"mic", "record"})
 		require.Error(t, err)

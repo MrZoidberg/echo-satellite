@@ -47,6 +47,10 @@ func dispatch(w io.Writer, command string, o opts) error {
 		return ledTest(w, o.LED.Test)
 	case "buttons test":
 		return buttonsTest(w, o.Buttons.Test)
+	case "wake list":
+		return wakeList(w, o.Wake.List)
+	case "wake install":
+		return wakeInstall(w, o.Wake.Install)
 	case "bench":
 		return wakeBench(w, o.Bench)
 	default:
