@@ -5,6 +5,199 @@ Dot Gen 2 used during Milestone 1. Commands that access audio devices run
 through Magisk because the normal ADB shell is UID 2000 and the PCM nodes are
 owned by `system:audio`.
 
+## 2026-08-25 local wake and VAD qualification (Task 23, in progress)
+
+Device: the same rooted `G090LF0964060EHP` (`csm_biscuit`/`biscuit`,
+`arm64-v8a`, Magisk root, SELinux permissive). Linux ADB was used. The vetted
+`okay_nabu`, mel, and embedding assets matched the SHA-256 values in
+`docs/wake-models.md`. The physical microphone-cut line again resolved as GPIO
+444 (controller base 357 plus MTK pin 87) and was driven low before capture.
+Amazon's `ledcontroller` service was stopped so it could not overwrite test
+indication frames.
+
+Live diagnostics now begin with two red blinks and the project-owned
+`testdata/audio/starting_test.wav`, then hold solid red until capture cleanup.
+Operator feedback found 50% linear playback gain still too loud, so the
+qualified diagnostic cue uses 25% linear gain. File replay remains cue-free.
+The cue is PCM S16 mono at 16 kHz, 227,448 bytes, SHA-256
+`cf6cc1368d4447ba8f15071331057035e0c186c19f39bda62795e57f7a0afa87`.
+
+Hardware execution first exposed two live-capture wiring defects: wake
+diagnostics instantiated a zero-valued microphone command and tried
+`/dev/snd/pcmC0D0c`, while `echod --wake-only` omitted the capture-direction
+flag. Both now use card 0, device 24, capture direction, with regression tests.
+Review of the added test indication also found and fixed signal cleanup,
+cue-before-ALSA ordering, capture timeouts starting before the cue completed,
+discarded LED cleanup errors, and missing sequence/volume tests.
+
+### VAD and threshold measurements
+
+A 30-second quiet-room VAD run produced 373 complete 80 ms steps. Silence
+returned to 0, speech peaked at 0.9440, the mean score was 0.0939, and 28 steps
+(7.51%) exceeded 0.5. This establishes a clear speech/no-speech margin for a
+0.5 VAD threshold on microphone channel 0.
+
+The operator spoke exactly 20 deliberate `okay_nabu` utterances per two-minute
+threshold run. `vad_threshold=0.5` and an initially conservative 1,200 ms
+lookback were held constant:
+
+| Condition | Wake threshold | Accepted / 20 | High-wake/low-VAD rejected steps | Max wake score | CPU | RSS bytes |
+|---|---:|---:|---:|---:|---:|---:|
+| quiet | 0.5 | 18 | 0 | 0.9735 | 50.2% | 17,440,768 |
+| quiet | 0.6 | 19 | 0 | 0.9739 | 49.6% | 17,408,000 |
+| quiet | 0.7 | 17 | 12 | 0.9764 | 50.0% | 17,154,048 |
+| quiet | 0.8 | 16 | 1 | 0.9748 | 49.6% | 16,416,768 |
+| music | 0.6 | 15 | 0 | 0.9771 | 50.2% | 16,867,328 |
+| music | 0.5 | 18 | 0 | 0.9786 | 49.9% | 16,666,624 |
+
+The 0.9 run was deliberately skipped after 0.8 had already fallen to 16/20;
+raising the threshold further cannot recover lower-score misses. Threshold 0.6
+was best in quiet conditions but failed the noisy-room acceptance floor.
+Therefore **0.5 is the measured wake-threshold default**: it is the only tested
+value that reached at least 18/20 in both conditions.
+
+Across these runs wake inference was stable at approximately 39.1--39.3 ms p50
+and 40.0--40.3 ms p95, with isolated maxima from 45.5 to 90.9 ms. VAD inference
+was approximately 0.020 ms p50 and 0.035 ms p95. No frames were dropped. This
+meets the 80 ms real-time step cadence in the typical case but does not meet
+Task 17's aspirational <=20 ms combined budget. `AlwaysScoreWake=true` consumed
+approximately half of one CPU and is retained because it fits the real-time
+cadence and keeps wake diagnostics honest; an optimized false-mode comparison
+has not yet been run.
+
+### Wake/VAD alignment and gate proof
+
+Accepted quiet-room traces placed the last instantaneous VAD score at least 0.5
+between 240 and 720 ms before the wake event. A music trace measured 320--640
+ms for its accepted events. A proposed 720 ms production lookback nevertheless
+failed a fresh music qualification: only 16/20 accepted, 30 high-wake/low-VAD
+steps were rejected, and the trace contained high-wake candidates from 320
+through 1,200 ms after the last qualifying instantaneous VAD step. The earlier
+1,200 ms runs had zero VAD rejections and reached 18/20 in both conditions.
+Therefore **1,200 ms is the smallest reliable measured lookback** for this
+qualified pipeline: `okay_nabu`, the level VAD, 16 kHz mono channel 0, and 1,280
+sample/80 ms steps.
+
+The plan's proposed `vad_threshold=0.99` proof was invalidated on hardware:
+the level VAD legitimately saturates at 1.0, so ten deliberate phrases still
+produced nine accepted wakes. A deterministic paired replay of the same
+30-second, five-utterance capture replaced that invalid test. With VAD disabled
+the replay accepted all five events and recorded zero VAD rejects. With
+same-step VAD enabled at 0.5 it accepted zero events and recorded 43
+high-wake/low-VAD rejected steps; both runs had the identical 0.96584 maximum
+wake score. This directly proves the local VAD gate controls acceptance while
+also demonstrating why the model-agnostic lookback is required.
+
+`testdata/wake/recorded/okay_nabu_16k_mono.wav` is a project-owned three-second
+excerpt of the accepted controlled hardware capture. It is generator-exempt,
+PCM S16 mono at 16 kHz, and has SHA-256
+`deb6b37c0b40864bbfd0e702a65db8753beba7c878d966f9ac4183383f27c257`.
+
+### Pre-roll measurement
+
+A deterministic replay of five `okay nabu, what time is it?` utterances first
+tested the planned 100, 250, and 400 ms values. The nearby operator reported
+that every clip began around the `/w/` in `what`, clipping the first command
+word. The sweep was extended using the identical capture:
+
+| Pre-roll | Operator observation |
+|---:|---|
+| 600 ms | complete `what`; no wake phrase |
+| 800 ms | `okay nabu what` |
+| 1,200 ms | `okay nabu what t...` |
+
+Therefore **600 ms is the measured pre-roll default**: it is the shortest
+tested value that preserves the complete first command word, and longer values
+carry the wake phrase into command audio.
+
+### Idle false-accept run
+
+With music left playing and nobody speaking the wake phrase, the selected
+thresholds and 1,200 ms lookback ran for 15 minutes (11,247 steps). The result
+was zero wake events, zero VAD rejects, zero dropped frames, and a maximum wake
+score of 0.00317. Wake inference was 39.263 ms p50 / 39.983 ms p95 / 47.185 ms
+max; CPU was 49.99% and RSS was 16,687,104 bytes.
+
+### Physical Mute-button and microphone-cut measurement
+
+The Mute button itself does not autonomously gate the microphones. During a
+45-second VAD run the operator spoke, tapped Mute, spoke again, tapped Mute,
+and spoke a third time. GPIO 444 remained low in all 265 concurrent samples,
+while the VAD continued to observe speech (560 steps, mean 0.1285, maximum
+1.0, and 13.39% of steps at or above 0.5). The key is therefore an evdev input
+whose mute action must be implemented locally in software.
+
+A controlled comparison then separated the two mute mechanisms used by the
+EchoLocal and EchoMuse reference projects. Each 10-second live diagnostic used
+the standard red/cue indication and microphone channel 0:
+
+| Configuration | VAD steps | Mean | Maximum | Fraction >= 0.5 |
+|---|---:|---:|---:|---:|
+| GPIO 444 low; all codec ADC mutes off | 122 | 0.0772 | 0.9223 | 4.92% |
+| GPIO 444 high; codec ADC mutes unchanged | 122 | 0.0000 | 0.0000 | 0.00% |
+| GPIO 444 low; codec controls 105/106, 123/124, 141/142, 159/160 all `On` | 122 | 0.1011 | 0.8860 | 7.38% |
+
+GPIO 444 alone therefore provides the effective microphone cut on this unit,
+matching EchoLocal's MTK-pin-87 implementation. EchoMuse's eight ADC mute
+controls reported `On` but did not suppress this firmware's PCM device-24
+capture when used alone. After the comparison GPIO 444 was verified low and
+all eight codec controls were verified `Off`. Production mute must toggle the
+resolved MTK pin 87 locally; mixer controls are not a substitute on this
+qualified device/firmware combination.
+
+### ARM64 reference-vector agreement
+
+The `internal/device/wake/tflite` package test executable was cross-compiled
+twice for static Linux ARM64: once with the normal NEON implementation and
+once with the `noasm` build tag. Both executables ran on the Dot against the
+installed vetted mel and embedding models and the committed reference vectors.
+
+| ARM64 path | Model stage | Largest absolute difference | Result |
+|---|---|---:|---|
+| NEON | mel | 0.000663757 at index 209 | pass |
+| NEON | embedding | 0.0000219345 at index 24 | pass |
+| `noasm` | mel | 0.000511169 at index 184 | pass |
+| `noasm` | embedding | 0.0000252724 at index 75 | pass |
+
+All four comparisons passed the committed reference tolerance. This confirms
+both the optimized and portable ARM64 interpreter paths agree numerically with
+the reference runtime for the shared mel and embedding stages.
+
+### Final `echod --wake-only` operator run
+
+The final daemon run used one continuous ALSA capture and an operator-approved
+short cadence: 20 consecutive 30-second trials, each with a 15-second blinking
+green speaking window followed by 15 seconds of solid-red rest. The operator
+said `okay nabu` once per green window. The daemon accepted **18 of 20**, exactly
+meeting the acceptance floor. It then entered a solid-red idle phase. The
+operator stopped that phase after 185 seconds to limit test overhead and
+directed that the test be considered done; wake count remained 18, so this
+shortened idle segment had zero false accepts.
+
+The daemon processed 9,749 80 ms steps over approximately 13 minutes. Every
+periodic sample reported zero frames dropped and zero ALSA XRuns. CPU stayed
+between 49.60% and 50.25%. RSS rose from 16,330,752 to 16,818,176 bytes, a
+2.98% increase and within the 10% stability limit. The bounded structured log
+was 9,253 bytes at stop, well below its 1,048,576-byte cap; the run did not
+produce enough output to require rotation. The ring was cleared and no daemon
+remained after operator stop.
+
+This shortened daemon-idle observation is not represented as a 15-minute run.
+The separate completed 15-minute music-idle measurement above supplies the
+full-duration zero-wake evidence: 11,247 steps, zero wakes, zero drops, and
+stable resource use. Together the runs cover deliberate daemon detection,
+continuous-capture health, resource/log bounds, and the required full idle
+duration, with the deliberate protocol deviation recorded explicitly.
+
+Task 23's primary-operator hardware qualification is complete. Qualification
+across additional speakers is explicitly deferred to the end-of-Milestone-1
+closeout (Task 25), where it remains a required hardware check rather than a
+passed or removed acceptance item. Only `okay_nabu` is proposed as a supported
+classifier in this milestone. The
+operator-provided `Hey_Prime_20260824_084713.tflite` was considered but skipped:
+the installer rejected its unsupported `SHAPE`, `STRIDED_SLICE`, `REDUCE_PROD`,
+`PACK`, and `FILL` operators before deployment.
+
 ## 2026-08-21 wake inference hardware benchmark (Task 17)
 
 Device: same rooted `G090LF0964060EHP` (`csm_biscuit`/`biscuit`, `arm64-v8a`,

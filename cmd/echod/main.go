@@ -136,6 +136,14 @@ func runWakeOnly(parent context.Context, o opts) (returnErr error) {
 	}
 	defer func() { returnErr = errors.Join(returnErr, engine.Close()) }()
 
+	ctx, cancel := context.WithCancel(parent)
+	defer cancel()
+	clearIndicator, err := startWakeOnlyTestIndicator(ctx, o)
+	if err != nil {
+		return err
+	}
+	defer func() { returnErr = errors.Join(returnErr, clearIndicator()) }()
+
 	rawSource, err := openWakeOnlySource(o)
 	if err != nil {
 		return err
@@ -179,13 +187,16 @@ func runWakeOnly(parent context.Context, o opts) (returnErr error) {
 		Ring: ring, Stats: stats, Config: cfg,
 	}
 
-	ctx, cancel := context.WithCancel(parent)
-	defer cancel()
-	animator, clearLED, ledErr := startWakeLED(o.LEDRoot)
-	if ledErr != nil {
-		return ledErr
+	var animator *led.Animator
+	if o.MicFromFile != "" {
+		var clearLED func() error
+		var ledErr error
+		animator, clearLED, ledErr = startWakeLED(o.LEDRoot)
+		if ledErr != nil {
+			return ledErr
+		}
+		defer func() { returnErr = errors.Join(returnErr, clearLED()) }()
 	}
-	defer func() { returnErr = errors.Join(returnErr, clearLED()) }()
 
 	workers := []wakeWorker{
 		fanout.Run,
@@ -283,12 +294,14 @@ func openWakeOnlySource(o opts) (audio.PCMSource, error) {
 		}
 		return source, nil
 	}
-	pcm, err := alsa.OpenCapture(alsa.Config{Card: alsa.MicCard, Device: alsa.MicDevice, Rate: alsa.MicRate, Channels: alsa.MicChannels, Format: alsa.MicFormat, PeriodFrames: alsa.MicPeriodFrames, Periods: alsa.MicPeriods})
+	pcm, err := openALSACapture(alsa.Config{Card: alsa.MicCard, Device: alsa.MicDevice, Rate: alsa.MicRate, Channels: alsa.MicChannels, Format: alsa.MicFormat, PeriodFrames: alsa.MicPeriodFrames, Periods: alsa.MicPeriods, Capture: true})
 	if err != nil {
 		return nil, fmt.Errorf("open ALSA microphone: %w", err)
 	}
 	return pcmSource{pcm: pcm, format: format}, nil
 }
+
+var openALSACapture = alsa.OpenCapture
 
 type pcmSource struct {
 	pcm    *alsa.PCM

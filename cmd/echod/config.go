@@ -42,13 +42,14 @@ type opts struct {
 	GatewayURL        string           `long:"gateway-url" env:"ECHOD_GATEWAY_URL" description:"explicit gateway url; overrides discovery"`
 	PreferredServerID string           `long:"preferred-server-id" env:"ECHOD_PREFERRED_SERVER_ID" description:"gateway server_id to prefer"`
 	WakeOnly          bool             `long:"wake-only" env:"ECHOD_WAKE_ONLY" description:"run the device-local wake pipeline without gateway traffic"`
+	TestStartAudio    string           `long:"test-start-audio" env:"ECHOD_TEST_START_AUDIO" default:"/data/local/etc/echo-satellite/starting_test.wav" description:"16 kHz mono WAV played before live wake-only diagnostics"`
 	WakeModel         string           `long:"wake-model" env:"ECHOD_WAKE_MODEL" default:"okay_nabu" description:"installed wake model id"`
 	WakeModelDir      string           `long:"wake-model-dir" env:"ECHOD_WAKE_MODEL_DIR" default:"/data/local/etc/echo-satellite/wake-models" description:"installed wake model directory"`
-	WakeThreshold     float64          `long:"wake-threshold" env:"ECHOD_WAKE_THRESHOLD" default:"0.80" description:"wake acceptance threshold from 0 to 1"`
+	WakeThreshold     float64          `long:"wake-threshold" env:"ECHOD_WAKE_THRESHOLD" default:"0.50" description:"wake acceptance threshold from 0 to 1"`
 	VADThreshold      float64          `long:"vad-threshold" env:"ECHOD_VAD_THRESHOLD" default:"0.50" description:"wake VAD threshold from 0 to 1"`
 	VADEnabled        configurableBool `long:"vad-enabled" env:"ECHOD_VAD_ENABLED" default:"true" optional:"true" optional-value:"true" description:"require local VAD evidence for wake acceptance"`
-	VADLookbackMS     int              `long:"vad-lookback-ms" env:"ECHOD_VAD_LOOKBACK_MS" default:"0" description:"bounded recent VAD evidence window in milliseconds"`
-	PreRollMS         int              `long:"preroll-ms" env:"ECHOD_PREROLL_MS" default:"250" description:"pre-trigger audio retained in milliseconds"`
+	VADLookbackMS     int              `long:"vad-lookback-ms" env:"ECHOD_VAD_LOOKBACK_MS" default:"1200" description:"bounded recent VAD evidence window in milliseconds"`
+	PreRollMS         int              `long:"preroll-ms" env:"ECHOD_PREROLL_MS" default:"600" description:"pre-trigger audio retained in milliseconds"`
 	MinWakeIntervalMS int              `long:"min-wake-interval-ms" env:"ECHOD_MIN_WAKE_INTERVAL_MS" default:"2000" description:"minimum interval between accepted wakes in milliseconds"`
 	MicChannels       string           `long:"mic-channels" env:"ECHOD_MIC_CHANNELS" default:"0" description:"comma-separated physical microphone channel indices"`
 	MicFromFile       string           `long:"mic-from-file" env:"ECHOD_MIC_FROM_FILE" description:"replay paced WAV or raw Dot microphone PCM instead of ALSA"`

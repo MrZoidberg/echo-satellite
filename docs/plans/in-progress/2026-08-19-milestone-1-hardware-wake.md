@@ -1119,7 +1119,7 @@ Expected: exit 0; regression tests prove aligned pre-gating and interruptible, e
 
 ### Task 23: HARDWARE — on-device wake and VAD session; §26 measurements
 
-**Status:** not started
+**Status:** in progress
 
 **Purpose:** This is §24's success criterion and §25 task 6. Everything before it is scaffolding.
 
@@ -1127,13 +1127,24 @@ Expected: exit 0; regression tests prove aligned pre-gating and interruptible, e
 
 **Hardware required:** **yes** — rooted Dot as in Task 12, plus the vetted `okay_nabu.tflite`, `melspectrogram.tflite` and `embedding_model.tflite` verified on the host per `docs/wake-models.md`. A reasonably quiet room **and** a noisier condition such as music or television at conversational level.
 
+The primary-operator session is owned here. At the operator's direction,
+additional-speaker qualification is deferred to the end-of-Milestone-1
+closeout in Task 25; it is not treated as passed or removed.
+
 **Files or components:**
 
+- Create: `cmd/echoctl/wake_indicator.go`, `cmd/echoctl/wake_indicator_test.go`
+- Modify: `cmd/echoctl/config.go`, `cmd/echoctl/config_test.go`, `cmd/echoctl/wake.go`, `cmd/echoctl/wake_test.go`
+- Create: `cmd/echod/wake_indicator.go`, `cmd/echod/wake_indicator_test.go`
+- Modify: `cmd/echod/config.go`, `cmd/echod/main.go`, `cmd/echod/main_test.go`
 - Modify: `docs/device-diagnostics.md`
+- Create: `testdata/audio/starting_test.wav` — operator-provided 16 kHz mono PCM start cue used by live wake diagnostics
 - Create: `testdata/wake/recorded/okay_nabu_16k_mono.wav` — one short accepted utterance, at most 3 seconds, generator-exempt and documented as such
 - Modify: `internal/device/wake/config.go` (`Defaults()` set to the measured thresholds and pre-roll) and `internal/device/audio/alsa/config.go` only if measurement requires
 
 **Concrete changes:** Run a scripted measurement session and record in `docs/device-diagnostics.md` every §26 answer this milestone owns: the chosen mic channel; the measured wake and VAD thresholds with their false-accept and false-reject counts in both room conditions; the per-model/engine delay between instantaneous VAD activity and the wake-score peak, with the smallest reliable VAD lookback that covers that delay; the pre-roll length that avoids clipping without carrying the wake phrase; per-step wake and VAD inference times and total CPU and RSS while idle; whether `AlwaysScoreWake` can remain true within the CPU budget; whether the mute key gates capture in hardware; and the default model choice. Repeat the alignment measurement for every model proposed as supported, including newly trained models before promotion. Only then set `wake.Config.Defaults()` and any model metadata to the measured values, replacing the §16 placeholders.
+
+Before every live `wake vad-test`, `wake test`, and `echod --wake-only` Task 23 run, play the operator-provided start cue at 25% linear gain, blink the LED ring red, and then hold it solid red for the full timed capture. Clear the ring on every exit path, including signal cancellation. File-replay diagnostics remain hardware-independent and do not activate the cue. The live diagnostic fails before capture when its cue asset or LED/audio hardware cannot be initialized, preventing an unnoticed test window.
 
 **Expected outcome:** The Dot repeatedly detects the milestone-default `okay_nabu` model locally with observable wake and VAD scores and no gateway involved. Every threshold and alignment setting in the default pipeline is measured rather than guessed. Any additional bundled or newly trained model proposed as supported has its own recorded alignment, threshold, false-accept, and false-reject qualification results before promotion; it uses the same model-agnostic gate implementation.
 
@@ -1141,6 +1152,10 @@ Expected: exit 0; regression tests prove aligned pre-gating and interruptible, e
 
 ```sh
 "$ADB" push ./models /data/local/tmp/models
+sha256sum testdata/audio/starting_test.wav
+file testdata/audio/starting_test.wav
+"$ADB" push testdata/audio/starting_test.wav /data/local/tmp/starting_test.wav
+"$ADB" shell "su -c 'mkdir -p /data/local/etc/echo-satellite && cp /data/local/tmp/starting_test.wav /data/local/etc/echo-satellite/starting_test.wav && chmod 0644 /data/local/etc/echo-satellite/starting_test.wav'"
 "$ADB" shell /data/local/bin/echoctl wake install okay_nabu \
   --from /data/local/tmp/models/okay_nabu.tflite \
   --metadata /data/local/tmp/models/okay_nabu.json --sha256 <expected>
@@ -1179,6 +1194,15 @@ done
 "$ADB" shell /data/local/bin/echoctl status --json > status-after.json
 "$ADB" shell ls -l /data/local/tmp/echod.log*
 ```
+
+For the final operator run, use one continuous 25-minute daemon capture rather
+than restarting ALSA between attempts. After the standard red-blink/audio start
+indication, present 20 consecutive 30-second trials: blink the ring green for
+the first 15 seconds while the operator says `okay nabu` once, then hold red for
+15 seconds of rest. After trial 20, hold solid red for a 15-minute idle phase in
+which the wake phrase is not spoken. The cue plays only once at process start so
+it cannot contaminate individual trials. Stop the daemon and clear the ring on
+every exit path.
 
 Expected, each an explicit recorded observation:
 
@@ -1238,7 +1262,9 @@ Expected: `wake list` shows both models with their own phrases and kinds; the ne
 
 **Dependencies:** Tasks 12, 15, 17, 23, 24.
 
-**Hardware required:** no.
+**Hardware required:** **yes, in part** — documentation work is hardware-free,
+but the deferred additional-speaker qualification requires the rooted Dot and
+at least one speaker who did not perform Task 23's primary session.
 
 **Files or components:**
 
@@ -1246,6 +1272,11 @@ Expected: `wake list` shows both models with their own phrases and kinds; the ne
 
 **Concrete changes:**
 
+- Before milestone closeout, run at least one additional speaker through 20
+  timed `okay_nabu` trials using Task 23's selected model and defaults. Require
+  at least 18/20 accepted, no detections in the red rest intervals, and zero
+  dropped frames/XRuns. Record the speaker count and aggregate result in
+  `docs/device-diagnostics.md`; raw voice audio remains unsaved by default.
 - §16: replace the example threshold values in the configuration block with the measured ones, note that they are measured and where the evidence is, record the default model, the pre-roll value, and whether wake inference runs when VAD is below threshold; add a pointer to `docs/wake-model-training.md`.
 - §26: convert each resolved question into an answer line pointing at `docs/device-diagnostics.md` — the microphone path and channel arrangement; how directly EchoLocal was reusable (copied and adapted rather than imported, because its packages are `internal/`, with the NEON assembly borrowed under a `noasm` fallback); the cleanest local Silero-VAD implementation for the Go/ARM64 path (**blocked — record the evidence table, and that the shipped VAD is the adapted level detector and is not Silero-equivalent**); the CPU and memory impact, with Task 17's NEON and `noasm` figures and the pass or fail against the step budget; whether wake VAD runs before all engines (deferred — only one engine exists, and the per-engine flag lives in `wake.Config`); the default model; the wake and VAD thresholds; the pre-roll length; **beamforming initially bypassed**; AEC deferred to barge-in; and the exact speaker format with the resampling location. Questions this milestone does not own stay open and unchanged.
 - §18: record that the diagnostic commands are cross-built for `linux/arm64` and run on the Dot over `adb shell`, that `echoctl wake install` takes a local path with a required digest, and that `echoctl status --json` is the bug-report artifact.
@@ -1323,6 +1354,15 @@ Two device-state caveats: `speaker test` changes `Ext_Speaker_Amp_Switch` and mu
 - [ ] New packages are at or above roughly 70% statement coverage, except `internal/device/audio/alsa` and `internal/device/mixer`, whose shortfall is justified with the untestable statements named.
 
 ## Progress log
+
+- 2026-08-25: Task 23 started by Codex on rooted Dot `G090LF0964060EHP` using Linux ADB. The vetted wake assets are present on the host and their SHA-256 digests match `docs/wake-models.md`; live hardware measurement and qualification are in progress.
+- 2026-08-25: Task 23 live tests were prepared with an operator-visible/audible start contract: two red LED blinks, solid red throughout capture, and the project-owned `starting_test.wav` cue for live `echoctl wake vad-test`, `echoctl wake test`, and `echod --wake-only`; file replay remains cue-free. Hardware preparation exposed and fixed zero-valued ALSA diagnostic defaults plus a missing capture-direction flag. Review remediation added signal-safe cleanup, cue-before-ALSA ordering, capture-duration timing after the cue, joined cleanup errors, sequence-sensitive tests, and durable cue deployment commands. Fresh final re-review found no remaining issues. The corrected binaries and cue are staged; GPIO 444 is low, `ledcontroller` is stopped, and no test process is running pending operator confirmation.
+- 2026-08-25: Task 23 partial hardware evidence recorded in `docs/device-diagnostics.md`. Quiet threshold sweep results were 18/20 at 0.5, 19/20 at 0.6, 17/20 at 0.7, and 16/20 at 0.8; 0.9 was skipped as strictly less permissive after 0.8 failed. Music runs selected 0.5 (18/20) over 0.6 (15/20), and a 15-minute idle-music run produced zero wakes, zero drops, ~50% CPU, and 16.69 MB RSS. A proposed 720 ms lookback failed at 16/20 with 30 VAD rejects; aligned candidates extended through 1,200 ms, which passed both conditions. The plan's 0.99-VAD zero-wake assumption was invalid because the level VAD saturates at 1.0; deterministic identical-audio replay instead proved the gate with 5 accepted/0 rejects when disabled versus 0 accepted/43 rejects with same-step VAD. Operator listening selected 600 ms pre-roll: 100/250/400 ms clipped `what`, while 800/1,200 ms carried `okay nabu`. Measured defaults are wake 0.5, VAD 0.5, lookback 1,200 ms, pre-roll 600 ms, `AlwaysScoreWake=true`, model `okay_nabu`. Diagnostic cue gain was reduced to 25% after 50% remained too loud. Task remains in progress for mute, ARM64 reference, final daemon/log/RSS run, and additional-speaker evidence.
+- 2026-08-25: Task 23 resolved the physical Mute-button question. A speak/mute/speak/unmute/speak run left GPIO 444 low in all 265 samples and VAD remained active, proving `KEY_MUTE` is an input event rather than an autonomous hardware interlock. A controlled reference comparison measured baseline VAD mean/max 0.0772/0.9223, GPIO-444-high mean/max 0/0, and all eight EchoMuse codec ADC mute controls `On` with GPIO low mean/max 0.1011/0.8860. Thus resolved MTK pin 87/GPIO 444 is the effective microphone cut on this unit; the codec controls alone do not gate PCM device 24. GPIO was restored low and all codec controls were verified `Off`. Task remains in progress for ARM64 reference agreement, final daemon/log/RSS run, and additional-speaker evidence.
+- 2026-08-25: Task 23 ARM64 reference agreement passed on the Dot for both the normal NEON and `noasm` package-test binaries. NEON's largest mel/embedding deviations from the committed vectors were 0.000663757 and 0.0000219345; `noasm` measured 0.000511169 and 0.0000252724. All four comparisons passed. Both runs used the standard two-red-blink, solid-red, 25%-gain cue contract and cleared the ring afterward. Task remains in progress for the final daemon/log/RSS run and additional-speaker evidence.
+- 2026-08-25: Task 23 final `echod --wake-only` operator run used the approved shortened cadence: 20 timed 30-second trials with 15 seconds blinking green to speak and 15 seconds red to rest, followed by solid-red idle. It accepted 18/20. The operator stopped and accepted the idle phase after 185 seconds; it produced zero additional wakes. Across approximately 13 minutes and 9,749 steps, periodic statistics showed zero drops/XRuns, 49.60--50.25% CPU, and RSS increasing 2.98% from 16,330,752 to 16,818,176 bytes. The log was 9,253 bytes under the 1 MiB cap and did not need rotation. This shortened daemon-idle segment is paired with the earlier completed 15-minute music-idle run (zero wakes over 11,247 steps), rather than being mislabeled as a full 15-minute daemon run. Ring/process cleanup passed. Task remains in progress only for additional-speaker evidence.
+- 2026-08-25: The operator-provided `.assets/wake-models/Hey_Prime_20260824_084713.tflite` (SHA-256 `ad1fedb27dac6b9f3401da64f696351e1516a703038eed2c2414ae1740af34f0`) was evaluated for the next tests but deliberately skipped. The real installer rejected it before deployment because the classifier requires unsupported `SHAPE`, `STRIDED_SLICE`, `REDUCE_PROD`, `PACK`, and `FILL` operators. No device model-store state changed; `okay_nabu` remained the sole qualified classifier.
+- 2026-08-25: At the operator's direction, additional-speaker qualification was deferred from Task 23 to the end-of-Milestone-1 Task 25 closeout. Task 25 now explicitly requires at least one new speaker to complete 20 timed trials with at least 18 accepted and zero rest-window detections, drops, or XRuns. The requirement is postponed, not waived or recorded as passed.
 
 - 2026-08-25: Task 22 and its review remediation completed. Added the `echod --wake-only` composition root with flag/environment/ini/default precedence, identity and installed-model loading, paced fixture or single-open ALSA capture, one-subscriber fanout, local VAD/openWakeWord pipeline, bounded structured logs, periodic resource/statistics reporting, optional LED/button hardware, Action feedback, and deliberate cleanup with no gateway resolution or socket path. Fresh review found effective-VAD pre-gating, interruptible capture shutdown, orchestration coverage, and later worker-error retention defects; all were fixed and final re-review found no remaining issues. No findings were declined or postponed. Hardware verification did not run and remains Task 23.
 

@@ -31,13 +31,12 @@ type Config struct {
 	AlwaysScoreWake bool      `ini-name:"always-score-wake"`
 }
 
-// Defaults mirrors the illustrative values in DESIGN.md section 16. Thresholds are deliberately
-// untuned placeholders until Task 23 replaces them with real-device measurements.
+// Defaults returns the production values qualified on Echo Dot Gen 2 hardware in Task 23.
 func Defaults() Config {
 	return Config{
 		Enabled: true, Engine: KindOpenWakeWord.String(), Model: "okay_nabu",
-		Threshold: 0.80, VAD: VADConfig{Enabled: true, Threshold: 0.50},
-		PreRollMS: 250, MinIntervalMS: 2000, AlwaysScoreWake: true,
+		Threshold: 0.50, VAD: VADConfig{Enabled: true, Threshold: 0.50, LookbackMS: 1200},
+		PreRollMS: 600, MinIntervalMS: 2000, AlwaysScoreWake: true,
 	}
 }
 

@@ -92,6 +92,8 @@ type wakeInputOptions struct {
 	Threshold  float64 `long:"threshold" default:"0.5" description:"score threshold from 0 to 1"`
 	PrintSteps bool    `long:"print-steps" description:"print every 80ms score"`
 	Seconds    float64 `long:"seconds" default:"5" description:"maximum live capture duration; zero reads a file to EOF"`
+	StartAudio string  `long:"start-audio" default:"/data/local/etc/echo-satellite/starting_test.wav" description:"16 kHz mono WAV played before live capture"`
+	LEDRoot    string  `long:"led-root" default:"/sys/bus/i2c/devices/0-003f" description:"LED controller sysfs root used for live-test indication"`
 }
 
 type wakeTestCommand struct {
@@ -99,9 +101,9 @@ type wakeTestCommand struct {
 	Model         string  `long:"model" default:"okay_nabu" description:"installed wake model ID"`
 	ModelDir      string  `long:"model-dir" default:"/data/local/etc/echo-satellite/wake-models" description:"wake model store directory"`
 	VADThreshold  float64 `long:"vad-threshold" default:"0.5" description:"wake VAD threshold from 0 to 1"`
-	VADLookbackMS int     `long:"vad-lookback-ms" default:"0" description:"recent VAD lookback used for wake acceptance in milliseconds"`
+	VADLookbackMS int     `long:"vad-lookback-ms" default:"1200" description:"recent VAD lookback used for wake acceptance in milliseconds"`
 	NoVAD         bool    `long:"no-vad" description:"disable the local wake VAD gate"`
-	PreRollMS     int     `long:"preroll-ms" default:"250" description:"accepted-event pre-roll duration in milliseconds"`
+	PreRollMS     int     `long:"preroll-ms" default:"600" description:"accepted-event pre-roll duration in milliseconds"`
 	SavePreRoll   string  `long:"save-preroll" description:"opt in to storing accepted raw pre-roll WAV files in this directory"`
 }
 

@@ -2,17 +2,52 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
+	"github.com/MrZoidberg/echo-satellite/internal/device/audio/alsa"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestOpenWakeSource_LiveUsesDotMicrophone(t *testing.T) {
+	wantErr := errors.New("stop after config capture")
+	var got alsa.Config
+	original := openALSACapture
+	openALSACapture = func(config alsa.Config) (*alsa.PCM, error) {
+		got = config
+		return nil, wantErr
+	}
+	t.Cleanup(func() { openALSACapture = original })
+
+	_, _, err := openWakeSource("")
+	require.ErrorIs(t, err, wantErr)
+	assert.Equal(t, alsa.MicCard, got.Card)
+	assert.Equal(t, alsa.MicDevice, got.Device)
+	assert.True(t, got.Capture)
+}
+
+func TestDiagnosticContext_StartsCaptureTimeoutWhenCreated(t *testing.T) {
+	parent, cancelParent := context.WithCancel(context.Background())
+	t.Cleanup(cancelParent)
+	started := time.Now()
+	ctx, cancel := diagnosticContext(parent, "", 0.1)
+	t.Cleanup(cancel)
+	deadline, ok := ctx.Deadline()
+	require.True(t, ok)
+	assert.GreaterOrEqual(t, deadline.Sub(started), 90*time.Millisecond)
+
+	cancelParent()
+	assert.ErrorIs(t, ctx.Err(), context.Canceled)
+}
 
 func TestWakeInstallAndList_ReportMetadataAndSharedAssets(t *testing.T) {
 	t.Parallel()

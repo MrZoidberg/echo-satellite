@@ -14,8 +14,26 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/MrZoidberg/echo-satellite/internal/device/audio"
+	"github.com/MrZoidberg/echo-satellite/internal/device/audio/alsa"
 	"github.com/MrZoidberg/echo-satellite/internal/device/led"
 )
+
+func TestOpenWakeOnlySource_LiveUsesDotMicrophone(t *testing.T) {
+	wantErr := errors.New("stop after config capture")
+	var got alsa.Config
+	original := openALSACapture
+	openALSACapture = func(config alsa.Config) (*alsa.PCM, error) {
+		got = config
+		return nil, wantErr
+	}
+	t.Cleanup(func() { openALSACapture = original })
+
+	_, err := openWakeOnlySource(opts{})
+	require.ErrorIs(t, err, wantErr)
+	assert.Equal(t, alsa.MicCard, got.Card)
+	assert.Equal(t, alsa.MicDevice, got.Device)
+	assert.True(t, got.Capture)
+}
 
 type orchestrationSource struct {
 	closed chan struct{}

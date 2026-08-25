@@ -8,11 +8,14 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/MrZoidberg/echo-satellite/internal/device/audio"
+	"github.com/MrZoidberg/echo-satellite/internal/device/audio/alsa"
 	"github.com/MrZoidberg/echo-satellite/internal/device/system"
 	"github.com/MrZoidberg/echo-satellite/internal/device/wake"
 	"github.com/MrZoidberg/echo-satellite/internal/device/wake/oww"
@@ -116,7 +119,16 @@ func wakeTest(w io.Writer, command wakeTestCommand) error {
 	return runWakeDiagnostic(w, command.wakeInputOptions, pipeline, stats, command.SavePreRoll)
 }
 
-func runWakeDiagnostic(w io.Writer, input wakeInputOptions, pipeline wake.Pipeline, stats *wake.Stats, saveDir string) error {
+func runWakeDiagnostic(w io.Writer, input wakeInputOptions, pipeline wake.Pipeline, stats *wake.Stats, saveDir string) (returnErr error) {
+	signalContext, stopSignals := diagnosticSignalContext(input.FromFile)
+	defer stopSignals()
+	clearIndicator, err := startLiveWakeIndicator(input)
+	if err != nil {
+		return err
+	}
+	defer func() { returnErr = errors.Join(returnErr, clearIndicator()) }()
+	ctx, cancel := diagnosticContext(signalContext, input.FromFile, input.Seconds)
+	defer cancel()
 	started := time.Now()
 	usageBefore, err := system.ReadUsage("/proc/self")
 	if err != nil {
@@ -127,8 +139,6 @@ func runWakeDiagnostic(w io.Writer, input wakeInputOptions, pipeline wake.Pipeli
 		return fmt.Errorf("create wake capturer: %w", err)
 	}
 	defer func() { _ = source.Close() }()
-	ctx, cancel := diagnosticContext(input.FromFile, input.Seconds)
-	defer cancel()
 	capturer, err := audio.NewCapturer(source, audio.CaptureConfig{Device: source.Format(), Channels: channels, Preprocessor: audio.Bypass{}, StepSamples: wake.StepSamples}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		return fmt.Errorf("create VAD capturer: %w", err)
@@ -178,20 +188,27 @@ func runWakeDiagnostic(w io.Writer, input wakeInputOptions, pipeline wake.Pipeli
 	return writeWakeSummary(w, stats.Snapshot(), usage)
 }
 
-func wakeVADTest(w io.Writer, command wakeVADTestCommand) error {
+func wakeVADTest(w io.Writer, command wakeVADTestCommand) (returnErr error) {
 	if command.Threshold < 0 || command.Threshold > 1 {
 		return errors.New("VAD threshold must be in [0,1]")
 	}
 	if command.Seconds < 0 {
 		return errors.New("VAD diagnostic duration must not be negative")
 	}
+	signalContext, stopSignals := diagnosticSignalContext(command.FromFile)
+	defer stopSignals()
+	clearIndicator, err := startLiveWakeIndicator(command.wakeInputOptions)
+	if err != nil {
+		return err
+	}
+	defer func() { returnErr = errors.Join(returnErr, clearIndicator()) }()
+	ctx, cancel := diagnosticContext(signalContext, command.FromFile, command.Seconds)
+	defer cancel()
 	source, channels, err := openWakeSource(command.FromFile)
 	if err != nil {
 		return fmt.Errorf("create VAD capturer: %w", err)
 	}
 	defer func() { _ = source.Close() }()
-	ctx, cancel := diagnosticContext(command.FromFile, command.Seconds)
-	defer cancel()
 	capturer, err := audio.NewCapturer(source, audio.CaptureConfig{Device: source.Format(), Channels: channels, Preprocessor: audio.Bypass{}, StepSamples: wake.StepSamples}, nil)
 	if err != nil {
 		return fmt.Errorf("create VAD capturer: %w", err)
@@ -250,14 +267,21 @@ func openWakeSource(path string) (audio.PCMSource, []int, error) {
 		}
 		return s, channels, nil
 	}
-	s, e := openCaptureSource(micRecordCommand{})
+	s, e := openCaptureSource(micRecordCommand{Card: alsa.MicCard, Device: alsa.MicDevice})
 	return s, []int{0}, e
 }
-func diagnosticContext(path string, seconds float64) (context.Context, context.CancelFunc) {
-	if path == "" && seconds > 0 {
-		return context.WithTimeout(context.Background(), time.Duration(seconds*float64(time.Second)))
+func diagnosticSignalContext(path string) (context.Context, context.CancelFunc) {
+	if path == "" {
+		return signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	}
 	return context.WithCancel(context.Background())
+}
+
+func diagnosticContext(parent context.Context, path string, seconds float64) (context.Context, context.CancelFunc) {
+	if path == "" && seconds > 0 {
+		return context.WithTimeout(parent, time.Duration(seconds*float64(time.Second)))
+	}
+	return context.WithCancel(parent)
 }
 func savePreRoll(dir string, event wake.Event) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
