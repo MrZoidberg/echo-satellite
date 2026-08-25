@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -51,4 +52,25 @@ func TestWakeList_EmptyStore(t *testing.T) {
 	var output bytes.Buffer
 	require.NoError(t, wakeList(&output, wakeListCommand{ModelDir: filepath.Join(t.TempDir(), "absent")}))
 	assert.Contains(t, output.String(), "models: none")
+}
+
+func TestWakeVADTest_SilenceReportsStepsAndSummary(t *testing.T) {
+	t.Parallel()
+	var output bytes.Buffer
+	err := wakeVADTest(&output, wakeVADTestCommand{wakeInputOptions: wakeInputOptions{
+		FromFile:  filepath.Join("..", "..", "testdata", "audio", "silence_16k_mono.wav"),
+		Threshold: 0.5, PrintSteps: true,
+	}})
+	require.NoError(t, err)
+	assert.Contains(t, output.String(), "step=1 time=0.000s vad=")
+	assert.Contains(t, output.String(), "steps: ")
+	assert.Contains(t, output.String(), "fraction_above_threshold: 0.0000")
+}
+
+func TestWakeDiagnostics_RejectInvalidThresholds(t *testing.T) {
+	t.Parallel()
+	require.Error(t, wakeVADTest(io.Discard, wakeVADTestCommand{wakeInputOptions: wakeInputOptions{Threshold: 2}}))
+	require.Error(t, wakeTest(io.Discard, wakeTestCommand{wakeInputOptions: wakeInputOptions{Threshold: -1}}))
+	require.Error(t, wakeVADTest(io.Discard, wakeVADTestCommand{wakeInputOptions: wakeInputOptions{Threshold: 0.5, Seconds: -1}}))
+	require.Error(t, wakeTest(io.Discard, wakeTestCommand{wakeInputOptions: wakeInputOptions{Threshold: 0.5, Seconds: -1}}))
 }

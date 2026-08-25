@@ -97,6 +97,27 @@ func TestParseArgs_Commands(t *testing.T) {
 		assert.Equal(t, "/tmp/models", o.Wake.List.ModelDir)
 	})
 
+	t.Run("wake diagnostics", func(t *testing.T) {
+		o, command, err := parseArgs([]string{"wake", "test", "--from-file=silence.wav", "--model=hey", "--threshold=.8", "--vad-threshold=.4", "--no-vad", "--preroll-ms=320", "--save-preroll=/tmp/preroll"})
+		require.NoError(t, err)
+		assert.Equal(t, "wake test", command)
+		assert.Equal(t, "hey", o.Wake.Test.Model)
+		assert.True(t, o.Wake.Test.NoVAD)
+		assert.Equal(t, 320, o.Wake.Test.PreRollMS)
+
+		o, command, err = parseArgs([]string{"wake", "vad-test", "--from-file=silence.wav", "--print-steps"})
+		require.NoError(t, err)
+		assert.Equal(t, "wake vad-test", command)
+		assert.True(t, o.Wake.VADTest.PrintSteps)
+	})
+
+	t.Run("status JSON", func(t *testing.T) {
+		o, command, err := parseArgs([]string{"status", "--json", "--root=/tmp/root", "--model-dir=/tmp/models"})
+		require.NoError(t, err)
+		assert.Equal(t, "status", command)
+		assert.True(t, o.Status.JSON)
+	})
+
 	t.Run("wake install requires id and source", func(t *testing.T) {
 		_, _, err := parseArgs([]string{"wake", "install"})
 		require.Error(t, err)

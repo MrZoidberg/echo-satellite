@@ -51,8 +51,14 @@ func dispatch(w io.Writer, command string, o opts) error {
 		return wakeList(w, o.Wake.List)
 	case "wake install":
 		return wakeInstall(w, o.Wake.Install)
+	case "wake test":
+		return wakeTest(w, o.Wake.Test)
+	case "wake vad-test":
+		return wakeVADTest(w, o.Wake.VADTest)
 	case "bench":
 		return wakeBench(w, o.Bench)
+	case "status":
+		return deviceStatus(w, o.Status)
 	default:
 		return fmt.Errorf("unknown command %q", command)
 	}

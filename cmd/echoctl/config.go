@@ -18,6 +18,7 @@ type opts struct {
 	Buttons buttonsCommand `command:"buttons" description:"diagnose device buttons"`
 	Wake    wakeCommand    `command:"wake" description:"manage local wake models"`
 	Bench   benchCommand   `command:"bench" description:"benchmark on-device mel, embedding, classifier and VAD inference"`
+	Status  statusCommand  `command:"status" description:"report device health and wake diagnostics"`
 }
 
 type versionCommand struct{}
@@ -82,6 +83,34 @@ type buttonsTestCommand struct {
 type wakeCommand struct {
 	List    wakeListCommand    `command:"list" description:"list installed wake models"`
 	Install wakeInstallCommand `command:"install" description:"verify and install a local wake model"`
+	Test    wakeTestCommand    `command:"test" description:"run wake detection against a WAV, raw PCM, or live microphone"`
+	VADTest wakeVADTestCommand `command:"vad-test" description:"run wake VAD against a WAV, raw PCM, or live microphone"`
+}
+
+type wakeInputOptions struct {
+	FromFile   string  `long:"from-file" description:"replay a WAV or raw device PCM instead of live ALSA capture"`
+	Threshold  float64 `long:"threshold" default:"0.5" description:"score threshold from 0 to 1"`
+	PrintSteps bool    `long:"print-steps" description:"print every 80ms score"`
+	Seconds    float64 `long:"seconds" default:"5" description:"maximum live capture duration; zero reads a file to EOF"`
+}
+
+type wakeTestCommand struct {
+	wakeInputOptions
+	Model        string  `long:"model" default:"okay_nabu" description:"installed wake model ID"`
+	ModelDir     string  `long:"model-dir" default:"/data/local/etc/echo-satellite/wake-models" description:"wake model store directory"`
+	VADThreshold float64 `long:"vad-threshold" default:"0.5" description:"wake VAD threshold from 0 to 1"`
+	NoVAD        bool    `long:"no-vad" description:"disable the local wake VAD gate"`
+	PreRollMS    int     `long:"preroll-ms" default:"250" description:"accepted-event pre-roll duration in milliseconds"`
+	SavePreRoll  string  `long:"save-preroll" description:"opt in to storing accepted raw pre-roll WAV files in this directory"`
+}
+
+type wakeVADTestCommand struct{ wakeInputOptions }
+
+type statusCommand struct {
+	JSON     bool   `long:"json" description:"print machine-readable JSON"`
+	ModelDir string `long:"model-dir" default:"/data/local/etc/echo-satellite/wake-models" description:"wake model store directory"`
+	Model    string `long:"model" default:"okay_nabu" description:"configured active wake model ID"`
+	Root     string `long:"root" default:"/" description:"filesystem root used for hardware and identity probes"`
 }
 
 type wakeListCommand struct {

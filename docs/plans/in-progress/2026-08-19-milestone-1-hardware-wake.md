@@ -7,7 +7,7 @@
 **Started:** 2026-08-19
 **Completed:** not completed
 
-**Remaining work:** Tasks 20–25. Tasks 2–19 completed.
+**Remaining work:** Task 20 review remediation and Tasks 22–25. Tasks 2–21 completed.
 
 ## Objective
 
@@ -977,9 +977,48 @@ golangci-lint run ./internal/device/wake/...
 
 Expected: exit 0. `TestGate_RejectsHighWakeWithLowVAD` proves a 0.99 wake score with a 0.01 VAD score is rejected and increments the counter; `TestGate_AcceptsWhenWakeAndVADBothExceedThresholds`, `TestGate_IgnoresVADWhenDisabled`, `TestGate_RefractoryWindowSuppressesDuplicateWake`, `TestPipeline_EmitsEventWithConfiguredPreRollLength`, `TestPipeline_CountsRejectedHighWakeLowVADCandidates`, `TestPipeline_SilenceFixtureProducesNoWakeEvent`, `TestPipeline_RecordsInferenceTimings`, `TestPipeline_StopsOnContextCancel`, `TestStats_SnapshotReportsEverySection16Field` and `TestStats_TimingPercentilesAreOrdered` all pass.
 
-### Task 21: Diagnostics surface — `echoctl wake test`, `wake vad-test`, `status --json`
+#### Task 20 review remediation: Model-agnostic temporal alignment of wake and VAD scores
 
 **Status:** not started
+
+**Purpose:** Correct the same-step VAD assumption exposed by Task 21 diagnostics without special-casing `okay_nabu` or any phrase. Wake engines and trained classifiers can have different temporal receptive fields and score delays, so every active model/engine combination needs measured alignment.
+
+This supersedes Task 20's requirement that `Gate.Decide` compare a wake score only with the VAD score from the same PCM step.
+
+**Dependencies:** Tasks 20 and 21 diagnostic evidence. Must complete before Task 22 is considered verified and before Task 23 chooses production defaults.
+
+**Hardware required:** no for the generic rolling-window behavior and fixture regression; yes in Task 23 to select production values for supported models.
+
+**Files or components:**
+
+- Modify: `internal/device/wake/{config.go,gate.go,pipeline.go,stats.go,diag.go}` and corresponding tests
+- Modify: `cmd/echoctl/{config.go,wake.go,status.go}` and corresponding tests
+- Modify: `internal/device/wake/{model.go,store.go}` and tests only if the measured per-model value is persisted in sidecar metadata
+
+**Concrete changes:**
+
+- Evaluate a bounded `wake.vad.lookback-ms` setting as the leading implementation candidate. The pipeline would retain only the VAD scores/timestamps needed for that interval and supply the maximum recent score as effective VAD evidence. Compare it with other alignment strategies against the same false-accept/false-reject corpus before selecting the production rule. The raw audio ring and voice boundary remain unchanged.
+- Keep the gate model-agnostic: it receives an instantaneous VAD score for diagnostics and an effective recent score for acceptance; it never branches on model ID, phrase, language, or version.
+- Define and test precedence before implementation if per-model metadata is added: explicit diagnostic/config override, then measured model metadata, then a conservative engine default. Existing schema-v1 sidecars remain valid; any new metadata field is optional and strictly validated.
+- Extend `Stats.Snapshot()` and event output with the instantaneous VAD score, effective VAD score, and configured lookback. Preserve `rejected_high_wake_low_vad_count`, but base it on the effective score actually used by the gate.
+- Correct file-backed `echoctl wake test` timestamps to report audio position derived from frame offsets; wall processing time, when shown, has a distinct label. Measure CPU percentage across the diagnostic interval rather than emitting an unsampled zero; retain cumulative CPU time and RSS.
+- Do not select the production alignment rule or duration from the downloaded `okay_nabu` clip. Task 23 qualifies the complete wake/VAD pipeline configuration—wake engine/model, VAD implementation, PCM step geometry, and preprocessing—for each supported installed model, including newly trained models before promotion, across multiple speakers and room conditions. A configuration whose wake peaks cannot be aligned safely fails qualification rather than receiving phrase-specific code.
+
+**Expected outcome:** Any supported wake model can arrive after its corresponding speech step and still be gated by recent credible speech, while diagnostics show exactly which VAD evidence caused acceptance or rejection.
+
+**Verification:**
+
+```sh
+go test ./internal/device/wake -run 'TestGate|TestPipeline|TestStats' -v -race
+go test ./cmd/echoctl -run 'TestWake|TestStatus' -v -race
+golangci-lint run ./internal/device/wake/... ./cmd/echoctl/...
+```
+
+Expected: scripted tests prove a wake peak delayed beyond the final speech step is accepted inside the configured lookback and rejected outside it; models with different measured delays use the same gate logic; zero lookback preserves same-step behavior; snapshots expose instantaneous/effective VAD and lookback; file timestamps follow audio offsets; CPU percentage is sampled over the run.
+
+### Task 21: Diagnostics surface — `echoctl wake test`, `wake vad-test`, `status --json`
+
+**Status:** completed 2026-08-25
 
 **Purpose:** §25 task 5's `echoctl wake test` and VAD diagnostics, plus the machine-readable health snapshot §7.1 requires and Task 23 depends on.
 
@@ -1019,7 +1058,7 @@ Expected: the silence and noise fixtures produce **zero** wake events and print 
 
 **Purpose:** §24's criterion is that the Dot **repeatedly** detects the wake word, and §7.1 makes continuous capture and the wake pipeline `echod`'s responsibility. Failure modes that matter — ALSA overruns after minutes, RSS growth, CPU headroom, idle false triggers — appear only in a long-running daemon.
 
-**Dependencies:** Tasks 9, 13, 14, 20.
+**Dependencies:** Tasks 9, 13, 14, 20, and Task 20 review remediation.
 
 **Hardware required:** no to build and smoke-test with a file source; the real run is Task 23.
 
@@ -1062,9 +1101,9 @@ Expected: `echod` logs its resolved device ID, the wake configuration it will us
 - Create: `testdata/wake/recorded/okay_nabu_16k_mono.wav` — one short accepted utterance, at most 3 seconds, generator-exempt and documented as such
 - Modify: `internal/device/wake/config.go` (`Defaults()` set to the measured thresholds and pre-roll) and `internal/device/audio/alsa/config.go` only if measurement requires
 
-**Concrete changes:** Run a scripted measurement session and record in `docs/device-diagnostics.md` every §26 answer this milestone owns: the chosen mic channel; the measured wake and VAD thresholds with their false-accept and false-reject counts in both room conditions; the pre-roll length that avoids clipping without carrying the wake phrase; per-step wake and VAD inference times and total CPU and RSS while idle; whether `AlwaysScoreWake` can remain true within the CPU budget; whether the mute key gates capture in hardware; and the default model choice. Only then set `wake.Config.Defaults()` to the measured values, replacing the §16 placeholders.
+**Concrete changes:** Run a scripted measurement session and record in `docs/device-diagnostics.md` every §26 answer this milestone owns: the chosen mic channel; the measured wake and VAD thresholds with their false-accept and false-reject counts in both room conditions; the per-model/engine delay between instantaneous VAD activity and the wake-score peak, with the smallest reliable VAD lookback that covers that delay; the pre-roll length that avoids clipping without carrying the wake phrase; per-step wake and VAD inference times and total CPU and RSS while idle; whether `AlwaysScoreWake` can remain true within the CPU budget; whether the mute key gates capture in hardware; and the default model choice. Repeat the alignment measurement for every model proposed as supported, including newly trained models before promotion. Only then set `wake.Config.Defaults()` and any model metadata to the measured values, replacing the §16 placeholders.
 
-**Expected outcome:** The Dot repeatedly detects `okay_nabu` locally with observable wake and VAD scores, no gateway involved, and every threshold in the code is a measured value rather than a guess.
+**Expected outcome:** The Dot repeatedly detects the milestone-default `okay_nabu` model locally with observable wake and VAD scores and no gateway involved. Every threshold and alignment setting in the default pipeline is measured rather than guessed. Any additional bundled or newly trained model proposed as supported has its own recorded alignment, threshold, false-accept, and false-reject qualification results before promotion; it uses the same model-agnostic gate implementation.
 
 **Verification:**
 
@@ -1117,6 +1156,7 @@ Expected, each an explicit recorded observation:
 - **D** — the pulled pre-roll WAVs let a human hear where the wake phrase ends; the chosen value keeps the first command word intact without carrying the whole phrase.
 - **E** — mel and embedding outputs on arm64 match the committed reference vectors within the same tolerance CI uses, proving no platform-specific numeric drift.
 - **F** — over 30 minutes at least 18 of 20 utterances are accepted, there are **zero** wake events during the 15 idle minutes, no ALSA overrun log growth, RSS flat within 10% between `status-before.json` and `status-after.json`, CPU below the Task 17 budget, and the rotated log never exceeds `--log-max-bytes`.
+- **Model qualification** — repeat the aligned trace and threshold corpus for every additional model proposed as supported, including newly trained models. Record its complete pipeline configuration, wake/VAD alignment distribution, chosen setting, false accepts, and false rejects before promotion. `okay_nabu` remains the milestone-default success-criterion model, not a code-path special case.
 
 **What cannot be verified without hardware:** all of A through F. The fixture-based tests in Tasks 16 through 22 prove the arithmetic and the gate logic; they say nothing about real-room false accepts or rejects, arm64 numeric agreement, CPU headroom, or long-run stability. **This task is not complete because a fixture run passed.**
 
@@ -1252,6 +1292,10 @@ Two device-state caveats: `speaker test` changes `Ext_Speaker_Amp_Switch` and mu
 
 ## Progress log
 
+- 2026-08-25: Task 21 local operator verification passed with the vetted installed model store: silence and noise produced zero accepted wakes, VAD silence diagnostics passed, and `status --json` was valid and complete. An additional untracked YouTube-derived `okay_nabu` clip exposed a model-agnostic temporal-alignment defect rather than a classifier failure. With the left channel preserved and one second of silence prepended, instantaneous VAD was high from audio positions 2.48–3.20 s, while the wake score first exceeded 0.5 at 3.68 s and peaked at 0.9412 at 3.76 s after VAD had returned to zero. The enabled gate rejected four high-wake candidates; the identical run with VAD disabled accepted one event at wake score 0.7632. This demonstrates that same-step VAD gating is invalid for an engine/model whose score reflects an earlier receptive field. Added the Task 20 review-remediation requirement for a bounded recent-VAD lookback, explicitly generic across bundled and newly trained models, plus aligned per-model qualification in Task 23. Also recorded two diagnostic defects: file replay labeled fast wall-processing time (`157ms`) as elapsed instead of the 3.68 s audio position, and CPU percentage was emitted without interval sampling. The downloaded clip remains untracked and is not accepted as a repository fixture because its redistribution provenance is unsuitable; Task 23 records a short project-owned microphone capture instead.
+
+- 2026-08-25: Task 21 implementation and model-independent verification completed, but the task remains in progress because the required installed openWakeWord assets are not available in this workspace (`ECHO_WAKE_MODEL_DIR` is unset), so the two end-to-end `wake test` fixture commands could not run. Added file/live `wake test` and `wake vad-test`, opt-in pre-roll WAV capture, section 16 statistics plus CPU-time/RSS reporting, and a JSON status snapshot covering identity, hardware probes, amplifier state, configured wake settings, verified model inventory, stats, and resources. `wake vad-test` on the silence fixture, `status --json | python3 -m json.tool`, focused race tests, `make fmt-check`, `make lint`, and `make test` passed. Fresh review reported missing wake step scores and a possible producer deadlock; both were eliminated by synchronous per-frame pipeline execution. It also found discarded CPU time, wall-clock output mislabeled as elapsed, and negative-duration acceptance; all were fixed. No findings were declined or postponed. Remaining verification: run the two documented `wake test` commands with a populated installed-model store, confirm zero events and the full statistics block, then mark Task 21 complete.
+
 - 2026-08-25: Task 20 completed. Added the deterministic local wake/VAD/refractory gate, bounded pre-roll pipeline, per-step multi-engine observation, stable section 16 diagnostics snapshot, mutex-guarded counters, and bounded rolling p50/p95/max inference timing. Invalid/non-finite scorer output fails explicitly, optional low-VAD short-circuiting does not pollute wake timing, and all engines finish inference before gate state is committed. Fresh-context review found non-finite score acceptance, unbounded timing retention, skipped-inference zero timings, multi-engine step overcounting, and a remediation ordering regression; all were fixed and the final re-review found no remaining issues. No findings were declined or postponed. Hardware was not required; real-room behavior remains Task 23.
 
 - 2026-08-25: Task 19 completed. Added strict schema-v1 wake sidecars, stable metadata validation, backend-independent wake/VAD configuration and protocol projection, a locked model store with digest-first local-only validation, TFLite shape-based kind detection, unsupported-op rejection, and `echoctl wake install|list`. The implementation deliberately strengthened the plan's publication detail: classifier and sidecar generations are immutable and full-digest-named, while atomic `index.json` replacement is the commit point, so overwrite cannot destroy the prior indexed generation on a crash or pre-commit failure. Two synthetic classifier fixtures cover supported and unsupported graphs without third-party weights. Fresh review found reserved-name collisions, non-transactional overwrite, a concurrent no-overwrite race, non-finite threshold acceptance, incomplete index path containment, and unsafe reuse of pre-existing generation files; all were fixed and the final re-review found no remaining issues. No findings were declined or postponed. Hardware verification does not apply; Tasks 23 and 24 own on-device installation and switching.
@@ -1304,6 +1348,8 @@ Two device-state caveats: `speaker test` changes `Ext_Speaker_Amp_Switch` and mu
 - 2026-08-21, Task 18: Added the portable `wake.Engine` contract and minimal `wake.Model` contract, moving the latter forward from Task 19 to resolve Task 18's circular dependency. Implemented the openWakeWord shared mel/embedding stream, classifier ring and model-kind detection. Fresh review found missing scalar and float-input validation, shared-model input validation, obscured embedding preparation errors, and CI coverage gaps; all were fixed. A 12 KiB synthetic embedding fixture with time carry and zero-weight in-memory mel model now cover streaming scale/offset, lookback and reset in CI; real model compatibility remains an explicit supplemental test. The CI-style `oww` package coverage is 60.5%; lower than the usual 70% guideline because `New`'s filesystem/TFLite classifier-loading paths can only be exercised by non-committed third-party model weights, and the real-model run below exercises them. No findings were declined or postponed.
 
 ## Completion evidence
+
+- 2026-08-25, Task 21: Operator-reported local verification with the vetted `.assets/device-wake-models` store passed: `wake test` on `silence_16k_mono.wav` with per-step output, `wake test` on `noise_16k_mono.wav`, `wake vad-test` on silence, and `status --json | python3 -m json.tool`. Silence and noise produced zero accepted wakes, the model inventory and full §16 statistics were present, and JSON was valid. During implementation, `go test -race ./cmd/echoctl/... -count=1`, `make fmt-check`, `make lint`, and `make test` passed; final `cmd/echoctl` race-enabled statement coverage was 67.3%. Fresh review's five findings were fixed: per-step wake/VAD scores, error-safe pipeline orchestration, CPU-time reporting, true elapsed labeling for accepted events, and negative-duration rejection. A later exploratory phrase clip exposed separate temporal-alignment, file-audio-timestamp, and interval-CPU findings now owned by Task 20 review remediation; they do not invalidate Task 21's original verification outcome. No hardware verification ran or was required.
 
 - 2026-08-25, Task 20: `go test ./internal/device/wake -run 'TestGate|TestPipeline|TestStats' -v -race`; `go test -race ./internal/device/wake/...`; `golangci-lint run ./internal/device/wake/...`; `make fmt-check`; `make lint`; and `make test` all passed. Race-enabled `internal/device/wake` statement coverage was 81.4%; the new gate and stats paths are fully covered, `Pipeline.Run` is fully covered, and pipeline step processing is covered above 95%. Fresh review and two remediation re-reviews resolved every finding; none were declined or postponed. No hardware verification applied.
 

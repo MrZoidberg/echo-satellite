@@ -1363,10 +1363,31 @@ wake:
   vad:
     enabled: true
     threshold: 0.50   # example only; tune on real device
+    lookback_ms: 0    # same-step diagnostic baseline; qualify a nonzero production value
   preroll_ms: 250
 ```
 
 There is deliberately no gateway wake mode.
+
+Wake and VAD scores must not be assumed to be temporally aligned on the same PCM
+step. A wake engine may score a temporal receptive field and emit its peak only
+after speech has ended. The leading remediation candidate is for the acceptance
+gate to use the maximum recent VAD score from a bounded, configurable lookback
+window rather than only the instantaneous VAD score. It must be compared against
+other alignment strategies using false-accept and false-reject measurements
+before becoming the production rule. Every candidate remains entirely
+device-local.
+
+Any alignment setting is a property of the qualified wake/VAD pipeline
+configuration, not of a particular phrase. Qualification identifies at least
+the wake engine and model, VAD implementation, PCM step geometry, and
+preprocessing configuration, and covers relevant speakers and acoustic
+conditions. It must be measured from aligned per-step traces for every supported
+bundled or newly trained model. Configuration may override the qualified value
+for diagnostics, but production defaults must come from recorded measurements
+rather than a phrase-specific constant. Diagnostics report both instantaneous
+VAD and the effective aligned VAD evidence used by the gate, plus the alignment
+configuration, so a rejection can be explained without storing raw audio.
 
 ### Wake model distribution
 
@@ -1387,8 +1408,10 @@ trained language metadata
 wake threshold
 wake VAD enabled/disabled
 wake VAD threshold
+configured VAD lookback
 last wake score
-last VAD score
+last instantaneous VAD score
+last effective VAD score used by the gate
 wake count
 rejected high-wake/low-VAD candidate count
 false-trigger test recordings (opt-in)
