@@ -946,7 +946,7 @@ Expected: the first install succeeds and `wake list` shows `okay_nabu` with kind
 
 ### Task 20: Accept gate, pipeline and the §16 diagnostics
 
-**Status:** not started
+**Status:** completed 2026-08-25
 
 **Purpose:** §16's accept rule, pre-roll and full diagnostics list. This is where the wake vertical slice becomes one runnable thing.
 
@@ -1252,6 +1252,8 @@ Two device-state caveats: `speaker test` changes `Ext_Speaker_Amp_Switch` and mu
 
 ## Progress log
 
+- 2026-08-25: Task 20 completed. Added the deterministic local wake/VAD/refractory gate, bounded pre-roll pipeline, per-step multi-engine observation, stable section 16 diagnostics snapshot, mutex-guarded counters, and bounded rolling p50/p95/max inference timing. Invalid/non-finite scorer output fails explicitly, optional low-VAD short-circuiting does not pollute wake timing, and all engines finish inference before gate state is committed. Fresh-context review found non-finite score acceptance, unbounded timing retention, skipped-inference zero timings, multi-engine step overcounting, and a remediation ordering regression; all were fixed and the final re-review found no remaining issues. No findings were declined or postponed. Hardware was not required; real-room behavior remains Task 23.
+
 - 2026-08-25: Task 19 completed. Added strict schema-v1 wake sidecars, stable metadata validation, backend-independent wake/VAD configuration and protocol projection, a locked model store with digest-first local-only validation, TFLite shape-based kind detection, unsupported-op rejection, and `echoctl wake install|list`. The implementation deliberately strengthened the plan's publication detail: classifier and sidecar generations are immutable and full-digest-named, while atomic `index.json` replacement is the commit point, so overwrite cannot destroy the prior indexed generation on a crash or pre-commit failure. Two synthetic classifier fixtures cover supported and unsupported graphs without third-party weights. Fresh review found reserved-name collisions, non-transactional overwrite, a concurrent no-overwrite race, non-finite threshold acceptance, incomplete index path containment, and unsafe reuse of pre-existing generation files; all were fixed and the final re-review found no remaining issues. No findings were declined or postponed. Hardware verification does not apply; Tasks 23 and 24 own on-device installation and switching.
 
 - 2026-08-20: Task 16 claimed for inline implementation. Scope is confined to `internal/device/wake/tflite`, generated synthetic TFLite fixtures, committed reference vectors and attribution, third-party notices, and this plan document. The interpreter is adapted from EchoLocal commit `be6b0b00d7d5d765d859b3cbe0e19e127a0c2031`.
@@ -1302,6 +1304,8 @@ Two device-state caveats: `speaker test` changes `Ext_Speaker_Amp_Switch` and mu
 - 2026-08-21, Task 18: Added the portable `wake.Engine` contract and minimal `wake.Model` contract, moving the latter forward from Task 19 to resolve Task 18's circular dependency. Implemented the openWakeWord shared mel/embedding stream, classifier ring and model-kind detection. Fresh review found missing scalar and float-input validation, shared-model input validation, obscured embedding preparation errors, and CI coverage gaps; all were fixed. A 12 KiB synthetic embedding fixture with time carry and zero-weight in-memory mel model now cover streaming scale/offset, lookback and reset in CI; real model compatibility remains an explicit supplemental test. The CI-style `oww` package coverage is 60.5%; lower than the usual 70% guideline because `New`'s filesystem/TFLite classifier-loading paths can only be exercised by non-committed third-party model weights, and the real-model run below exercises them. No findings were declined or postponed.
 
 ## Completion evidence
+
+- 2026-08-25, Task 20: `go test ./internal/device/wake -run 'TestGate|TestPipeline|TestStats' -v -race`; `go test -race ./internal/device/wake/...`; `golangci-lint run ./internal/device/wake/...`; `make fmt-check`; `make lint`; and `make test` all passed. Race-enabled `internal/device/wake` statement coverage was 81.4%; the new gate and stats paths are fully covered, `Pipeline.Run` is fully covered, and pipeline step processing is covered above 95%. Fresh review and two remediation re-reviews resolved every finding; none were declined or postponed. No hardware verification applied.
 
 To be filled in during execution: the exact commands from each task's Verification block, their outcomes, and the date, with hardware and non-hardware checks recorded separately per `docs/plans/README.md`.
 
