@@ -10,14 +10,14 @@ import (
 func TestStats_SnapshotReportsEverySection16Field(t *testing.T) {
 	stats := NewStats(StatsConfig{
 		ActiveModelID: "okay_nabu", ModelKind: KindOpenWakeWord, Languages: []string{"en"},
-		Thresholds: Thresholds{Wake: 0.8, VAD: 0.5}, VADEnabled: true,
+		Thresholds: Thresholds{Wake: 0.8, VAD: 0.5}, VADEnabled: true, VADLookbackMS: 160,
 	})
 	stats.Observe(Observation{
-		VADScore: 0.01, VADElapsed: time.Millisecond,
+		InstantVADScore: 0.01, EffectiveVADScore: 0.6, VADElapsed: time.Millisecond,
 		Candidates: []CandidateObservation{{WakeScore: 0.99, Decision: DecisionRejectedLowVAD, WakeElapsed: 3 * time.Millisecond, Measured: true}},
 	})
 	stats.Observe(Observation{
-		VADScore: 0.8, VADElapsed: 2 * time.Millisecond,
+		InstantVADScore: 0.8, EffectiveVADScore: 0.9, VADElapsed: 2 * time.Millisecond,
 		Candidates: []CandidateObservation{{WakeScore: 0.9, Decision: DecisionAccepted, WakeElapsed: 5 * time.Millisecond, Measured: true}},
 	})
 	stats.SetFramesDropped(7)
@@ -29,8 +29,10 @@ func TestStats_SnapshotReportsEverySection16Field(t *testing.T) {
 	assert.InDelta(t, 0.8, snapshot.WakeThreshold, 0)
 	assert.True(t, snapshot.VADEnabled)
 	assert.InDelta(t, 0.5, snapshot.VADThreshold, 0)
+	assert.Equal(t, 160, snapshot.VADLookbackMS)
 	assert.InDelta(t, 0.9, snapshot.LastWakeScore, 0)
-	assert.InDelta(t, 0.8, snapshot.LastVADScore, 0)
+	assert.InDelta(t, 0.8, snapshot.LastInstantVADScore, 0)
+	assert.InDelta(t, 0.9, snapshot.LastEffectiveVADScore, 0)
 	assert.InDelta(t, 0.99, snapshot.MaxWakeScore, 0)
 	assert.Equal(t, uint64(1), snapshot.WakeCount)
 	assert.Equal(t, uint64(1), snapshot.RejectedLowVAD)

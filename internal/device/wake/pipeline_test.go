@@ -62,7 +62,38 @@ func TestPipeline_EmitsEventWithConfiguredPreRollLength(t *testing.T) {
 	assert.Equal(t, "model", event.ModelID)
 	assert.Len(t, event.PreRoll, 1600)
 	assert.InDelta(t, 0.9, event.WakeScore, 0)
-	assert.InDelta(t, 0.9, event.VADScore, 0)
+	assert.InDelta(t, 0.9, event.InstantVADScore, 0)
+	assert.InDelta(t, 0.9, event.EffectiveVADScore, 0)
+}
+
+func TestPipeline_AcceptsDelayedWakeInsideVADLookback(t *testing.T) {
+	pipeline, frames, events := newTestPipeline(t, []float64{0.1, 0.1, 0.9}, []float64{0.9, 0.1, 0.1}, 0)
+	pipeline.Config.VAD.LookbackMS = 160
+	frames <- audio.Frame{Samples: make([]int16, StepSamples*3)}
+	close(frames)
+	require.NoError(t, pipeline.Run(context.Background(), frameSourceStub{frames}, events))
+	event := <-events
+	assert.InDelta(t, 0.1, event.InstantVADScore, 0)
+	assert.InDelta(t, 0.9, event.EffectiveVADScore, 0)
+	assert.Equal(t, 160, event.VADLookbackMS)
+}
+
+func TestPipeline_RejectsDelayedWakeOutsideVADLookback(t *testing.T) {
+	pipeline, frames, events := newTestPipeline(t, []float64{0.1, 0.1, 0.9}, []float64{0.9, 0.1, 0.1}, 0)
+	pipeline.Config.VAD.LookbackMS = 80
+	frames <- audio.Frame{Samples: make([]int16, StepSamples*3)}
+	close(frames)
+	require.NoError(t, pipeline.Run(context.Background(), frameSourceStub{frames}, events))
+	assert.Empty(t, events)
+	assert.Equal(t, uint64(1), pipeline.Stats.Snapshot().RejectedLowVAD)
+}
+
+func TestPipeline_ZeroLookbackPreservesSameStepVAD(t *testing.T) {
+	pipeline, frames, events := newTestPipeline(t, []float64{0.1, 0.9}, []float64{0.9, 0.1}, 0)
+	frames <- audio.Frame{Samples: make([]int16, StepSamples*2)}
+	close(frames)
+	require.NoError(t, pipeline.Run(context.Background(), frameSourceStub{frames}, events))
+	assert.Empty(t, events)
 }
 
 func TestPipeline_CountsRejectedHighWakeLowVADCandidates(t *testing.T) {
@@ -109,6 +140,31 @@ func TestPipeline_ShortCircuitsWakeWhenConfigured(t *testing.T) {
 	require.NoError(t, pipeline.Run(context.Background(), frameSourceStub{frames}, events))
 	assert.Zero(t, pipeline.Engines[0].(*engineStub).calls)
 	assert.Equal(t, TimingSnapshot{}, pipeline.Stats.Snapshot().WakeInference)
+}
+
+func TestPipeline_LowCPUScoringUsesEffectiveVADInsideLookback(t *testing.T) {
+	pipeline, frames, events := newTestPipeline(t, []float64{0.1, 0.1, 0.9}, []float64{0.9, 0.1, 0.1}, 0)
+	pipeline.Config.AlwaysScoreWake = false
+	pipeline.Config.VAD.LookbackMS = 160
+	frames <- audio.Frame{Samples: make([]int16, StepSamples*3)}
+	close(frames)
+
+	require.NoError(t, pipeline.Run(context.Background(), frameSourceStub{frames}, events))
+	assert.Equal(t, 3, pipeline.Engines[0].(*engineStub).calls)
+	require.Len(t, events, 1)
+	assert.InDelta(t, 0.9, (<-events).EffectiveVADScore, 0)
+}
+
+func TestPipeline_LowCPUScoringStopsOutsideEffectiveVADLookback(t *testing.T) {
+	pipeline, frames, events := newTestPipeline(t, []float64{0.1, 0.1}, []float64{0.9, 0.1, 0.1}, 0)
+	pipeline.Config.AlwaysScoreWake = false
+	pipeline.Config.VAD.LookbackMS = 80
+	frames <- audio.Frame{Samples: make([]int16, StepSamples*3)}
+	close(frames)
+
+	require.NoError(t, pipeline.Run(context.Background(), frameSourceStub{frames}, events))
+	assert.Equal(t, 2, pipeline.Engines[0].(*engineStub).calls)
+	assert.Empty(t, events)
 }
 
 func TestPipeline_MultipleEnginesCountOneStepAndOneVADTiming(t *testing.T) {

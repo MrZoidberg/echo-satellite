@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/MrZoidberg/echo-satellite/internal/device/audio"
+	"github.com/MrZoidberg/echo-satellite/internal/device/system"
 	"github.com/MrZoidberg/echo-satellite/internal/device/wake"
 	"github.com/MrZoidberg/echo-satellite/internal/device/wake/oww"
 	"github.com/MrZoidberg/echo-satellite/internal/device/wake/vadlevel"
@@ -73,8 +74,8 @@ type diagnosticFrames struct{ frames chan audio.Frame }
 func (s diagnosticFrames) Frames() <-chan audio.Frame { return s.frames }
 
 func wakeTest(w io.Writer, command wakeTestCommand) error {
-	if command.Threshold < 0 || command.Threshold > 1 || command.VADThreshold < 0 || command.VADThreshold > 1 || command.PreRollMS < 0 {
-		return errors.New("wake thresholds must be in [0,1] and pre-roll must not be negative")
+	if command.Threshold < 0 || command.Threshold > 1 || command.VADThreshold < 0 || command.VADThreshold > 1 || command.PreRollMS < 0 || command.VADLookbackMS < 0 || command.VADLookbackMS > wake.MaxVADLookbackMS {
+		return fmt.Errorf("wake thresholds must be in [0,1], durations non-negative, and VAD lookback at most %dms", wake.MaxVADLookbackMS)
 	}
 	if command.Seconds < 0 {
 		return errors.New("wake diagnostic duration must not be negative")
@@ -104,8 +105,9 @@ func wakeTest(w io.Writer, command wakeTestCommand) error {
 	config.Threshold = command.Threshold
 	config.VAD.Enabled = !command.NoVAD
 	config.VAD.Threshold = command.VADThreshold
+	config.VAD.LookbackMS = command.VADLookbackMS
 	config.PreRollMS = command.PreRollMS
-	stats := wake.NewStats(wake.StatsConfig{ActiveModelID: model.ID, ModelKind: model.Kind, Languages: model.Languages, Thresholds: wake.Thresholds{Wake: command.Threshold, VAD: command.VADThreshold}, VADEnabled: !command.NoVAD})
+	stats := wake.NewStats(wake.StatsConfig{ActiveModelID: model.ID, ModelKind: model.Kind, Languages: model.Languages, Thresholds: wake.Thresholds{Wake: command.Threshold, VAD: command.VADThreshold}, VADEnabled: !command.NoVAD, VADLookbackMS: command.VADLookbackMS})
 	ring, err := audio.NewRing(audio.Format{SampleRate: wake.SampleRate, Channels: 1, Layout: audio.LayoutS16LE}, time.Duration(command.PreRollMS)*time.Millisecond)
 	if err != nil {
 		return fmt.Errorf("create pre-roll ring: %w", err)
@@ -116,6 +118,10 @@ func wakeTest(w io.Writer, command wakeTestCommand) error {
 
 func runWakeDiagnostic(w io.Writer, input wakeInputOptions, pipeline wake.Pipeline, stats *wake.Stats, saveDir string) error {
 	started := time.Now()
+	usageBefore, err := system.ReadUsage("/proc/self")
+	if err != nil {
+		return fmt.Errorf("read initial resource usage: %w", err)
+	}
 	source, channels, err := openWakeSource(input.FromFile)
 	if err != nil {
 		return fmt.Errorf("create wake capturer: %w", err)
@@ -142,7 +148,7 @@ func runWakeDiagnostic(w io.Writer, input wakeInputOptions, pipeline wake.Pipeli
 		}
 		if input.PrintSteps {
 			snapshot := stats.Snapshot()
-			if _, writeErr := fmt.Fprintf(w, "step time=%.3fs wake=%.4f vad=%.4f\n", float64(frame.Offset)/audio.CanonicalSampleRate, snapshot.LastWakeScore, snapshot.LastVADScore); writeErr != nil {
+			if _, writeErr := fmt.Fprintf(w, "step audio_time=%.3fs wake=%.4f vad_instant=%.4f vad_effective=%.4f\n", float64(frame.Offset)/audio.CanonicalSampleRate, snapshot.LastWakeScore, snapshot.LastInstantVADScore, snapshot.LastEffectiveVADScore); writeErr != nil {
 				return fmt.Errorf("write wake step: %w", writeErr)
 			}
 		}
@@ -152,7 +158,7 @@ func runWakeDiagnostic(w io.Writer, input wakeInputOptions, pipeline wake.Pipeli
 		return fmt.Errorf("capture wake audio: %w", captureErr)
 	}
 	for _, event := range accepted {
-		if _, err = fmt.Fprintf(w, "wake model=%s wake=%.4f vad=%.4f elapsed=%s preroll_samples=%d\n", event.ModelID, event.WakeScore, event.VADScore, event.At.Sub(started).Round(time.Millisecond), len(event.PreRoll)); err != nil {
+		if _, err = fmt.Fprintf(w, "wake model=%s wake=%.4f vad_instant=%.4f vad_effective=%.4f vad_lookback_ms=%d audio_time=%s processing_elapsed=%s preroll_samples=%d\n", event.ModelID, event.WakeScore, event.InstantVADScore, event.EffectiveVADScore, event.VADLookbackMS, event.AudioPosition, event.At.Sub(started).Round(time.Millisecond), len(event.PreRoll)); err != nil {
 			return fmt.Errorf("write wake event: %w", err)
 		}
 		if saveDir != "" {
@@ -165,6 +171,10 @@ func runWakeDiagnostic(w io.Writer, input wakeInputOptions, pipeline wake.Pipeli
 	if err != nil {
 		return err
 	}
+	usageAfter := system.Usage{CPUTime: time.Duration(usage.CPUTimeMS * float64(time.Millisecond)), RSSBytes: usage.RSSBytes}
+	var sampler system.Sampler
+	_ = sampler.CPUPercent(usageBefore, started)
+	usage.CPUPercent = sampler.CPUPercent(usageAfter, time.Now())
 	return writeWakeSummary(w, stats.Snapshot(), usage)
 }
 

@@ -98,12 +98,13 @@ func TestParseArgs_Commands(t *testing.T) {
 	})
 
 	t.Run("wake diagnostics", func(t *testing.T) {
-		o, command, err := parseArgs([]string{"wake", "test", "--from-file=silence.wav", "--model=hey", "--threshold=.8", "--vad-threshold=.4", "--no-vad", "--preroll-ms=320", "--save-preroll=/tmp/preroll"})
+		o, command, err := parseArgs([]string{"wake", "test", "--from-file=silence.wav", "--model=hey", "--threshold=.8", "--vad-threshold=.4", "--vad-lookback-ms=160", "--no-vad", "--preroll-ms=320", "--save-preroll=/tmp/preroll"})
 		require.NoError(t, err)
 		assert.Equal(t, "wake test", command)
 		assert.Equal(t, "hey", o.Wake.Test.Model)
 		assert.True(t, o.Wake.Test.NoVAD)
 		assert.Equal(t, 320, o.Wake.Test.PreRollMS)
+		assert.Equal(t, 160, o.Wake.Test.VADLookbackMS)
 
 		o, command, err = parseArgs([]string{"wake", "vad-test", "--from-file=silence.wav", "--print-steps"})
 		require.NoError(t, err)

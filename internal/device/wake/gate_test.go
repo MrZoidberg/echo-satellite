@@ -10,19 +10,19 @@ import (
 
 func TestGate_RejectsHighWakeWithLowVAD(t *testing.T) {
 	gate := Gate{Thresholds: Thresholds{Wake: 0.8, VAD: 0.5}}
-	decision := gate.Decide(Candidate{WakeScore: 0.99, VADScore: 0.01, VADEnabled: true, At: time.Unix(1, 0)})
+	decision := gate.Decide(Candidate{WakeScore: 0.99, InstantVADScore: 0.01, EffectiveVADScore: 0.01, VADEnabled: true, At: time.Unix(1, 0)})
 	assert.Equal(t, DecisionRejectedLowVAD, decision)
 }
 
 func TestGate_AcceptsWhenWakeAndVADBothExceedThresholds(t *testing.T) {
 	gate := Gate{Thresholds: Thresholds{Wake: 0.8, VAD: 0.5}}
-	decision := gate.Decide(Candidate{WakeScore: 0.8, VADScore: 0.5, VADEnabled: true, At: time.Unix(1, 0)})
+	decision := gate.Decide(Candidate{WakeScore: 0.8, InstantVADScore: 0.1, EffectiveVADScore: 0.5, VADEnabled: true, At: time.Unix(1, 0)})
 	assert.Equal(t, DecisionAccepted, decision)
 }
 
 func TestGate_IgnoresVADWhenDisabled(t *testing.T) {
 	gate := Gate{Thresholds: Thresholds{Wake: 0.8, VAD: 0.5}}
-	decision := gate.Decide(Candidate{WakeScore: 0.9, VADScore: 0, At: time.Unix(1, 0)})
+	decision := gate.Decide(Candidate{WakeScore: 0.9, At: time.Unix(1, 0)})
 	assert.Equal(t, DecisionAccepted, decision)
 }
 
@@ -44,6 +44,6 @@ func TestGate_RejectsNonFiniteScores(t *testing.T) {
 	assert.Equal(t, DecisionBelowWake, gate.Decide(Candidate{WakeScore: math.NaN()}))
 	assert.Equal(t, DecisionBelowWake, gate.Decide(Candidate{WakeScore: math.Inf(1)}))
 	assert.Equal(t, DecisionRejectedLowVAD, gate.Decide(Candidate{
-		WakeScore: 0.9, VADScore: math.NaN(), VADEnabled: true,
+		WakeScore: 0.9, EffectiveVADScore: math.NaN(), VADEnabled: true,
 	}))
 }

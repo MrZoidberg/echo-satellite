@@ -46,6 +46,7 @@ type wakeConfigStatus struct {
 	Threshold       float64 `json:"threshold"`
 	VADEnabled      bool    `json:"vad_enabled"`
 	VADThreshold    float64 `json:"vad_threshold"`
+	VADLookbackMS   int     `json:"vad_lookback_ms"`
 	PreRollMS       int     `json:"preroll_ms"`
 	MinIntervalMS   int     `json:"min_interval_ms"`
 	AlwaysScoreWake bool    `json:"always_score_wake"`
@@ -82,7 +83,7 @@ func deviceStatus(w io.Writer, c statusCommand) error {
 			break
 		}
 	}
-	stats := wake.NewStats(wake.StatsConfig{ActiveModelID: config.Model, ModelKind: active.Kind, Languages: active.Languages, Thresholds: wake.Thresholds{Wake: config.Threshold, VAD: config.VAD.Threshold}, VADEnabled: config.VAD.Enabled}).Snapshot()
+	stats := wake.NewStats(wake.StatsConfig{ActiveModelID: config.Model, ModelKind: active.Kind, Languages: active.Languages, Thresholds: wake.Thresholds{Wake: config.Threshold, VAD: config.VAD.Threshold}, VADEnabled: config.VAD.Enabled, VADLookbackMS: config.VAD.LookbackMS}).Snapshot()
 	usage, err := systemUsage()
 	if err != nil {
 		return err
@@ -108,7 +109,7 @@ func modelSnapshots(models []wake.Model) []modelStatus {
 }
 
 func wakeConfigSnapshot(config wake.Config) wakeConfigStatus {
-	return wakeConfigStatus{Enabled: config.Enabled, Engine: config.Engine, Model: config.Model, Threshold: config.Threshold, VADEnabled: config.VAD.Enabled, VADThreshold: config.VAD.Threshold, PreRollMS: config.PreRollMS, MinIntervalMS: config.MinIntervalMS, AlwaysScoreWake: config.AlwaysScoreWake}
+	return wakeConfigStatus{Enabled: config.Enabled, Engine: config.Engine, Model: config.Model, Threshold: config.Threshold, VADEnabled: config.VAD.Enabled, VADThreshold: config.VAD.Threshold, VADLookbackMS: config.VAD.LookbackMS, PreRollMS: config.PreRollMS, MinIntervalMS: config.MinIntervalMS, AlwaysScoreWake: config.AlwaysScoreWake}
 }
 
 func systemUsage() (resourceStatus, error) {

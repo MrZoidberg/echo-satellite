@@ -11,11 +11,12 @@ type Thresholds struct {
 }
 
 type Candidate struct {
-	ModelID    string
-	WakeScore  float64
-	VADScore   float64
-	VADEnabled bool
-	At         time.Time
+	ModelID           string
+	WakeScore         float64
+	InstantVADScore   float64
+	EffectiveVADScore float64
+	VADEnabled        bool
+	At                time.Time
 }
 
 type Decision uint8
@@ -39,7 +40,7 @@ func (g *Gate) Decide(candidate Candidate) Decision {
 	if !finite(candidate.WakeScore) || candidate.WakeScore < g.Thresholds.Wake {
 		return DecisionBelowWake
 	}
-	if candidate.VADEnabled && (!finite(candidate.VADScore) || candidate.VADScore < g.Thresholds.VAD) {
+	if candidate.VADEnabled && (!finite(candidate.EffectiveVADScore) || candidate.EffectiveVADScore < g.Thresholds.VAD) {
 		return DecisionRejectedLowVAD
 	}
 	if !g.lastAccepted.IsZero() && candidate.At.Sub(g.lastAccepted) < g.MinInterval {

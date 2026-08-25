@@ -19,21 +19,26 @@ type FrameSource interface {
 }
 
 type Event struct {
-	ModelID   string
-	WakeScore float64
-	VADScore  float64
-	PreRoll   []int16
-	At        time.Time
+	ModelID           string
+	WakeScore         float64
+	InstantVADScore   float64
+	EffectiveVADScore float64
+	VADLookbackMS     int
+	AudioPosition     time.Duration
+	PreRoll           []int16
+	At                time.Time
 }
 
 type Pipeline struct {
-	Engines []Engine
-	VAD     VAD
-	Gate    Gate
-	Ring    *audio.Ring
-	Stats   *Stats
-	Config  Config
-	Now     func() time.Time
+	Engines          []Engine
+	VAD              VAD
+	Gate             Gate
+	Ring             *audio.Ring
+	Stats            *Stats
+	Config           Config
+	Now              func() time.Time
+	vadScores        []float64
+	samplesProcessed int64
 }
 
 func (p *Pipeline) Run(ctx context.Context, source FrameSource, events chan<- Event) error {
@@ -87,6 +92,9 @@ func (p *Pipeline) processStep(ctx context.Context, step []int16, events chan<- 
 	if !finite(vadScore) || vadScore < 0 || vadScore > 1 {
 		return fmt.Errorf("%w: VAD returned %.4g", ErrInvalidScore, vadScore)
 	}
+	effectiveVADScore := p.observeVAD(vadScore)
+	p.samplesProcessed += int64(len(step))
+	audioPosition := time.Duration(p.samplesProcessed) * time.Second / SampleRate
 	type scoredCandidate struct {
 		engine      Engine
 		wakeScore   float64
@@ -97,7 +105,7 @@ func (p *Pipeline) processStep(ctx context.Context, step []int16, events chan<- 
 	scored := make([]scoredCandidate, 0, len(p.Engines))
 	for _, engine := range p.Engines {
 		candidate := scoredCandidate{engine: engine, observedAt: p.Now()}
-		if p.Config.AlwaysScoreWake || !p.Config.VAD.Enabled || vadScore >= p.Gate.Thresholds.VAD {
+		if p.Config.AlwaysScoreWake || !p.Config.VAD.Enabled || effectiveVADScore >= p.Gate.Thresholds.VAD {
 			candidate.measured = true
 			wakeStarted := time.Now()
 			candidate.wakeScore, err = engine.Score(step)
@@ -112,13 +120,14 @@ func (p *Pipeline) processStep(ctx context.Context, step []int16, events chan<- 
 		scored = append(scored, candidate)
 	}
 
-	observation := Observation{VADScore: vadScore, VADElapsed: vadElapsed}
+	observation := Observation{InstantVADScore: vadScore, EffectiveVADScore: effectiveVADScore, VADElapsed: vadElapsed}
 	accepted := make([]Event, 0, len(p.Engines))
 	for _, candidate := range scored {
 		decision := DecisionBelowWake
 		if candidate.measured {
 			decision = p.Gate.Decide(Candidate{
-				ModelID: candidate.engine.ID(), WakeScore: candidate.wakeScore, VADScore: vadScore,
+				ModelID: candidate.engine.ID(), WakeScore: candidate.wakeScore,
+				InstantVADScore: vadScore, EffectiveVADScore: effectiveVADScore,
 				VADEnabled: p.Config.VAD.Enabled, At: candidate.observedAt,
 			})
 		}
@@ -128,7 +137,9 @@ func (p *Pipeline) processStep(ctx context.Context, step []int16, events chan<- 
 		})
 		if decision == DecisionAccepted {
 			accepted = append(accepted, Event{
-				ModelID: candidate.engine.ID(), WakeScore: candidate.wakeScore, VADScore: vadScore,
+				ModelID: candidate.engine.ID(), WakeScore: candidate.wakeScore,
+				InstantVADScore: vadScore, EffectiveVADScore: effectiveVADScore,
+				VADLookbackMS: p.Config.VAD.LookbackMS, AudioPosition: audioPosition,
 				PreRoll: p.Ring.Tail(time.Duration(p.Config.PreRollMS) * time.Millisecond), At: candidate.observedAt,
 			})
 		}
@@ -143,3 +154,22 @@ func (p *Pipeline) processStep(ctx context.Context, step []int16, events chan<- 
 	}
 	return nil
 }
+
+func (p *Pipeline) observeVAD(score float64) float64 {
+	// The current step is always retained. Additional entries cover every prior
+	// complete 80 ms step whose start falls inside the configured lookback.
+	priorSteps := p.Config.VAD.LookbackMS / stepMilliseconds
+	capacity := priorSteps + 1
+	p.vadScores = append(p.vadScores, score)
+	if len(p.vadScores) > capacity {
+		copy(p.vadScores, p.vadScores[len(p.vadScores)-capacity:])
+		p.vadScores = p.vadScores[:capacity]
+	}
+	effective := p.vadScores[0]
+	for _, recent := range p.vadScores[1:] {
+		effective = max(effective, recent)
+	}
+	return effective
+}
+
+const stepMilliseconds = StepSamples * 1000 / SampleRate

@@ -73,4 +73,5 @@ func TestWakeDiagnostics_RejectInvalidThresholds(t *testing.T) {
 	require.Error(t, wakeTest(io.Discard, wakeTestCommand{wakeInputOptions: wakeInputOptions{Threshold: -1}}))
 	require.Error(t, wakeVADTest(io.Discard, wakeVADTestCommand{wakeInputOptions: wakeInputOptions{Threshold: 0.5, Seconds: -1}}))
 	require.Error(t, wakeTest(io.Discard, wakeTestCommand{wakeInputOptions: wakeInputOptions{Threshold: 0.5, Seconds: -1}}))
+	require.Error(t, wakeTest(io.Discard, wakeTestCommand{wakeInputOptions: wakeInputOptions{Threshold: 0.5}, VADLookbackMS: -1}))
 }

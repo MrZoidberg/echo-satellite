@@ -13,12 +13,14 @@ type StatsConfig struct {
 	Languages     []string
 	Thresholds    Thresholds
 	VADEnabled    bool
+	VADLookbackMS int
 }
 
 type Observation struct {
-	VADScore   float64
-	VADElapsed time.Duration
-	Candidates []CandidateObservation
+	InstantVADScore   float64
+	EffectiveVADScore float64
+	VADElapsed        time.Duration
+	Candidates        []CandidateObservation
 }
 
 type CandidateObservation struct {
@@ -51,6 +53,7 @@ func NewStats(config StatsConfig) *Stats {
 		WakeThreshold: config.Thresholds.Wake,
 		VADEnabled:    config.VADEnabled,
 		VADThreshold:  config.Thresholds.VAD,
+		VADLookbackMS: config.VADLookbackMS,
 	}}
 }
 
@@ -58,7 +61,8 @@ func (s *Stats) Observe(observation Observation) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.snapshot.StepsProcessed++
-	s.snapshot.LastVADScore = observation.VADScore
+	s.snapshot.LastInstantVADScore = observation.InstantVADScore
+	s.snapshot.LastEffectiveVADScore = observation.EffectiveVADScore
 	s.vadTimings.add(observation.VADElapsed)
 	for _, candidate := range observation.Candidates {
 		if candidate.Measured {

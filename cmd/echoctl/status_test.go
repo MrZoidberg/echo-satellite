@@ -25,9 +25,11 @@ func TestStatus_JSONContainsEverySection16DiagnosticField(t *testing.T) {
 	assert.Equal(t, "dot-123", report["device_id"])
 	wakeReport := report["wake"].(map[string]any)
 	stats := wakeReport["stats"].(map[string]any)
-	for _, field := range []string{"active_model_id", "model_kind", "languages", "wake_threshold", "vad_enabled", "vad_threshold", "last_wake_score", "last_vad_score", "max_wake_score", "wake_count", "rejected_high_wake_low_vad_count", "steps_processed", "frames_dropped", "wake_inference", "vad_inference"} {
+	for _, field := range []string{"active_model_id", "model_kind", "languages", "wake_threshold", "vad_enabled", "vad_threshold", "vad_lookback_ms", "last_wake_score", "last_instantaneous_vad_score", "last_effective_vad_score", "max_wake_score", "wake_count", "rejected_high_wake_low_vad_count", "steps_processed", "frames_dropped", "wake_inference", "vad_inference"} {
 		assert.Contains(t, stats, field)
 	}
+	config := wakeReport["config"].(map[string]any)
+	assert.Contains(t, config, "vad_lookback_ms")
 	assert.Contains(t, report, "resources")
 	resources, ok := report["resources"].(map[string]any)
 	require.True(t, ok)

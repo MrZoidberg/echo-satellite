@@ -17,10 +17,25 @@ func TestConfig_DefaultsMatchDesignSection16(t *testing.T) {
 	assert.InDelta(t, 0.80, config.Threshold, 0.0001)
 	assert.True(t, config.VAD.Enabled)
 	assert.InDelta(t, 0.50, config.VAD.Threshold, 0.0001)
+	assert.Zero(t, config.VAD.LookbackMS)
 	assert.Equal(t, 250, config.PreRollMS)
 	assert.Equal(t, 2000, config.MinIntervalMS)
 	assert.True(t, config.AlwaysScoreWake)
 	require.NoError(t, config.Validate())
+}
+
+func TestConfig_ValidateRejectsNegativeVADLookback(t *testing.T) {
+	t.Parallel()
+	config := Defaults()
+	config.VAD.LookbackMS = -1
+	assert.ErrorIs(t, config.Validate(), ErrInvalidConfig)
+}
+
+func TestConfig_ValidateRejectsUnboundedVADLookback(t *testing.T) {
+	t.Parallel()
+	config := Defaults()
+	config.VAD.LookbackMS = MaxVADLookbackMS + 1
+	assert.ErrorIs(t, config.Validate(), ErrInvalidConfig)
 }
 
 func TestConfig_ValidateRejectsThresholdOutsideUnitRange(t *testing.T) {

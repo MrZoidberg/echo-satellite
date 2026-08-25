@@ -10,9 +10,12 @@ import (
 
 var ErrInvalidConfig = errors.New("wake: invalid config")
 
+const MaxVADLookbackMS = 10_000
+
 type VADConfig struct {
-	Enabled   bool    `ini-name:"enabled"`
-	Threshold float64 `ini-name:"threshold"`
+	Enabled    bool    `ini-name:"enabled"`
+	Threshold  float64 `ini-name:"threshold"`
+	LookbackMS int     `ini-name:"lookback-ms"`
 }
 
 // Config is backend-independent device-local wake configuration. Its fields are compatible with
@@ -51,8 +54,11 @@ func (c Config) Validate() error {
 	if err := validateUnit("VAD threshold", c.VAD.Threshold); err != nil {
 		return err
 	}
-	if c.PreRollMS < 0 || c.MinIntervalMS < 0 {
+	if c.PreRollMS < 0 || c.MinIntervalMS < 0 || c.VAD.LookbackMS < 0 {
 		return fmt.Errorf("%w: durations cannot be negative", ErrInvalidConfig)
+	}
+	if c.VAD.LookbackMS > MaxVADLookbackMS {
+		return fmt.Errorf("%w: VAD lookback exceeds %dms", ErrInvalidConfig, MaxVADLookbackMS)
 	}
 	return nil
 }
