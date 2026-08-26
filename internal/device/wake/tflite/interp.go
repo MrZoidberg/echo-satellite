@@ -154,12 +154,15 @@ func (in *Interpreter) ResizeInput(i int, shape []int) {
 
 // Invoke runs every operator in order, recomputing shapes as it goes.
 func (in *Interpreter) Invoke() (err error) {
+	operatorIndex := -1
+	operatorName := ""
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			err = fmt.Errorf("%w: invocation panic: %v", ErrBadModel, recovered)
+			err = fmt.Errorf("%w: invocation panic at op %d (%s): %v", ErrBadModel, operatorIndex, operatorName, recovered)
 		}
 	}()
 	for i, o := range in.graph.Ops {
+		operatorIndex, operatorName = i, o.Name()
 		ins := make([]*Tensor, len(o.Inputs))
 		for j, idx := range o.Inputs {
 			// An optional input, such as a missing bias, is encoded as index -1.

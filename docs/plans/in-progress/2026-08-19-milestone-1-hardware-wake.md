@@ -7,7 +7,7 @@
 **Started:** 2026-08-19
 **Completed:** not completed
 
-**Remaining work:** Task 25. Tasks 2–24 and the Task 20/22 review remediations completed.
+**Remaining work:** Task 25. Tasks 2–24, Task 26, and the Task 20/22 review remediations completed.
 
 ## Objective
 
@@ -1259,7 +1259,7 @@ Expected: `wake list` shows both models with their own phrases and kinds; the ne
 
 ### Task 25: Record the answers in `docs/DESIGN.md` and the developer documentation
 
-**Status:** not started
+**Status:** in progress
 
 **Purpose:** `AGENTS.md` requires a changed design assumption to be recorded in the same change, and §26 requires resolved questions to be written back rather than living in a plan.
 
@@ -1286,6 +1286,9 @@ at least one speaker who did not perform Task 23's primary session.
 - §27: note that Go assembly is permitted while cgo is not, so "pure Go" is not read as "no `.s` files" (Ambiguity 8).
 - `docs/protocol.md`: add `muted`, `offline` and `update_trial` to the device-state list.
 - `AGENTS.md`: update "Repository state" to say Milestone 1 has landed with the device hardware and local wake stack; add `build-device-ctl`, `build-device-noasm`, `check-portability` and `bench` to the build and test commands; add a short note that hardware access is confined to `internal/device/audio/alsa` and `internal/device/mixer` behind build tags with `!linux` stubs, while LED, buttons and system use injected roots instead of tags.
+- `AGENTS.md`: record the Echo Dot session contract: stop `ledcontroller` and
+  set `boot_animation=0` once before live diagnostics; regard a busy microphone
+  as another active test/agent until its holder is identified and coordinated.
 - `README.md`: a short local-wake-stack paragraph, how to install and switch a wake model, and a pointer to `docs/device-diagnostics.md`.
 
 **Expected outcome:** No §26 question this milestone touched is still listed as open, and no threshold in the code or the design document is an unmeasured guess.
@@ -1300,6 +1303,83 @@ make fmt-check lint test check-portability build build-device build-device-noasm
 ```
 
 Expected: no `example only` or `tune on real device` placeholder remains in §16; §26 records "beamforming initially bypassed" and the Silero evidence; the three new device states appear in `docs/protocol.md`; every build and check target exits 0.
+
+### Task 26: Hey_Prime pure-Go TFLite classifier compatibility
+
+**Status:** completed 2026-08-26
+
+**Purpose:** Make the operator-provided Hey_Prime classifier installable and
+executable without weakening the local-only, no-cgo wake boundary. This task
+implements the five generic TFLite operations proven missing from its graph;
+it does not qualify the phrase on hardware or change the default model.
+
+**Dependencies:** Task 24; `docs/plans/future/2026-08-26-hey-prime-tflite-design.md`.
+
+**Hardware required:** yes, in part — host tests verify parsing and execution;
+a rooted Dot is required only to demonstrate local installation and gather the
+separate model-qualification evidence before this model may be promoted.
+
+**Files or components:**
+
+- Modify: `internal/device/wake/tflite/{schema.go,schema_test.go,opcodes.go,kernels_math.go,kernels_math_test.go,opcodes_test.go}`
+- Modify: `internal/device/wake/oww/engine_test.go`, `docs/wake-models.md`
+- Modify: this plan's progress log and completion evidence
+
+**Concrete changes:**
+
+- Register and implement `SHAPE`, `STRIDED_SLICE`, `REDUCE_PROD`, `PACK`, and
+  `FILL` with validated integer inputs, rank and axis checks, correct dynamic
+  output shapes, negative indexing/strides where TFLite permits them, and
+  interpreter errors rather than invalid indexing or panics.
+- Decode the required `STRIDED_SLICE` and reduction builtin options. Keep the
+  interpreter intentionally bounded to the tensor types the supplied model
+  uses; unsupported types and unsupported slice masks fail clearly.
+- Add normal, boundary, and invalid-input kernel tests; extend the opcode
+  inventory assertion. Add an asset-gated test that loads the local shared
+  feature models plus the supplied Hey_Prime classifier and drives the engine
+  with valid zero embeddings. It must skip cleanly outside an operator's asset
+  directory.
+- Document the strict `hey_prime` sidecar and local install command, preserving
+  the supplied source and terms URLs verbatim and describing the licence as
+  unverified. State that successful host execution is compatibility evidence,
+  not qualification, and that `okay_nabu` remains the only qualified default.
+
+**Expected outcome:** The supplied classifier's complete opcode inventory is
+accepted by the host installer and its classifier path prepares and scores on
+the existing device-local openWakeWord engine, while unsupported operations
+remain rejected and no gateway wake path or external runtime is introduced.
+
+**Verification:**
+
+```sh
+ECHO_WAKE_MODEL_DIR="$PWD/.assets/wake-models" go test -race ./internal/device/wake/tflite ./internal/device/wake/oww
+ECHO_WAKE_MODEL_DIR="$PWD/.assets/wake-models" go test -race ./cmd/echoctl
+make fmt-check
+make lint
+make test
+make check-portability build build-device build-device-noasm build-device-ctl
+```
+
+Expected: all host checks exit 0; without `ECHO_WAKE_MODEL_DIR`, only the
+asset-gated tests skip. A subsequent device session must use `echoctl wake
+install` with the pinned digest and strict sidecar, then record the full
+additional-model qualification corpus before any default change.
+
+**Outstanding hardware verification:** No ADB device was attached during this
+execution. On a rooted, paired Dot with the current `echoctl` binary and the
+shared models installed, run:
+
+```sh
+"$ADB" push .assets/wake-models/Hey_Prime_20260824_084713.tflite /data/local/tmp/hey_prime.tflite
+"$ADB" push .assets/wake-models/hey_prime.json /data/local/tmp/hey_prime.json
+"$ADB" shell "su -c '/data/local/bin/echoctl wake install hey_prime --from /data/local/tmp/hey_prime.tflite --metadata /data/local/tmp/hey_prime.json --sha256 ad1fedb27dac6b9f3401da64f696351e1516a703038eed2c2414ae1740af34f0'"
+"$ADB" shell "su -c '/data/local/bin/echoctl wake test --model hey_prime --seconds 60 --print-steps'"
+```
+
+Expected: installation succeeds without changing `okay_nabu`'s selection or
+default status. The spoken test is only the start of qualification: record
+threshold, VAD alignment, false accepts/rejects, multi-speaker results and
+stability before promoting the model.
 
 ## Cross-task risks
 
@@ -1357,6 +1437,69 @@ Two device-state caveats: `speaker test` changes `Ext_Speaker_Amp_Switch` and mu
 - [ ] New packages are at or above roughly 70% statement coverage, except `internal/device/audio/alsa` and `internal/device/mixer`, whose shortfall is justified with the untestable statements named.
 
 ## Progress log
+
+- 2026-08-26, Task 25 started: Added the required Echo Dot session contract to
+  `AGENTS.md` after device verification confirmed it: stop only the indicator
+  service and disable its boot animation before the first live diagnostic;
+  never treat `ErrDeviceBusy` as permission to kill an unknown process. The
+  remaining Task 25 documentation and additional-speaker work are unchanged.
+
+- 2026-08-26, Task 26 host implementation: Added bounded pure-Go kernels and
+  schema decoding for `SHAPE`, `STRIDED_SLICE`, `REDUCE_PROD`, `PACK` and
+  `FILL`; the dynamic shape-control path preserves matching `int32`/`int64`
+  tensors while classifier data remains `float32`. The supplied Hey_Prime
+  asset's SHA-256 was confirmed as
+  `ad1fedb27dac6b9f3401da64f696351e1516a703038eed2c2414ae1740af34f0`.
+  Asset-gated tests verified its complete opcode inventory, atomic host
+  install, direct valid-embedding score, and full shared-feature-engine score.
+  The host verifier passed: `ECHO_WAKE_MODEL_DIR="$PWD/.assets/wake-models"
+  go test -race ./internal/device/wake/tflite ./internal/device/wake/oww
+  ./cmd/echoctl -count=1`; the equivalent command without the environment
+  passed with the asset tests skipped. `make fmt-check`, `make lint` (0
+  issues), `make test` (race, 71.1% total coverage and 76.6% for tflite),
+  `make check-portability`, `make build`, `make build-device`, `make
+  build-device-noasm`, and `make build-device-ctl` all passed. Fresh review
+  found four-input slice schema validation, out-of-rank mask rejection and
+  full-engine asset coverage gaps; all were fixed and reverified. `adb
+  devices` returned no attached device, so the plan remains in progress for
+  the explicit on-device installation and qualification evidence above.
+- 2026-08-26, Task 26 device verification: Linux ADB preflight on rooted Dot
+  `G090LF0964060EHP` passed (`AEOBC`/`biscuit`, `arm64-v8a`, Magisk UID 0,
+  permissive SELinux). The device-local model store already held the shared
+  mel/embedding assets plus `okay_nabu` and `hey_rhasspy-v0.1`. The supplied
+  Hey_Prime bytes again matched SHA-256
+  `ad1fedb27dac6b9f3401da64f696351e1516a703038eed2c2414ae1740af34f0`.
+  After stopping `ledcontroller` and setting `boot_animation` to `0` for this
+  hardware session, the current static ARM64 `echoctl` atomically installed
+  `hey_prime` from `/data/local/tmp`; `wake list` reported it as
+  `openwakeword`, phrase `Hey Prime`, language `en`, size 422,132 and the
+  pinned digest. A two-second local mic diagnostic completed 21 steps with no
+  drops and no interpreter error: wake p50/p95/max 39.306/40.145/45.674 ms,
+  VAD p50/p95/max 0.020/0.021/0.066 ms, 47.8% CPU and 19,456,000 bytes RSS.
+  It was an unattended compatibility run (zero wakes), so it is not claimed as
+  phrase qualification. `okay_nabu` was neither selected nor promoted. The
+  60-second trace attempt was also runtime-clean but its verbose output did
+  not retain a final summary; a compact retry was initially `ErrDeviceBusy`,
+  so no service/process was stopped blindly. After no `echod`/`echoctl` holder
+  was visible, the short retry above passed. Full multi-speaker threshold,
+  false-accept/reject and stability qualification remains required before any
+  default change.
+
+- 2026-08-26, Task 26 spoken hardware compatibility follow-up: A first pair
+  of 30-second `hey_prime` and `okay_nabu` runs produced near-zero scores. The
+  operator correctly identified the illuminated physical Mute button; the
+  earlier `0` observation was `boot_animation`, not the unexported mute GPIO.
+  Exporting GPIO 444 and driving it low cleared the physical microphone cut.
+  The control then accepted two deliberate `okay nabu` utterances at the
+  qualified `0.50` threshold (0.6064 and 0.8205; maximum 0.9756), proving the
+  shared microphone and backbone path. In the same unmuted session, the
+  rebuilt static ARM64 `echoctl` accepted three deliberate `Hey Prime`
+  utterances at the candidate `0.20` threshold (0.2036, 0.2726 and 0.3413;
+  maximum 0.9942), with zero dropped frames and no interpreter error. This
+  confirms the added `SHAPE`, `STRIDED_SLICE`, `REDUCE_PROD`, `PACK`, and
+  `FILL` path executes on the Dot. It is phrase-compatibility evidence only;
+  threshold sweep, false-accept/reject, multi-speaker, and stability evidence
+  are still required before `hey_prime` can be qualified or promoted.
 
 - 2026-08-26: Task 23 completed by explicit operator acceptance of the accumulated real-hardware evidence. The original qualification procedure was intentionally stricter than the milestone decision now requires: the completed quiet/music threshold sweeps, deterministic VAD-gate comparison, 1,200 ms alignment selection, human pre-roll evaluation, physical mute investigation, ARM64 reference agreement, 18/20 timed daemon run, paired idle runs, resource/log observations, and clean shutdown are sufficient to qualify `okay_nabu` as the Milestone 1 default. The additional-speaker exercise remains assigned to Task 25 and is not recorded as passed. This acceptance changes the task completion decision, not the recorded measurements or their limitations.
 - 2026-08-25: Task 24 documentation completed in `docs/wake-model-training.md` and `docs/wake-models.md`, covering explicit digest trust, strict sidecars, local-only atomic installation, flag/ini switching, per-model qualification, the frozen shared backbone, upstream synthetic-TTS training, DNN export preference, and Milestone 4's distribution boundary. Host verification downloaded the pinned `hey_jarvis-v0.1` bytes and confirmed SHA-256 `14bff778604985e1b5c19f0f7bbe477a69cf281d8db34b232b3b972411f710e2`, but the real installer rejected it with unsupported operators `OP_62` and `OP_118`. It was not staged to the Dot. The earlier operator-provided `Hey_Prime` model is also incompatible, so the required second-model install/switch/spoken-phrase demonstration remains blocked pending a compatible fully connected classifier. No presence-dependent test was started. The plan's conceptual `wake.model` wording was corrected to the actual go-flags ini key `wake-model`; the nested YAML in `docs/DESIGN.md` describes the logical configuration, while the current CLI's ini parser uses flat option names. `make fmt-check`, `make lint` (0 issues), and `make test` (race, 71.0% total coverage) passed; the first sandboxed `make test` attempt could not create `coverage.out` through WSL's canonical `/mnt/c/Projects` path, and the approved rerun passed.

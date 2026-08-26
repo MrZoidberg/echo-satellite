@@ -6,12 +6,12 @@ package tflite
 // by this runtime. The returned slice is independent of package state.
 func SupportedOpcodes() []string {
 	return []string{
-		"ADD", "BATCH_MATMUL", "CONV_2D", "DIV", "EXP", "EXPAND_DIMS",
+		"ADD", "BATCH_MATMUL", "CONV_2D", "DIV", "EXP", "EXPAND_DIMS", "FILL",
 		"FULLY_CONNECTED", "LEAKY_RELU", "LOG", "LOGISTIC",
 		"MAXIMUM", "MAX_POOL_2D", "MEAN", "MINIMUM", "MUL",
-		"PAD", "REDUCE_MAX", "RELU", "RELU6", "RESHAPE", "RSQRT",
-		"SQRT", "SQUARE", "SQUARED_DIFFERENCE", "SQUEEZE", "SUB",
-		"SUM", "TRANSPOSE",
+		"PACK", "PAD", "REDUCE_MAX", "REDUCE_PROD", "RELU", "RELU6", "RESHAPE", "RSQRT",
+		"SHAPE", "SQRT", "SQUARE", "SQUARED_DIFFERENCE", "SQUEEZE", "STRIDED_SLICE",
+		"SUB", "SUM", "TRANSPOSE",
 	}
 }
 

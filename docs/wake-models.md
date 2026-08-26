@@ -24,6 +24,7 @@ inventory at install time and is not expected to run recurrent kernels.
 | `okay_nabu-pyoww-6bc5c5f-20260820` | openWakeWord classifier | "okay nabu" | English phrase | <https://raw.githubusercontent.com/rhasspy/pyopen-wakeword/6bc5c5f5c9c71e46a723b6c9277b1d50f2ba13fd/pyopen_wakeword/models/okay_nabu.tflite> | Apache-2.0 | `2982cecde4ee81cc7a2573d2602a7d54f0669425c94a7b64af77e0ff92b03a18` |
 | `hey_jarvis-v0.1` | openWakeWord classifier | "hey jarvis" | English phrase | <https://github.com/dscripka/openWakeWord/releases/download/v0.5.1/hey_jarvis_v0.1.tflite> | Apache-2.0 | `14bff778604985e1b5c19f0f7bbe477a69cf281d8db34b232b3b972411f710e2` |
 | `hey_rhasspy-v0.1` | openWakeWord classifier | "hey rhasspy" | English phrase | <https://github.com/dscripka/openWakeWord/releases/download/v0.5.1/hey_rhasspy_v0.1.tflite> | Apache-2.0 | `01d2526b45068f565aa3849d6ec2b7abae099154fc1b496f9ef20de9ef241fe9` |
+| `hey_prime` | openWakeWord classifier | "Hey Prime" | English phrase | <https://openwakeword.com> | licence unverified; terms: <https://openwakeword.com/terms> | `ad1fedb27dac6b9f3401da64f696351e1516a703038eed2c2414ae1740af34f0` |
 
 The `okay_nabu` digest is pinned to the bytes fetched on 2026-08-20 from
 rhasspy/pyopen-wakeword commit `6bc5c5f5c9c71e46a723b6c9277b1d50f2ba13fd`.
@@ -41,6 +42,14 @@ selection on the Dot at a candidate wake threshold of `0.20` with the qualified
 `1200 ms` VAD lookback. That short switching exercise is not the full multi-room,
 multi-speaker model qualification required before promotion. `okay_nabu` remains
 the only qualified classifier and milestone default.
+
+`hey_prime` is compatible with the pure-Go interpreter as of Task 26: its
+complete opcode inventory parses, prepares and scores a valid embedding in the
+host test. This is compatibility evidence only. It has not completed the
+real-Dot threshold, false-accept/false-reject, multi-speaker and stability
+qualification procedure, so it is not the default. Its supplied terms page
+does not identify an SPDX licence; do not relabel it with a licence class that
+has not been verified.
 
 ## Host download and verification
 
@@ -115,3 +124,37 @@ indexed generation intact through any pre-commit failure. Installs are serialize
 with a store lock so `--overwrite=false` cannot race another installer. Do not
 teach `echod` to fetch from HTTP, GitHub, Hugging Face, or any other network
 source. Gateway-managed asset distribution belongs to Milestone 4.
+
+### Hey Prime strict sidecar and installation
+
+Create the following sidecar next to the operator-provided
+`Hey_Prime_20260824_084713.tflite`. The `source` field preserves the supplied
+provenance URL; the terms URL is recorded above rather than being mistaken for
+an SPDX identifier. The example uses only fields accepted by the strict
+sidecar parser.
+
+```json
+{
+  "schema": 1,
+  "id": "hey_prime",
+  "kind": "openwakeword",
+  "phrase": "Hey Prime",
+  "languages": ["en"],
+  "sample_rate": 16000,
+  "sha256": "ad1fedb27dac6b9f3401da64f696351e1516a703038eed2c2414ae1740af34f0",
+  "source": "https://openwakeword.com"
+}
+```
+
+Install from a local path only, using the independently supplied digest:
+
+```sh
+echoctl wake install hey_prime \
+  --from .assets/wake-models/Hey_Prime_20260824_084713.tflite \
+  --metadata .assets/wake-models/hey_prime.json \
+  --sha256 ad1fedb27dac6b9f3401da64f696351e1516a703038eed2c2414ae1740af34f0 \
+  --model-dir ./device-wake-models
+```
+
+Do not select it as the normal/default model until the device qualification
+record is complete.

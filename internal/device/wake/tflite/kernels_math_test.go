@@ -93,6 +93,93 @@ func TestReduceMaxDropsDims(t *testing.T) {
 	f32(t, "reduce_max", y.F32, []float32{7, 5})
 }
 
+func TestReduceProdKeepsDims(t *testing.T) {
+	x := tf([]int{2, 2}, 2, 3, 4, 5)
+	y := out()
+	if err := kernels[OpReduceProd](&OpDesc{keepDims: true}, []*Tensor{x, ti([]int{1}, 1)}, []*Tensor{y}); err != nil {
+		t.Fatal(err)
+	}
+	shape(t, "reduce_prod", y.Shape, []int{2, 1})
+	f32(t, "reduce_prod", y.F32, []float32{6, 20})
+}
+
+func TestShapeWritesInputDimensions(t *testing.T) {
+	x := tf([]int{2, 3, 4}, make([]float32, 24)...)
+	y := &Tensor{Type: Int32}
+	if err := kernels[OpShape](&OpDesc{}, []*Tensor{x}, []*Tensor{y}); err != nil {
+		t.Fatal(err)
+	}
+	shape(t, "shape", y.Shape, []int{3})
+	if got, want := y.I16, []int16{2, 3, 4}; !equalInt16s(got, want) {
+		t.Fatalf("shape values = %v, want %v", got, want)
+	}
+}
+
+func TestStridedSliceSupportsNegativeIndexesAndStrides(t *testing.T) {
+	x := tf([]int{2, 4}, 1, 2, 3, 4, 5, 6, 7, 8)
+	y := out()
+	o := &OpDesc{slice: stridedSliceParams{}}
+	if err := kernels[OpStridedSlice](o, []*Tensor{x, ti([]int{2}, 1, 3), ti([]int{2}, -3, -5), ti([]int{2}, -1, -2)}, []*Tensor{y}); err != nil {
+		t.Fatal(err)
+	}
+	shape(t, "strided_slice", y.Shape, []int{2, 2})
+	f32(t, "strided_slice", y.F32, []float32{8, 6, 4, 2})
+}
+
+func TestStridedSliceRejectsInvalidDynamicValues(t *testing.T) {
+	x := tf([]int{2}, 1, 2)
+	y := out()
+	_, _, _, err := sliceAxis(2, 0, 1, 0, false, false, false)
+	if err == nil {
+		t.Fatal("zero stride accepted")
+	}
+	err = kernels[OpStridedSlice](&OpDesc{slice: stridedSliceParams{newAxisMask: 1}}, []*Tensor{x, ti([]int{1}, 0), ti([]int{1}, 1), ti([]int{1}, 1)}, []*Tensor{y})
+	if err == nil {
+		t.Fatal("new-axis mask accepted")
+	}
+	err = kernels[OpStridedSlice](&OpDesc{slice: stridedSliceParams{beginMask: 2}}, []*Tensor{x, ti([]int{1}, 0), ti([]int{1}, 1), ti([]int{1}, 1)}, []*Tensor{y})
+	if err == nil {
+		t.Fatal("mask bit beyond rank accepted")
+	}
+}
+
+func TestPackStacksEqualShapesAtNegativeAxis(t *testing.T) {
+	a := tf([]int{2}, 1, 2)
+	b := tf([]int{2}, 3, 4)
+	y := out()
+	if err := kernels[OpPack](&OpDesc{axis: -1, values: 2}, []*Tensor{a, b}, []*Tensor{y}); err != nil {
+		t.Fatal(err)
+	}
+	shape(t, "pack", y.Shape, []int{2, 2})
+	f32(t, "pack", y.F32, []float32{1, 3, 2, 4})
+}
+
+func TestFillUsesValidatedShapeAndScalar(t *testing.T) {
+	y := out()
+	if err := kernels[OpFill](&OpDesc{}, []*Tensor{ti([]int{2}, 2, 3), tf([]int{}, 1.5)}, []*Tensor{y}); err != nil {
+		t.Fatal(err)
+	}
+	shape(t, "fill", y.Shape, []int{2, 3})
+	f32(t, "fill", y.F32, []float32{1.5, 1.5, 1.5, 1.5, 1.5, 1.5})
+
+	err := kernels[OpFill](&OpDesc{}, []*Tensor{ti([]int{1}, -1), tf([]int{}, 1)}, []*Tensor{out()})
+	if err == nil {
+		t.Fatal("negative fill shape accepted")
+	}
+}
+
+func equalInt16s(a, b []int16) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func TestTransposeMovesAxes(t *testing.T) {
 	x := tf([]int{2, 3}, 1, 2, 3, 4, 5, 6)
 	y := out()

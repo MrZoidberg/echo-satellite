@@ -1,0 +1,10 @@
+{
+  "schema": 1,
+  "id": "hey_prime",
+  "kind": "openwakeword",
+  "phrase": "Hey Prime",
+  "languages": ["en"],
+  "sample_rate": 16000,
+  "sha256": "ad1fedb27dac6b9f3401da64f696351e1516a703038eed2c2414ae1740af34f0",
+  "source": "https://openwakeword.com"
+}

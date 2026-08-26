@@ -72,6 +72,31 @@ func TestEngine_RealModelsSilenceScoresNearZero(t *testing.T) {
 	}
 }
 
+func TestClassifier_HeyPrimeModelScoresValidEmbedding(t *testing.T) {
+	dir := requireModelDir(t)
+	model := loadModel(t, filepath.Join(dir, "Hey_Prime_20260824_084713.tflite"))
+	classifier, err := newClassifier(model)
+	require.NoError(t, err)
+
+	score, err := classifier.Score(make([]float32, embedDims))
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, score, float64(0))
+	assert.LessOrEqual(t, score, float64(1))
+}
+
+func TestEngine_HeyPrimeModelScoresValidWakeStep(t *testing.T) {
+	dir := requireModelDir(t)
+	engine, err := New(requireSharedModels(t), wake.Model{
+		ID: "hey_prime", Path: filepath.Join(dir, "Hey_Prime_20260824_084713.tflite"), Kind: wake.KindOpenWakeWord,
+	})
+	require.NoError(t, err)
+
+	score, err := engine.Score(make([]int16, wake.StepSamples))
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, score, float64(0))
+	assert.LessOrEqual(t, score, float64(1))
+}
+
 func requireFeatures(t *testing.T) *Features {
 	t.Helper()
 	features, err := newFeatures(syntheticSharedModels(t))

@@ -5,6 +5,33 @@ Dot Gen 2 used during Milestone 1. Commands that access audio devices run
 through Magisk because the normal ADB shell is UID 2000 and the PCM nodes are
 owned by `system:audio`.
 
+## 2026-08-26 Hey_Prime compatibility installation (Task 26)
+
+Linux ADB preflight passed on rooted Dot `G090LF0964060EHP`: model `AEOBC`,
+device `biscuit`, ABI `arm64-v8a`, Magisk UID 0, SELinux permissive. The
+operator-provided `Hey_Prime_20260824_084713.tflite` matched SHA-256
+`ad1fedb27dac6b9f3401da64f696351e1516a703038eed2c2414ae1740af34f0`.
+
+As required for this hardware session, Amazon's `ledcontroller` was stopped
+and `boot_animation` set to `0` before the diagnostic. The current static ARM64
+`echoctl`, strict `hey_prime` sidecar and model bytes were staged under
+`/data/local/tmp`; `echoctl wake install hey_prime` atomically added the model
+to the existing local store. `wake list` then reported `hey_prime` as
+openWakeWord, phrase `Hey Prime`, language `en`, size 422,132 bytes and the
+pinned digest, alongside `okay_nabu` and `hey_rhasspy-v0.1`.
+
+A two-second local microphone run used the existing shared mel/embedding
+models and completed 21 steps with zero dropped frames and no interpreter
+error. Wake inference measured 39.306 ms p50, 40.145 ms p95 and 45.674 ms max;
+the local VAD measured 0.020/0.021/0.066 ms p50/p95/max. Process CPU was 47.8%
+and RSS was 19,456,000 bytes. It was unattended and produced zero wakes, so it
+is compatibility and installation evidence only—not Hey_Prime wake-quality
+qualification. `okay_nabu` remains the qualified default.
+
+A prior compact retry reported `/dev/snd/pcmC0D24c` busy. Per the device
+coordination rule, no service or test process was killed; after confirming no
+`echod`/`echoctl` process was visible, the short run above completed normally.
+
 ## 2026-08-25 local wake and VAD qualification (Task 23, completed)
 
 Device: the same rooted `G090LF0964060EHP` (`csm_biscuit`/`biscuit`,

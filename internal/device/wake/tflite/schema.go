@@ -100,8 +100,12 @@ const (
 	OpSum            Op = 74
 	OpSqrt           Op = 75
 	OpRsqrt          Op = 76
+	OpShape          Op = 77
+	OpReduceProd     Op = 81
 	OpReduceMax      Op = 82
+	OpPack           Op = 83
 	OpSquare         Op = 92
+	OpFill           Op = 94
 	OpLeakyRelu      Op = 98
 	OpSquaredDiff    Op = 99
 	OpBatchMatMul    Op = 126
@@ -115,8 +119,8 @@ var opNames = map[Op]string{
 	OpTranspose: "TRANSPOSE", OpMean: "MEAN", OpSub: "SUB", OpDiv: "DIV",
 	OpSqueeze: "SQUEEZE", OpStridedSlice: "STRIDED_SLICE", OpExp: "EXP",
 	OpMaximum: "MAXIMUM", OpMinimum: "MINIMUM", OpExpandDims: "EXPAND_DIMS",
-	OpLog: "LOG", OpSum: "SUM", OpSqrt: "SQRT", OpRsqrt: "RSQRT",
-	OpReduceMax: "REDUCE_MAX", OpSquare: "SQUARE", OpLeakyRelu: "LEAKY_RELU",
+	OpLog: "LOG", OpSum: "SUM", OpSqrt: "SQRT", OpRsqrt: "RSQRT", OpShape: "SHAPE",
+	OpReduceProd: "REDUCE_PROD", OpReduceMax: "REDUCE_MAX", OpPack: "PACK", OpSquare: "SQUARE", OpFill: "FILL", OpLeakyRelu: "LEAKY_RELU",
 	OpSquaredDiff: "SQUARED_DIFFERENCE", OpBatchMatMul: "BATCH_MATMUL",
 }
 
@@ -183,6 +187,9 @@ type OpDesc struct {
 	dims     []int
 	adjX     bool
 	adjY     bool
+	axis     int
+	values   int
+	slice    stridedSliceParams
 }
 
 // Name returns the diagnostic operator name, preserving a custom opcode's identity.
@@ -348,9 +355,11 @@ func minimumInputs(op Op) int {
 	switch op {
 	case OpConv2D, OpFullyConnected:
 		return 2
+	case OpStridedSlice:
+		return 4
 	case OpMaxPool2D, OpLogistic, OpLog, OpExp, OpSqrt, OpRsqrt, OpSquare, OpRelu, OpRelu6, OpLeakyRelu, OpSqueeze, OpReshape:
 		return 1
-	case OpAdd, OpSub, OpMul, OpDiv, OpMaximum, OpMinimum, OpSquaredDiff, OpBatchMatMul, OpMean, OpSum, OpReduceMax, OpPad, OpTranspose, OpExpandDims:
+	case OpAdd, OpSub, OpMul, OpDiv, OpMaximum, OpMinimum, OpSquaredDiff, OpBatchMatMul, OpMean, OpSum, OpReduceMax, OpReduceProd, OpPad, OpTranspose, OpExpandDims, OpFill:
 		return 2
 	default:
 		return 0
@@ -403,8 +412,22 @@ func (o *OpDesc) decodeOptions(t table, present bool) {
 	case OpAdd, OpSub, OpMul, OpDiv, OpFullyConnected, OpConcatenation:
 		o.act = Activation(t.u8f(0))
 
-	case OpMean, OpSum, OpReduceMax:
+	case OpMean, OpSum, OpReduceMax, OpReduceProd:
 		o.keepDims = t.boolf(0)
+
+	case OpStridedSlice:
+		o.slice = stridedSliceParams{
+			beginMask:      maskOption(t.i32f(0, 0)),
+			endMask:        maskOption(t.i32f(1, 0)),
+			ellipsisMask:   maskOption(t.i32f(2, 0)),
+			newAxisMask:    maskOption(t.i32f(3, 0)),
+			shrinkAxisMask: maskOption(t.i32f(4, 0)),
+			offset:         t.boolf(5),
+		}
+
+	case OpPack:
+		o.values = int(t.i32f(0, 0))
+		o.axis = int(t.i32f(1, 0))
 
 	case OpLeakyRelu:
 		o.alpha = t.f32f(0, 0)
@@ -418,6 +441,13 @@ func (o *OpDesc) decodeOptions(t table, present bool) {
 	default:
 		// Operators without builtin options keep their zero values.
 	}
+}
+
+func maskOption(value int32) uint32 {
+	if value < 0 {
+		return ^uint32(0)
+	}
+	return uint32(value)
 }
 
 type poolParams struct {

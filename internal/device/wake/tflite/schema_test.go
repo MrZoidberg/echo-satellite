@@ -29,3 +29,10 @@ func TestReshape_AllowsBuiltinShapeWithoutSecondInput(t *testing.T) {
 	shape(t, "reshape", output.Shape, []int{2, 1})
 	f32(t, "reshape", output.F32, []float32{3, 4})
 }
+
+func TestStridedSlice_RequiresFourInputs(t *testing.T) {
+	op := &OpDesc{Op: OpStridedSlice, Inputs: []int{0, 1, 2}, Outputs: []int{3}}
+	if err := validateOperator(op, 0, 0, 4); err == nil {
+		t.Fatal("three-input STRIDED_SLICE accepted")
+	}
+}

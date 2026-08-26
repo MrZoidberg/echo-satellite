@@ -82,6 +82,33 @@ func TestWakeInstallAndList_ReportMetadataAndSharedAssets(t *testing.T) {
 	assert.Contains(t, output.String(), digest[:12])
 }
 
+func TestWakeInstall_HeyPrimeAsset(t *testing.T) {
+	dir := os.Getenv("ECHO_WAKE_MODEL_DIR")
+	if dir == "" {
+		t.Skip("ECHO_WAKE_MODEL_DIR is not set")
+	}
+	source := filepath.Join(dir, "Hey_Prime_20260824_084713.tflite")
+	raw, err := os.ReadFile(source) //nolint:gosec // explicit operator test asset directory.
+	require.NoError(t, err)
+	digestBytes := sha256.Sum256(raw)
+	digest := hex.EncodeToString(digestBytes[:])
+	require.Equal(t, "ad1fedb27dac6b9f3401da64f696351e1516a703038eed2c2414ae1740af34f0", digest)
+
+	metadata := filepath.Join(t.TempDir(), "hey_prime.json")
+	sidecar := fmt.Sprintf("{\"schema\":1,\"id\":\"hey_prime\",\"kind\":\"openwakeword\",\"phrase\":\"Hey Prime\",\"languages\":[\"en\"],\"sample_rate\":16000,\"sha256\":%q,\"source\":\"https://openwakeword.com\"}\n", digest)
+	require.NoError(t, os.WriteFile(metadata, []byte(sidecar), 0o600)) //nolint:gosec // metadata is beneath t.TempDir.
+
+	var output bytes.Buffer
+	err = wakeInstall(&output, wakeInstallCommand{
+		Args: struct {
+			ID string `positional-arg-name:"id" required:"true"`
+		}{ID: "hey_prime"},
+		From: source, Metadata: metadata, SHA256: digest, ModelDir: filepath.Join(t.TempDir(), "models"),
+	})
+	require.NoError(t, err)
+	assert.Contains(t, output.String(), "installed: hey_prime")
+}
+
 func TestWakeList_EmptyStore(t *testing.T) {
 	t.Parallel()
 	var output bytes.Buffer

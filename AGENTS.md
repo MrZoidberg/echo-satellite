@@ -89,6 +89,22 @@ Coverage: read the per-function output for the code you touched, not the reposit
 
 Hardware-dependent behavior is not verified by a passing `dotsim` run. Say which checks ran against real hardware and which did not.
 
+### Echo Dot hardware sessions
+
+Before the first live diagnostic in an ADB session, run `su -c 'stop
+ledcontroller'` and write `0` to
+`/sys/bus/i2c/devices/0-003f/boot_animation` so Amazon's indicator service
+cannot overwrite project test feedback. Do this once per session; it is
+reversible with `start ledcontroller` or a reboot. Also confirm the physical
+microphone cut is off before interpreting a wake result. On the qualified Dot,
+the MTK pin-87 line is GPIO 444; if the microphone Mute button is red or the
+line is absent, export it, set its direction to `out`, write `0`, and read back
+`0` from `/sys/class/gpio/gpio444/value`. A high value physically cuts the
+microphones and can make an otherwise healthy wake run report only near-zero
+scores. If microphone capture returns `ErrDeviceBusy`, treat it as evidence
+that another test or agent may be running: inspect the holder and coordinate
+rather than killing a process or stopping unrelated services.
+
 ### 5. Self-review in a separate agent
 
 Dispatch a review agent with fresh context — the implementing session is the worst reviewer of its own diff. Give it the diff, the plan, and `docs/DESIGN.md`, and ask it to look for:

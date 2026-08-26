@@ -174,7 +174,7 @@ func closeReference(got, want float32) bool {
 }
 
 func TestModel_ReferenceModelsUseSupportedOpcodes(t *testing.T) {
-	for _, name := range []string{"melspectrogram.tflite", "embedding_model.tflite", "okay_nabu.tflite"} {
+	for _, name := range []string{"melspectrogram.tflite", "embedding_model.tflite", "okay_nabu.tflite", "Hey_Prime_20260824_084713.tflite"} {
 		t.Run(name, func(t *testing.T) {
 			raw, err := os.ReadFile(filepath.Join(requireModelDir(t), name)) //nolint:gosec // explicit test-only model directory.
 			if err != nil {
