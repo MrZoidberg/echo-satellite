@@ -5,7 +5,7 @@ Dot Gen 2 used during Milestone 1. Commands that access audio devices run
 through Magisk because the normal ADB shell is UID 2000 and the PCM nodes are
 owned by `system:audio`.
 
-## 2026-08-25 local wake and VAD qualification (Task 23, in progress)
+## 2026-08-25 local wake and VAD qualification (Task 23, completed)
 
 Device: the same rooted `G090LF0964060EHP` (`csm_biscuit`/`biscuit`,
 `arm64-v8a`, Magisk root, SELinux permissive). Linux ADB was used. The vetted

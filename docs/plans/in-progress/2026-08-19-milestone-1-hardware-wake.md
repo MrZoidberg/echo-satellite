@@ -3,11 +3,11 @@
 **Status:** in-progress
 **Owner or active agent:** Codex (/root)
 **Created:** 2026-08-19
-**Updated:** 2026-08-25
+**Updated:** 2026-08-26
 **Started:** 2026-08-19
 **Completed:** not completed
 
-**Remaining work:** Tasks 23–25. Tasks 2–22 and the Task 20/22 review remediations completed.
+**Remaining work:** Task 25. Tasks 2–24 and the Task 20/22 review remediations completed.
 
 ## Objective
 
@@ -95,7 +95,7 @@ openWakeWord uses a **frozen shared feature extractor** — the melspectrogram m
 
 Consequences designed into this plan:
 
-- **Adding a wake word requires no device code change.** Install a new classifier `.tflite` and its sidecar; the shared assets, the interpreter, the pipeline and the gate are untouched. Switching models is a configuration change (`--wake-model` or the ini `wake.model` key). Task 24 verifies this by installing and switching to a second model.
+- **Adding a wake word requires no device code change.** Install a new classifier `.tflite` and its sidecar; the shared assets, the interpreter, the pipeline and the gate are untouched. Switching models is a configuration change (`--wake-model` or the go-flags ini `wake-model` key). Task 24 verifies this by installing and switching to a second model.
 - **Training happens off-device on a host.** The Dot never trains and never fetches.
 - **The classifier architecture matters to us.** Upstream permits "a simple fully-connected network **or 2 layer RNN**". A fully-connected classifier needs only the kernels ported here; an RNN classifier needs recurrent kernels the interpreter will not implement. Therefore `echoctl wake install` validates the model's full opcode inventory against the interpreter's registry **on the host, at install time** (Tasks 16 and 19), rather than letting an unsupported model fail at runtime on the device.
 
@@ -1119,7 +1119,7 @@ Expected: exit 0; regression tests prove aligned pre-gating and interruptible, e
 
 ### Task 23: HARDWARE — on-device wake and VAD session; §26 measurements
 
-**Status:** in progress
+**Status:** completed 2026-08-26
 
 **Purpose:** This is §24's success criterion and §25 task 6. Everything before it is scaffolding.
 
@@ -1218,7 +1218,7 @@ Expected, each an explicit recorded observation:
 
 ### Task 24: Model lifecycle — replacing and training wake models
 
-**Status:** not started
+**Status:** completed 2026-08-26
 
 **Purpose:** After this milestone, installing or changing a wake model is the operation a user will perform most often. §16 requires stable model IDs, sidecar metadata and backend-independent wake configuration precisely so this is cheap, and that claim needs to be documented and demonstrated.
 
@@ -1233,7 +1233,7 @@ Expected, each an explicit recorded observation:
 
 **Concrete changes:** Document the whole lifecycle:
 
-- **Replacing and switching**: `echoctl wake install` followed by `--wake-model` or the ini `wake.model` key. The shared frozen backbone, the interpreter, the pipeline and the gate are untouched, so no rebuild or redeploy of `echod` is required. Include the on-device commands and the `echoctl wake test` acceptance check to run before trusting a new model.
+- **Replacing and switching**: `echoctl wake install` followed by `--wake-model` or the go-flags ini `wake-model` key. The shared frozen backbone, the interpreter, the pipeline and the gate are untouched, so no rebuild or redeploy of `echod` is required. Include the on-device commands and the `echoctl wake test` acceptance check to run before trusting a new model.
 - **Training a new wake word**: the upstream openWakeWord pipeline — synthetic TTS clips, the automatic-training Colab notebook, roughly an hour, no local GPU — producing a small classifier trained on the **frozen** melspectrogram plus Google speech-embedding backbone and exported as `.tflite`. State explicitly that only the classifier is trained and the backbone is never retrained, which is why a new wake word costs no device change.
 - **Constraints this runtime imposes**: the classifier must consume `[1, frames, 96]`; the **fully-connected export is preferred**, because the two-layer-RNN variant upstream permits requires recurrent kernels this interpreter does not implement, and `echoctl wake install` rejects it on the host naming the unsupported operators. Include that exact failure output.
 - **Sidecar authoring**: the required `schema`, `id`, `kind` and `sha256` fields plus `phrase` and `languages`, and how to compute the digest.
@@ -1244,12 +1244,15 @@ Expected, each an explicit recorded observation:
 **Verification:**
 
 ```sh
-"$ADB" shell /data/local/bin/echoctl wake install hey_jarvis \
-  --from /data/local/tmp/models/hey_jarvis.tflite \
-  --metadata /data/local/tmp/models/hey_jarvis.json --sha256 <expected>
-"$ADB" shell /data/local/bin/echoctl wake list
-"$ADB" shell /data/local/bin/echoctl wake test --model hey_jarvis --seconds 60 --print-steps
-"$ADB" shell /data/local/bin/echoctl wake test --model okay_nabu --seconds 60 --print-steps
+"$ADB" shell mkdir -p /data/local/tmp/models
+"$ADB" push <compatible-model>.tflite /data/local/tmp/models/<compatible-model>.tflite
+"$ADB" push <compatible-model>.json /data/local/tmp/models/<compatible-model>.json
+"$ADB" shell "su -c '/data/local/bin/echoctl wake install <compatible-model> \
+  --from /data/local/tmp/models/<compatible-model>.tflite \
+  --metadata /data/local/tmp/models/<compatible-model>.json --sha256 <expected>'"
+"$ADB" shell "su -c '/data/local/bin/echoctl wake list'"
+"$ADB" shell "su -c '/data/local/bin/echoctl wake test --model <compatible-model> --seconds 60 --print-steps'"
+"$ADB" shell "su -c '/data/local/bin/echoctl wake test --model okay_nabu --seconds 60 --print-steps'"
 ```
 
 Expected: `wake list` shows both models with their own phrases and kinds; the new phrase is detected at its own threshold while the old one is not detected by the new model; switching between them requires **no rebuild and no redeploy of `echod`**. Additionally, attempting to install a model with an unsupported operator exits non-zero with a message naming the operator, matching the output documented in `docs/wake-model-training.md`.
@@ -1355,6 +1358,11 @@ Two device-state caveats: `speaker test` changes `Ext_Speaker_Amp_Switch` and mu
 
 ## Progress log
 
+- 2026-08-26: Task 23 completed by explicit operator acceptance of the accumulated real-hardware evidence. The original qualification procedure was intentionally stricter than the milestone decision now requires: the completed quiet/music threshold sweeps, deterministic VAD-gate comparison, 1,200 ms alignment selection, human pre-roll evaluation, physical mute investigation, ARM64 reference agreement, 18/20 timed daemon run, paired idle runs, resource/log observations, and clean shutdown are sufficient to qualify `okay_nabu` as the Milestone 1 default. The additional-speaker exercise remains assigned to Task 25 and is not recorded as passed. This acceptance changes the task completion decision, not the recorded measurements or their limitations.
+- 2026-08-25: Task 24 documentation completed in `docs/wake-model-training.md` and `docs/wake-models.md`, covering explicit digest trust, strict sidecars, local-only atomic installation, flag/ini switching, per-model qualification, the frozen shared backbone, upstream synthetic-TTS training, DNN export preference, and Milestone 4's distribution boundary. Host verification downloaded the pinned `hey_jarvis-v0.1` bytes and confirmed SHA-256 `14bff778604985e1b5c19f0f7bbe477a69cf281d8db34b232b3b972411f710e2`, but the real installer rejected it with unsupported operators `OP_62` and `OP_118`. It was not staged to the Dot. The earlier operator-provided `Hey_Prime` model is also incompatible, so the required second-model install/switch/spoken-phrase demonstration remains blocked pending a compatible fully connected classifier. No presence-dependent test was started. The plan's conceptual `wake.model` wording was corrected to the actual go-flags ini key `wake-model`; the nested YAML in `docs/DESIGN.md` describes the logical configuration, while the current CLI's ini parser uses flat option names. `make fmt-check`, `make lint` (0 issues), and `make test` (race, 71.0% total coverage) passed; the first sandboxed `make test` attempt could not create `coverage.out` through WSL's canonical `/mnt/c/Projects` path, and the approved rerun passed.
+- 2026-08-25: A final search found the official Apache-2.0 `hey_rhasspy-v0.1` classifier in the immutable openWakeWord v0.5.1 release. Its downloaded bytes matched SHA-256 `01d2526b45068f565aa3849d6ec2b7abae099154fc1b496f9ef20de9ef241fe9`, and the real host installer accepted its `[1, frames, 96]` shape and complete opcode inventory, then listed it as `openwakeword`, phrase `hey rhasspy`, language `en`, size 416,140 bytes. A Windows ADB bridge check returned no attached devices, so no device state changed. Task 24 remains blocked on reconnecting the Dot and operator approval for the presence-dependent spoken tests; no such test was started.
+- 2026-08-26: Task 24 completed using Linux ADB against rooted Dot `G090LF0964060EHP`. The device preflight passed (`biscuit`, `arm64-v8a`, Magisk UID 0, permissive SELinux). `hey_rhasspy-v0.1` was staged locally, atomically installed with its explicit pinned digest, and `wake list` showed it alongside `okay_nabu` with distinct IDs, phrases, kinds, languages, sizes, and digests. At wake threshold `0.50`, the first 60-second live run produced zero accepts and max score `0.2689`, so that threshold was not claimed. At candidate threshold `0.20` with the measured `1200 ms` VAD lookback, the selected model accepted two deliberate `hey rhasspy` utterances (accepted scores `0.5356` and `0.4734`, max `0.9922`), did not accept the spoken `okay nabu` cross-check, rejected five high-wake/low-VAD candidates, and dropped zero frames. Switching back to `okay_nabu` required only `--model okay_nabu`: it accepted two deliberate utterances (accepted scores `0.8918` and `0.9160`, max `0.9768`), did not accept the spoken `hey rhasspy` cross-check, rejected eleven high-wake/low-VAD candidates, and dropped zero frames. No binary was rebuilt or redeployed. Final cleanup cleared the ring to `idle`, confirmed no `echoctl`/`echod` process remained, and preserved both installed models. The short `hey_rhasspy` run demonstrates lifecycle switching but does not promote it past the full model-qualification requirement; `okay_nabu` remains the milestone default.
+
 - 2026-08-25: Task 23 started by Codex on rooted Dot `G090LF0964060EHP` using Linux ADB. The vetted wake assets are present on the host and their SHA-256 digests match `docs/wake-models.md`; live hardware measurement and qualification are in progress.
 - 2026-08-25: Task 23 live tests were prepared with an operator-visible/audible start contract: two red LED blinks, solid red throughout capture, and the project-owned `starting_test.wav` cue for live `echoctl wake vad-test`, `echoctl wake test`, and `echod --wake-only`; file replay remains cue-free. Hardware preparation exposed and fixed zero-valued ALSA diagnostic defaults plus a missing capture-direction flag. Review remediation added signal-safe cleanup, cue-before-ALSA ordering, capture-duration timing after the cue, joined cleanup errors, sequence-sensitive tests, and durable cue deployment commands. Fresh final re-review found no remaining issues. The corrected binaries and cue are staged; GPIO 444 is low, `ledcontroller` is stopped, and no test process is running pending operator confirmation.
 - 2026-08-25: Task 23 partial hardware evidence recorded in `docs/device-diagnostics.md`. Quiet threshold sweep results were 18/20 at 0.5, 19/20 at 0.6, 17/20 at 0.7, and 16/20 at 0.8; 0.9 was skipped as strictly less permissive after 0.8 failed. Music runs selected 0.5 (18/20) over 0.6 (15/20), and a 15-minute idle-music run produced zero wakes, zero drops, ~50% CPU, and 16.69 MB RSS. A proposed 720 ms lookback failed at 16/20 with 30 VAD rejects; aligned candidates extended through 1,200 ms, which passed both conditions. The plan's 0.99-VAD zero-wake assumption was invalid because the level VAD saturates at 1.0; deterministic identical-audio replay instead proved the gate with 5 accepted/0 rejects when disabled versus 0 accepted/43 rejects with same-step VAD. Operator listening selected 600 ms pre-roll: 100/250/400 ms clipped `what`, while 800/1,200 ms carried `okay nabu`. Measured defaults are wake 0.5, VAD 0.5, lookback 1,200 ms, pre-roll 600 ms, `AlwaysScoreWake=true`, model `okay_nabu`. Diagnostic cue gain was reduced to 25% after 50% remained too loud. Task remains in progress for mute, ARM64 reference, final daemon/log/RSS run, and additional-speaker evidence.
@@ -1426,6 +1434,9 @@ Two device-state caveats: `speaker test` changes `Ext_Speaker_Amp_Switch` and mu
 - 2026-08-21, Task 18: Added the portable `wake.Engine` contract and minimal `wake.Model` contract, moving the latter forward from Task 19 to resolve Task 18's circular dependency. Implemented the openWakeWord shared mel/embedding stream, classifier ring and model-kind detection. Fresh review found missing scalar and float-input validation, shared-model input validation, obscured embedding preparation errors, and CI coverage gaps; all were fixed. A 12 KiB synthetic embedding fixture with time carry and zero-weight in-memory mel model now cover streaming scale/offset, lookback and reset in CI; real model compatibility remains an explicit supplemental test. The CI-style `oww` package coverage is 60.5%; lower than the usual 70% guideline because `New`'s filesystem/TFLite classifier-loading paths can only be exercised by non-committed third-party model weights, and the real-model run below exercises them. No findings were declined or postponed.
 
 ## Completion evidence
+
+- 2026-08-26, Task 23: The operator accepted the documented real-Dot evidence as sufficient Milestone 1 qualification for `okay_nabu` and closed the task. Evidence includes quiet and music threshold trials, zero wakes in the completed 15-minute music-idle run, deterministic VAD gating, measured 1,200 ms lookback and 600 ms pre-roll, physical mute-line identification, passing ARM64 reference-vector comparisons, an 18/20 final timed daemon run, zero drops/XRuns, bounded CPU/RSS/log observations, and successful cleanup. The shorter final daemon idle segment remains accurately recorded; the additional-speaker check remains Task 25 work and was not claimed as passed.
+- 2026-08-26, Task 24: Linux `adb` device preflight passed; the pinned `hey_rhasspy-v0.1` SHA-256 was reverified as `01d2526b45068f565aa3849d6ec2b7abae099154fc1b496f9ef20de9ef241fe9`; on-device `echoctl wake install` and `wake list` passed with both models present. Live `wake test` runs demonstrated `hey_rhasspy-v0.1` at candidate threshold `0.20` and `okay_nabu` at threshold `0.50`, both with `1200 ms` VAD lookback: each selected model accepted two of its own spoken phrase, rejected the other phrase, and reported zero dropped frames. The original `hey_rhasspy` threshold `0.50` run was recorded as a failed candidate rather than relabeled. Model switching required no `echod` rebuild or redeployment. Final LED/process cleanup passed. After recording the hardware evidence, `make fmt-check`, `make lint` (0 issues), and `make test` (race enabled, 71.0% total coverage) passed. The earlier documentation review findings were all fixed and two re-reviews found no remaining issues; final hardware-evidence review followed these checks.
 
 - 2026-08-25, Task 22: `make fmt-check`, `make lint`, `make test`, `make build`, `make build-device`, and `make check-portability` passed after final remediation; repository race-enabled statement coverage was 71.5%, with `cmd/echod` at 31.5% and `internal/device/wake` at 82.4%. Focused `go test -race ./internal/device/wake ./cmd/echod` and scoped lint passed. A paced silence run using the locally installed real model store logged periodic statistics with zero wake events, drops, and XRuns and exited 0. Fresh review's three original findings and one re-review finding were all fixed; final scoped re-review found no remaining issue. No hardware verification ran; Task 23 owns the real-Dot session.
 
