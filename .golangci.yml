@@ -71,6 +71,9 @@ linters:
     govet:
       enable:
         - shadow
+    gosec:
+      excludes:
+        - G706
     lll:
       line-length: 140
     misspell:

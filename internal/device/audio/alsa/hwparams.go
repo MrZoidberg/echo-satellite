@@ -70,7 +70,7 @@ func encodeHWParams(config Config) ([]byte, error) {
 func setMask(params []byte, param, bit int) {
 	offset := maskOffset + param*maskSize
 	clear(params[offset : offset+maskSize])
-	putUint32(params, offset+(bit/32)*4, 1<<uint(bit%32))
+	putUint32(params, offset+(bit/32)*4, uint32(1)<<(bit%32))
 }
 
 func setInterval(params []byte, param int, value uint32) {
@@ -78,11 +78,6 @@ func setInterval(params []byte, param int, value uint32) {
 	putUint32(params, offset, value)
 	putUint32(params, offset+4, value)
 	putUint32(params, offset+8, 1<<2) // snd_interval.integer
-}
-
-func intervalValue(params []byte, param int) uint32 {
-	offset := intervalOffset + (param-firstInterval)*intervalSize
-	return binary.LittleEndian.Uint32(params[offset:])
 }
 
 func putUint32(dst []byte, offset int, value uint32) {

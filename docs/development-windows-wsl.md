@@ -12,7 +12,7 @@ Windows 11
   +-- VS Code + Remote WSL
   |
   +-- WSL2 Ubuntu
-  |     +-- Go 1.26
+  |     +-- Go 1.26.7
   |     +-- make
   |     +-- source checkout
   |     +-- Windows adb.exe invoked through /mnt/c

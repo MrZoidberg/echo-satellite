@@ -3,7 +3,6 @@
 package mixer
 
 import (
-	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -17,5 +16,5 @@ func TestOpen_UnsupportedOnNonLinuxReturnsErrUnsupportedPlatform(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Nil(t, m)
-	assert.True(t, errors.Is(err, ErrUnsupportedPlatform))
+	assert.ErrorIs(t, err, ErrUnsupportedPlatform)
 }
