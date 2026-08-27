@@ -36,3 +36,12 @@ go.work.sum
 
 # Coverage artifacts
 coverage*.out
+
+# Wake and inference model assets are third-party binaries. Keep real model
+# downloads out of the repository; synthetic test models may be committed.
+*.tflite
+*.onnx
+!testdata/wake/
+!testdata/wake/synthetic/
+!testdata/wake/synthetic/*.tflite
+!testdata/wake/synthetic/*.onnx

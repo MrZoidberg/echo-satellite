@@ -159,7 +159,10 @@ inputs to a decision it re-makes.
 { "state": "thinking", "detail": "asking assistant" }
 ```
 
-States: `idle`, `listening`, `thinking`, `speaking`, `updating`, `error`.
+States, in display order: `idle`, `listening`, `thinking`, `speaking`, `muted`,
+`offline`, `error`, `updating`, `update_trial`. `muted` distinguishes the local
+privacy state from a fault, `offline` indicates loss of gateway connectivity,
+and `update_trial` identifies an uncommitted A/B slot trial.
 
 ### `update.offer` (G→D)
 

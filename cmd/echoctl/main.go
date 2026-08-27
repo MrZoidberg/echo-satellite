@@ -39,6 +39,26 @@ func dispatch(w io.Writer, command string, o opts) error {
 		return writeReport(w, []string{"version: " + revision})
 	case "release verify":
 		return verifyRelease(w, o.Release.Verify)
+	case "mic record":
+		return micRecord(w, o.Mic.Record)
+	case "speaker test":
+		return speakerTest(w, o.Speaker.Test)
+	case "led test":
+		return ledTest(w, o.LED.Test)
+	case "buttons test":
+		return buttonsTest(w, o.Buttons.Test)
+	case "wake list":
+		return wakeList(w, o.Wake.List)
+	case "wake install":
+		return wakeInstall(w, o.Wake.Install)
+	case "wake test":
+		return wakeTest(w, o.Wake.Test)
+	case "wake vad-test":
+		return wakeVADTest(w, o.Wake.VADTest)
+	case "bench":
+		return wakeBench(w, o.Bench)
+	case "status":
+		return deviceStatus(w, o.Status)
 	default:
 		return fmt.Errorf("unknown command %q", command)
 	}

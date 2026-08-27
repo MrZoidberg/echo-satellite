@@ -118,13 +118,35 @@ type DeviceState string
 
 // Device states.
 const (
-	StateIdle      DeviceState = "idle"
-	StateListening DeviceState = "listening"
-	StateThinking  DeviceState = "thinking"
-	StateSpeaking  DeviceState = "speaking"
-	StateUpdating  DeviceState = "updating"
-	StateError     DeviceState = "error"
+	StateIdle        DeviceState = "idle"
+	StateListening   DeviceState = "listening"
+	StateThinking    DeviceState = "thinking"
+	StateSpeaking    DeviceState = "speaking"
+	StateMuted       DeviceState = "muted"
+	StateOffline     DeviceState = "offline"
+	StateUpdating    DeviceState = "updating"
+	StateUpdateTrial DeviceState = "update_trial"
+	StateError       DeviceState = "error"
 )
+
+var allDeviceStates = []DeviceState{
+	StateIdle,
+	StateListening,
+	StateThinking,
+	StateSpeaking,
+	StateMuted,
+	StateOffline,
+	StateError,
+	StateUpdating,
+	StateUpdateTrial,
+}
+
+// AllDeviceStates returns every semantic device state in documentation order.
+func AllDeviceStates() []DeviceState {
+	out := make([]DeviceState, len(allDeviceStates))
+	copy(out, allDeviceStates)
+	return out
+}
 
 // AudioFormat names the encoding of a binary audio frame.
 type AudioFormat string

@@ -93,7 +93,11 @@ microphone
   -> wake accepted only when wake criteria are satisfied
 ```
 
-For openWakeWord specifically, upstream openWakeWord includes a Silero VAD option. When `vad_threshold` is enabled, each input frame gets a VAD score and wake predictions are accepted only when the VAD score is above the configured threshold.
+Upstream openWakeWord offers a Silero VAD option, whose same-step
+`vad_threshold` rule is a reference behaviour rather than this device's
+runtime. Echo Satellite's qualified openWakeWord path uses an adapted local
+level VAD and accepts only when its effective (bounded-lookback) VAD score is
+above the configured threshold; see §16 for the measured configuration.
 
 The gateway may configure the active wake model, wake threshold and local VAD settings and may receive wake diagnostics, but it does not receive a continuous microphone stream and does not score wake words or wake VAD itself.
 
@@ -264,7 +268,10 @@ Primary implementation reference for:
 
 EchoLocal already provides a useful Go-native local wake stack and supports both openWakeWord and microWakeWord model kinds. Echo Satellite should reuse/adapt those low-level pieces rather than inventing a separate wake inference stack.
 
-At the time of this design, EchoLocal's current Go openWakeWord path does not appear to include the upstream Silero VAD gate. Echo Satellite should therefore treat local wake VAD as an additional local component that must be implemented/adapted and validated.
+EchoLocal's current Go openWakeWord path does not include the upstream Silero
+VAD gate. Echo Satellite therefore ships an additional adapted local level-VAD
+component; §26 records why a pure-Go Silero runtime is blocked and why this is
+not Silero-equivalent.
 
 EchoLocal's updater is also a useful reference for a key safety rule: download completely, verify size/hash, retain the old binary, and treat the new binary as on trial until it has run long enough to be trusted. Echo Satellite should extend that idea with gateway-handshake health rather than using uptime alone.
 
@@ -278,8 +285,9 @@ Reference for:
 - wake-model scoring;
 - wake activation thresholds;
 - optional Speex noise suppression;
-- bundled Silero VAD gating through `vad_threshold`;
-- the rule that wake predictions are accepted only when the simultaneous VAD score is above the configured VAD threshold.
+- upstream bundled Silero VAD gating through `vad_threshold`;
+- upstream's simultaneous-VAD acceptance rule, which Echo Satellite adapts to
+  its independently qualified effective-VAD lookback rule.
 
 Echo Satellite does not need to run the upstream Python package on the Dot. Its behaviour is the reference for the local Go implementation/adaptation.
 
@@ -1359,14 +1367,42 @@ wake:
   enabled: true
   engine: openwakeword
   model: okay_nabu
-  threshold: 0.80
+  threshold: 0.50       # measured on the qualified Dot; see docs/device-diagnostics.md
   vad:
     enabled: true
-    threshold: 0.50   # example only; tune on real device
-  preroll_ms: 250
+    threshold: 0.50     # measured on the qualified Dot; see docs/device-diagnostics.md
+    lookback_ms: 1200   # measured effective-VAD lookback
+  preroll_ms: 600       # measured shortest value preserving the first command word
 ```
 
 There is deliberately no gateway wake mode.
+
+Wake and VAD scores must not be assumed to be temporally aligned on the same PCM
+step. A wake engine may score a temporal receptive field and emit its peak only
+after speech has ended. For the qualified `okay_nabu` pipeline, the acceptance
+gate uses the maximum recent VAD score from a bounded 1,200 ms lookback rather
+than only the instantaneous VAD score. The selection was measured against
+false-accept and false-reject traces; each newly qualified model must repeat
+that comparison. Every candidate remains entirely device-local.
+
+Any alignment setting is a property of the qualified wake/VAD pipeline
+configuration, not of a particular phrase. Qualification identifies at least
+the wake engine and model, VAD implementation, PCM step geometry, and
+preprocessing configuration, and covers relevant speakers and acoustic
+conditions. It must be measured from aligned per-step traces for every supported
+bundled or newly trained model. Configuration may override the qualified value
+for diagnostics, but production defaults must come from recorded measurements
+rather than a phrase-specific constant. Diagnostics report both instantaneous
+VAD and the effective aligned VAD evidence used by the gate, plus the alignment
+configuration, so a rejection can be explained without storing raw audio.
+
+The qualified `okay_nabu` pipeline evaluates wake inference on every step even
+when instantaneous VAD is below threshold (`always_score_wake=true`); VAD gates
+acceptance, not diagnostic scoring. Its measured defaults are specific to the
+openWakeWord engine, adapted level VAD, 16 kHz mono channel 0, 1,280-sample
+steps and bypass preprocessing. The evidence and limitations are in
+[`docs/device-diagnostics.md`](device-diagnostics.md); model replacement and
+qualification are documented in [`docs/wake-model-training.md`](wake-model-training.md).
 
 ### Wake model distribution
 
@@ -1387,8 +1423,10 @@ trained language metadata
 wake threshold
 wake VAD enabled/disabled
 wake VAD threshold
+configured VAD lookback
 last wake score
-last VAD score
+last instantaneous VAD score
+last effective VAD score used by the gate
 wake count
 rejected high-wake/low-VAD candidate count
 false-trigger test recordings (opt-in)
@@ -1512,6 +1550,13 @@ echoctl update channel <stable|beta|dev> [device]
 For normal post-bootstrap operation, update commands should go through the gateway control plane rather than requiring ADB.
 
 ADB remains the development/recovery mechanism.
+
+Hardware diagnostic commands are cross-built for `linux/arm64` and run on the
+Dot through `adb shell`; they do not proxy hardware access from the host.
+`echoctl wake install` accepts only a local model path and its required
+SHA-256 digest. `echoctl status --json` is the machine-readable bug-report
+artifact, combining identity, hardware probes, wake configuration/model
+inventory, wake statistics and resource usage.
 
 ### Initial bootstrap flow
 
@@ -1752,6 +1797,7 @@ Windows 11
   |     +-- Docker CLI
   |     +-- golangci-lint
   |     +-- source checkout
+  |     +-- adb -> Echo Dot (main adb path)
   |
   +-- Docker Desktop / WSL backend
   |     +-- gateway
@@ -1759,13 +1805,7 @@ Windows 11
   |     +-- Hermes/test dependencies
   |
   +-- Windows Android Platform Tools
-        +-- adb.exe -> Echo Dot
-```
-
-Prefer Windows `adb.exe` called from WSL for initial bootstrap and low-level iteration:
-
-```bash
-export ADB=/mnt/c/Android/platform-tools/adb.exe
+        +-- adb.exe -> Echo Dot (alternate adb path if USB passthrough is not activated)
 ```
 
 Keep the device binary pure Go where feasible:
@@ -2009,18 +2049,52 @@ This sequence avoids debugging wake inference, update recovery, audio transport,
 
 ## 26. Architectural Questions to Validate on Hardware
 
-- Which Echo microphone path/channel arrangement is best for both local wake inference and command capture?
-- How directly can EchoLocal's current openWakeWord/microWakeWord code be reused while keeping dependencies and licensing clean?
-- What is the cleanest local Silero-VAD implementation for the Go/ARM64 device path?
-- What is the CPU/memory impact of local VAD plus openWakeWord on the Echo Dot Gen 2?
-- Should wake VAD run before all wake engines or only where supported/beneficial?
-- Which wake model should ship as the default?
-- What wake and VAD thresholds give acceptable false-positive/false-negative behaviour in a real room?
-- How much pre-roll prevents clipped command speech without polluting STT with the wake phrase?
+- **Microphone path/channel arrangement:** card 0, device 24, 16 kHz, nine
+  interleaved S24_3LE channels; select physical microphone channel 0 and
+  exclude channels 7--8, which are playback loopback. Evidence:
+  [`docs/device-diagnostics.md`](device-diagnostics.md).
+- **EchoLocal reuse:** copied and adapted rather than imported because its
+  packages are Go `internal` packages. The adapted MIT code includes NEON
+  `Dot`/`AXPY` assembly, with a portable `noasm` fallback. Evidence:
+  [`docs/device-diagnostics.md`](device-diagnostics.md) and
+  [`docs/third-party-notices.md`](third-party-notices.md).
+- **Local Silero VAD:** blocked for the pure-Go ARM64 path. `onnx-go` lacks
+  LSTM/GRU/RNN support; `gonnx` cannot extend its unexported opset-13 registry,
+  and the evaluated Silero exports require unsupported operators (`If`, `Pad`,
+  `Pow`, `ReduceMean`, `Sqrt`, and, by export, others). The shipped VAD is the
+  adapted room-adaptive level detector; it is deliberately not
+  Silero-equivalent. Evidence: [`docs/device-diagnostics.md`](device-diagnostics.md).
+- **CPU/memory impact:** corrected streaming benchmark: NEON p50/p95 total
+  wake+VAD 42.616/80.361 ms at 100.6% CPU and 14,553,088 bytes RSS; `noasm`
+  65.342/125.880 ms at 100.6% CPU and 16,019,456 bytes RSS. This fails the
+  <=20 ms combined target. The local-wake vertical slice is accepted with this
+  known performance limitation because it repeatedly meets the 80 ms cadence
+  in the qualified use case. Before making a production performance claim,
+  evaluate a TFLite binding/runtime for the streaming embedding path; it must
+  preserve the device-local wake boundary and be qualified on the Dot. Evidence:
+  [`docs/device-diagnostics.md`](device-diagnostics.md).
+- **Wake-VAD engine scope:** deferred. One openWakeWord engine exists; the
+  per-engine VAD setting remains in `wake.Config`, so a future engine can make
+  its own qualified decision without changing the device-local boundary.
+- **Default model:** `okay_nabu`, qualified with the primary and additional
+  speaker sessions. Evidence: [`docs/device-diagnostics.md`](device-diagnostics.md).
+- **Thresholds:** wake 0.50, level-VAD 0.50, and 1,200 ms VAD lookback are the
+  measured `okay_nabu` defaults. Evidence:
+  [`docs/device-diagnostics.md`](device-diagnostics.md).
+- **Pre-roll:** 600 ms is the measured shortest value that retains the first
+  command word without retaining the wake phrase. Evidence:
+  [`docs/device-diagnostics.md`](device-diagnostics.md).
 - What is the cost of one versus multiple active local wake models?
-- Whether beamforming should be reused from EchoLocal or initially bypassed.
-- Whether AEC is required only for barge-in/full-duplex behaviour or earlier.
-- Exact speaker format and best resampling location.
+- **Beamforming:** beamforming initially bypassed; the `Preprocessor` seam reserves it for
+  later hardware qualification. Evidence:
+  [`docs/device-diagnostics.md`](device-diagnostics.md).
+- **AEC:** deferred to barge-in/full-duplex work; it is not required for this
+  one-way local wake slice. Evidence:
+  [`docs/device-diagnostics.md`](device-diagnostics.md).
+- **Speaker format/resampling:** ALSA playback is 48 kHz stereo S16_LE,
+  1,024-frame periods and four periods. Canonical audio remains 16 kHz mono;
+  resampling and channel duplication occur on-device immediately before the
+  PCM sink. Evidence: [`docs/device-diagnostics.md`](device-diagnostics.md).
 - Which supervisor/startup integration is safest on the existing Magisk-rooted FireOS installation?
 - Can agent binaries and both slots live entirely under `/data` without modifying `/system` during normal updates?
 - What exact trial timeout and fast-exit limits are reliable on Echo Dot Gen 2 boot/startup timing?
@@ -2040,10 +2114,11 @@ Resolve these with focused diagnostics, intentionally broken update builds and r
 | Component | Initial choice |
 |---|---|
 | Echo daemon | Go |
+| Device implementation | Pure Go with `CGO_ENABLED=0`; Go assembly is permitted with a portable `noasm` fallback |
 | Echo hardware reference | EchoLocal |
 | Wake detection | **Local on Echo only** |
 | Wake engines | EchoLocal-derived openWakeWord + microWakeWord support |
-| Wake VAD | **Local on Echo; Silero/openWakeWord-compatible behaviour for OWW path** |
+| Wake VAD | **Local on Echo; adapted room-level VAD with a qualified effective-VAD lookback (not Silero-equivalent)** |
 | Wake models | local TFLite models |
 | Manual trigger | Action button / simulator |
 | Local discovery | mDNS / DNS-SD, static URL fallback |
