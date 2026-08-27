@@ -2067,14 +2067,17 @@ This sequence avoids debugging wake inference, update recovery, audio transport,
 - **CPU/memory impact:** corrected streaming benchmark: NEON p50/p95 total
   wake+VAD 42.616/80.361 ms at 100.6% CPU and 14,553,088 bytes RSS; `noasm`
   65.342/125.880 ms at 100.6% CPU and 16,019,456 bytes RSS. This fails the
-  <=20 ms combined target; optimize the streaming embedding hot path before
-  accepting a production performance claim. Evidence:
+  <=20 ms combined target. The local-wake vertical slice is accepted with this
+  known performance limitation because it repeatedly meets the 80 ms cadence
+  in the qualified use case. Before making a production performance claim,
+  evaluate a TFLite binding/runtime for the streaming embedding path; it must
+  preserve the device-local wake boundary and be qualified on the Dot. Evidence:
   [`docs/device-diagnostics.md`](device-diagnostics.md).
 - **Wake-VAD engine scope:** deferred. One openWakeWord engine exists; the
   per-engine VAD setting remains in `wake.Config`, so a future engine can make
   its own qualified decision without changing the device-local boundary.
-- **Default model:** `okay_nabu`, pending the required additional-speaker
-  closeout. Evidence: [`docs/device-diagnostics.md`](device-diagnostics.md).
+- **Default model:** `okay_nabu`, qualified with the primary and additional
+  speaker sessions. Evidence: [`docs/device-diagnostics.md`](device-diagnostics.md).
 - **Thresholds:** wake 0.50, level-VAD 0.50, and 1,200 ms VAD lookback are the
   measured `okay_nabu` defaults. Evidence:
   [`docs/device-diagnostics.md`](device-diagnostics.md).

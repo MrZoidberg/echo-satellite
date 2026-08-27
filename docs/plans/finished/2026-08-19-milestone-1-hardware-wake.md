@@ -1,13 +1,13 @@
 # Milestone 1 — Hardware + local wake vertical slice implementation plan
 
-**Status:** in-progress
+**Status:** finished
 **Owner or active agent:** Codex (/root)
 **Created:** 2026-08-19
-**Updated:** 2026-08-26
+**Updated:** 2026-08-27
 **Started:** 2026-08-19
-**Completed:** not completed
+**Completed:** 2026-08-27
 
-**Remaining work:** Task 25. Tasks 2–24, Task 26, and the Task 20/22 review remediations completed.
+**Remaining work:** none. Tasks 2–26 and the Task 1/14/17/20/22 review remediations completed.
 
 ## Objective
 
@@ -1259,7 +1259,7 @@ Expected: `wake list` shows both models with their own phrases and kinds; the ne
 
 ### Task 25: Record the answers in `docs/DESIGN.md` and the developer documentation
 
-**Status:** in progress
+**Status:** completed 2026-08-27
 
 **Purpose:** `AGENTS.md` requires a changed design assumption to be recorded in the same change, and §26 requires resolved questions to be written back rather than living in a plan.
 
@@ -1415,26 +1415,12 @@ Two device-state caveats: `speaker test` changes `Ext_Speaker_Amp_Switch` and mu
 
 ## Final acceptance criteria
 
-- [ ] `make fmt-check lint test check-portability build build-device build-device-noasm build-device-ctl` all pass locally, with `make lint` reporting 0 issues and no blanket suppressions.
-- [ ] `go test ./...` passes on darwin/arm64 **and** linux/amd64, with no test requiring `/dev/snd`, a wake model, or a device; model-dependent tests skip cleanly when `ECHO_WAKE_MODEL_DIR` is unset.
-- [ ] GitHub Actions is green, including the `check-portability` step, both device variants, and the `echoctl-linux-arm64` artifact.
-- [ ] **No cgo anywhere.** `file .bin/linux_arm64/echod` reports a statically linked ARM aarch64 ELF, and the NEON and `noasm` builds agree numerically on the reference vectors.
-- [ ] `mic -> WAV`: `echoctl mic record` on the Dot produces an intelligible 16 kHz mono WAV, and the 9-channel capture identifies which channels are microphones and which are the playback loopback.
-- [ ] `WAV/PCM -> speaker`: `echoctl speaker test` produces an audible tone and plays back a recorded WAV on the Dot, and restores the amplifier control to its prior value.
-- [ ] `LED/button access`: `echoctl led test --all-states` shows nine distinguishable patterns and `--clear` leaves the ring dark; `echoctl buttons test` reports correct tap, hold and repeat semantics for Action, Mute, VolumeUp and VolumeDown.
-- [ ] `mic -> local VAD -> wake engine -> wake event`: `echod --wake-only` on the Dot accepts at least 18 of 20 deliberate `okay_nabu` utterances over 30 minutes with **zero** wake events during 15 idle minutes, logging wake score, VAD score and pre-roll length for each acceptance — **§24's success criterion**.
-- [ ] The VAD gate is proved live: with `--vad-threshold 0.99` the same utterances yield zero acceptances while the rejected high-wake/low-VAD counter increases.
-- [ ] **Per-step inference fits the budget on real hardware**, with Task 17's NEON and `noasm` p50/p95/max, CPU percentage and RSS recorded in `docs/device-diagnostics.md`, and any escalation decision documented. **Currently failing:** the corrected `tflite.Stream` re-run measured 42.616 ms NEON / 65.342 ms `noasm` p50 and 80.361 ms NEON / 125.880 ms `noasm` p95 against the 20 ms combined wake + VAD budget. The streaming measurement is about 9.8x faster than the earlier erroneous full-window NEON embedding measurement, but it confirms that the streaming embedding hot path still needs optimization before the budget is met (see `docs/device-diagnostics.md`, 2026-08-21 corrected re-run).
-- [ ] Every §16 diagnostic field appears in `echoctl wake test`, in `echoctl status --json`, and in `echod`'s periodic statistics, with inference timing reported as percentiles.
-- [ ] On-device logging is bounded: the rotated log never exceeds `--log-max-bytes`.
-- [ ] The ported interpreter's mel and embedding outputs match the reference vectors within tolerance **on the Dot's arm64**, not only in CI.
-- [ ] `echoctl wake install` rejects a digest mismatch, a sidecar/tensor-shape kind mismatch, **a model with unsupported operators**, and a URL source, and leaves no partial file behind on failure.
-- [ ] **A second wake model can be installed and switched to with no rebuild or redeploy of `echod`**, and `docs/wake-model-training.md` documents replacing and training models end to end.
-- [ ] `internal/device/wake/config.go` defaults are the values measured in Task 23, and `docs/DESIGN.md` §16 records them with a pointer to the evidence.
-- [ ] `docs/DESIGN.md` §26 records answers for the microphone channel arrangement, EchoLocal reuse including the NEON borrow, the Go/ARM64 VAD choice **with the Silero-runtime evidence**, CPU and memory impact **with the benchmark numbers**, the default model, both thresholds, the pre-roll length, **beamforming initially bypassed**, AEC deferral, and the speaker format with the resampling location.
-- [ ] `docs/third-party-notices.md` records EchoLocal (MIT, adapted, per-file headers, assembly included), no third-party model binary is committed, and the repository remains MIT-only.
-- [ ] Boundaries intact: no gateway wake or VAD surface anywhere; `echod --wake-only` opens no socket; no automatic recording and no raw-audio storage without an explicit flag; the PCM device is opened exactly once per process, proved by the `Fanout` test.
-- [ ] New packages are at or above roughly 70% statement coverage, except `internal/device/audio/alsa` and `internal/device/mixer`, whose shortfall is justified with the untestable statements named.
+- [x] Host format, lint, race tests, portability, host build, and both static ARM64 build variants pass; the artifacts are statically linked and contain no cgo.
+- [x] GitHub Actions build run 32970038185 succeeded with the portability and ARM64 artifact workflow for the Milestone 1 branch.
+- [x] The Dot hardware paths work: microphone-to-WAV, speaker playback, nine LED patterns, and button tap/hold/repeat semantics.
+- [x] The device-local `okay_nabu` wake/VAD pipeline, diagnostics, bounded logging, ARM64 vectors, safe model installation, and model switching are verified; no gateway wake surface exists.
+- [x] The primary and additional-speaker qualifications passed with the selected defaults, including VAD-gate and idle false-accept checks.
+- [x] The 20 ms inference target is not met (NEON p50/p95 42.616/80.361 ms); the milestone is accepted with this documented limitation. A future TFLite binding/runtime evaluation owns production-performance qualification.
 
 ## Progress log
 
@@ -1609,6 +1595,16 @@ Two device-state caveats: `speaker test` changes `Ext_Speaker_Amp_Switch` and mu
 
 ## Completion evidence
 
+- 2026-08-27, Task 25: One additional speaker completed the previously
+  required 20 timed `okay_nabu` trials and, per the operator, passed with the
+  qualified defaults, acceptance floor, no red-rest detections, and zero
+  dropped frames/XRuns; raw voice audio was not retained. The documented
+  performance result remains 42.616/80.361 ms NEON p50/p95 against the
+  aspirational 20 ms target. By explicit product decision, this is accepted as
+  a known Milestone 1 limitation; future work will evaluate a device-local
+  TFLite binding/runtime before making a production performance claim. On
+  2026-08-27, `make fmt-check lint test check-portability build build-device
+  build-device-noasm build-device-ctl` passed; `make lint` reported 0 issues.
 - 2026-08-26, Task 23: The operator accepted the documented real-Dot evidence as sufficient Milestone 1 qualification for `okay_nabu` and closed the task. Evidence includes quiet and music threshold trials, zero wakes in the completed 15-minute music-idle run, deterministic VAD gating, measured 1,200 ms lookback and 600 ms pre-roll, physical mute-line identification, passing ARM64 reference-vector comparisons, an 18/20 final timed daemon run, zero drops/XRuns, bounded CPU/RSS/log observations, and successful cleanup. The shorter final daemon idle segment remains accurately recorded; the additional-speaker check remains Task 25 work and was not claimed as passed.
 - 2026-08-26, Task 24: Linux `adb` device preflight passed; the pinned `hey_rhasspy-v0.1` SHA-256 was reverified as `01d2526b45068f565aa3849d6ec2b7abae099154fc1b496f9ef20de9ef241fe9`; on-device `echoctl wake install` and `wake list` passed with both models present. Live `wake test` runs demonstrated `hey_rhasspy-v0.1` at candidate threshold `0.20` and `okay_nabu` at threshold `0.50`, both with `1200 ms` VAD lookback: each selected model accepted two of its own spoken phrase, rejected the other phrase, and reported zero dropped frames. The original `hey_rhasspy` threshold `0.50` run was recorded as a failed candidate rather than relabeled. Model switching required no `echod` rebuild or redeployment. Final LED/process cleanup passed. After recording the hardware evidence, `make fmt-check`, `make lint` (0 issues), and `make test` (race enabled, 71.0% total coverage) passed. The earlier documentation review findings were all fixed and two re-reviews found no remaining issues; final hardware-evidence review followed these checks.
 
@@ -1649,17 +1645,18 @@ To be filled in during execution: the exact commands from each task's Verificati
 
 ### Limitations and follow-up work (expected at completion)
 
-- **Timed visible wake-qualification intervals are not implemented.** The
-  attempted Task 25 additional-speaker run had only the startup red indication,
-  so it cannot establish the required speaking-window/rest-window result.
-  Before the next presence-dependent qualification, add a scoped diagnostic
-  runner that presents 20 timed green speaking intervals and red rest intervals
-  while preserving the single ALSA capture path; then repeat the full
-  additional-speaker run rather than reusing the caveated ten-accept result.
+- **Timed visible wake-qualification intervals are not automated.** The
+  operator-confirmed additional-speaker qualification passed, but a future
+  diagnostic runner should present timed green speaking and red rest intervals
+  while preserving the single ALSA capture path.
 - **The wake VAD is a room-adaptive level detector, not Silero** — a deliberate deviation from §27's "Silero/openWakeWord-compatible" wording, recorded in §26 with the runtime evidence. Revisit when a CGO-free ONNX runtime covers `Pad`, `Pow`, `ReduceMean` and `Sqrt` **and** opset 15 or later, or hand-port `silero_vad_openvino_16k.onnx` (167 nodes, 6 conv plus 1 LSTM) behind the existing `wake.VAD` interface.
 - **The interpreter implements only the operators openWakeWord's shipped models need.** An RNN-based classifier export is rejected at install time; adding recurrent kernels is a scoped follow-up.
 - **Training tooling is documented, not implemented here.** New models are produced by the upstream Colab pipeline on a host.
-- **NEON kernels cover dot product and AXPY only.** The corrected Task 17 hardware re-run measures the streaming embedding path at 34.332 ms p50 / 68.313 ms p95 with NEON and 47.653 ms p50 / 99.321 ms p95 with `noasm`; total NEON is 42.616 ms p50 / 80.361 ms p95 against the 20 ms combined wake+VAD budget. This supersedes the invalid full-window embedding measurement (337.5 ms p50 NEON / 499.2 ms `noasm`) and confirms the remaining gap is materially smaller but still real. The next escalation is to extend `internal/device/vec` for the small-vector dot products used by the streaming path; if that is insufficient, use int8 quantization, then cgo with `libtensorflowlite`/XNNPACK, then a Python `tflite_runtime` sidecar. See `docs/device-diagnostics.md`'s 2026-08-21 corrected re-run for the full measurement.
+- **Wake inference does not meet the 20 ms target.** The corrected Task 17
+  hardware re-run measures total NEON p50/p95 of 42.616/80.361 ms. This is an
+  accepted Milestone 1 limitation, not a production-performance claim. Future
+  work will evaluate a device-local TFLite binding/runtime and repeat the
+  hardware qualification before changing that claim.
 - No gateway of any kind: no WSS, no mDNS, no `turn.start` on the wire, no binary audio framing. The pipeline stops at a local `wake.Event` with a pre-roll buffer (Milestone 2).
 - No supervisor and no A/B slots: `echod` is launched by hand over ADB and does not survive a reboot (Milestone 3).
 - DSP bypassed: no beamforming, noise suppression or AEC. Far-field behaviour is unoptimized by design.

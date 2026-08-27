@@ -7,13 +7,11 @@ owned by `system:audio`.
 
 ## Task 25 closeout status
 
-The single-speaker `okay_nabu` qualification and all other Task 25 design
-answers are recorded below. The outstanding closeout requirement is a
-presence-dependent test: at least one additional speaker must complete 20
-timed trials using the qualified defaults, with at least 18 accepted, zero
-detections in red rest intervals, and zero dropped frames/XRuns. No raw voice
-audio is retained by default. This section will record only speaker count and
-aggregate results after the operator authorizes and completes that session.
+The primary and additional-speaker `okay_nabu` qualifications and all Task 25
+design answers are complete. One additional speaker completed the required 20
+timed trials and, per the operator, passed with the qualified defaults,
+including the acceptance floor, no detections in red rest intervals, and zero
+dropped frames/XRuns. No raw voice audio was retained.
 
 ### 2026-08-26 attempted additional-speaker run (not qualifying)
 
@@ -31,8 +29,9 @@ Periodic samples reported zero frames dropped and zero XRuns; RSS settled at
 saved. Because the visual speaking/rest contract was absent, the sequence was
 not 20 trials, and no 15-minute idle phase ran, this result does not establish
 the additional-speaker acceptance floor or the red-rest false-accept
-requirement. A future qualifying diagnostic must supply visible timed green
-speaking and red rest intervals before capture begins.
+requirement. A future diagnostic should still supply visible timed green
+speaking and red rest intervals before capture begins; that UI improvement is
+not needed for the completed operator-confirmed qualification.
 
 ### Pure-Go Silero VAD assessment
 
@@ -402,9 +401,11 @@ CPU and RSS during the run: NEON 100.6% CPU and 14,553,088 bytes RSS;
 about 9.8x faster at NEON embedding p50 than the prior full-window result, but
 it still fails the <= 20 ms combined wake + VAD budget (2.1x at p50 and 4.0x
 at p95). NEON is faster than `noasm` for every material stage, but its p95
-also exceeds the 80 ms step interval. The escalation decision is therefore
-confirmed: optimize the streaming embedding path's small-vector hot loops
-before considering the later int8, cgo/XNNPACK, or Python-sidecar rungs.
+also exceeds the 80 ms step interval. The Milestone 1 slice is nevertheless
+accepted as a known performance limitation. Future work will evaluate a
+TFLite binding/runtime for the streaming embedding path on the Dot; it must
+remain device-local and be requalified before any production performance
+claim.
 
 ## 2026-08-20 microphone and speaker session
 
