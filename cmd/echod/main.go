@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -473,6 +474,12 @@ func logGatewayTarget(ctx context.Context, o opts) {
 	case err != nil:
 		slog.Error("gateway configuration is unusable", "error", err)
 	default:
-		slog.Info("gateway endpoint resolved", "endpoint", endpoint)
+		slog.Info("gateway endpoint resolved", "endpoint", logValue(endpoint))
 	}
+}
+
+// logValue prevents values received from configuration or discovery from
+// injecting a separate record into text logs.
+func logValue(value string) string {
+	return strings.NewReplacer("\r", "", "\n", "").Replace(value)
 }

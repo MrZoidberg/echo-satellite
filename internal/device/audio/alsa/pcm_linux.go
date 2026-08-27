@@ -5,6 +5,7 @@ package alsa
 // Adapted from github.com/ygelfand/echolocal (MIT). See docs/third-party-notices.md.
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"os"
@@ -98,6 +99,11 @@ func validateGranted(params []byte, config Config) error {
 		}
 	}
 	return nil
+}
+
+func intervalValue(params []byte, param int) uint32 {
+	offset := intervalOffset + (param-firstInterval)*intervalSize
+	return binary.LittleEndian.Uint32(params[offset:])
 }
 
 func (p *PCM) ReadInterleaved(buffer []byte) (int, error) {

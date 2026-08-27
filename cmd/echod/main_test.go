@@ -35,6 +35,12 @@ func TestOpenWakeOnlySource_LiveUsesDotMicrophone(t *testing.T) {
 	assert.True(t, got.Capture)
 }
 
+func TestLogValue_RemovesRecordSeparators(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, "gateway.example:8443", logValue("gateway.example\r\n:8443"))
+}
+
 type orchestrationSource struct {
 	closed chan struct{}
 	count  int

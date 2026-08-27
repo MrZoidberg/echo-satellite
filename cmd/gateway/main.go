@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/MrZoidberg/echo-satellite/internal/protocol"
@@ -65,11 +66,11 @@ func run(o opts) error {
 	if err != nil {
 		return fmt.Errorf("build device endpoint: %w", err)
 	}
-	slog.Info("mdns advertisement", "instance", inst.ServerID, "endpoint", endpoint, "txt", inst.TXT.Encode())
+	slog.Info("mdns advertisement", "instance", logValue(inst.ServerID), "endpoint", logValue(endpoint), "txt", logValues(inst.TXT.Encode()))
 
 	// the escape hatch must be visible whenever it is on, not only at install time
 	for _, note := range o.trustPolicy().StatusNotes() {
-		slog.Warn("release trust", "note", note)
+		slog.Warn("release trust", "note", logValue(note))
 	}
 
 	slog.Warn("no gateway subsystem is implemented yet",
@@ -78,4 +79,18 @@ func run(o opts) error {
 	<-ctx.Done()
 	slog.Info("gateway stopped")
 	return nil
+}
+
+// logValue prevents values received from configuration or discovery from
+// injecting a separate record into text logs.
+func logValue(value string) string {
+	return strings.NewReplacer("\r", "", "\n", "").Replace(value)
+}
+
+func logValues(values []string) []string {
+	sanitized := make([]string, len(values))
+	for i, value := range values {
+		sanitized[i] = logValue(value)
+	}
+	return sanitized
 }
