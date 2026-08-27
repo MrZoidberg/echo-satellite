@@ -4,7 +4,7 @@ Universal instructions for AI coding agents working in this repository. They app
 
 ## Repository state
 
-Milestone 0 has landed: the Go module, build, CI, and the shared contracts (`internal/protocol`, `internal/discovery`, `internal/release`) exist, and `echod`, `gateway`, `echoctl`, and `dotsim` build. No microphone, wake model, WebSocket endpoint, mDNS advertisement, supervisor, or persistence exists yet — those arrive with Milestones 1 and later. Follow the layout, naming, and stack choices in `docs/DESIGN.md` §6 and §27 rather than inventing alternatives.
+Milestone 1 has landed its device hardware and local-wake vertical slice: pure-Go ALSA capture/playback, LEDs, buttons, local VAD and openWakeWord, model installation, and Dot diagnostics. Gateway transport, mDNS, the supervisor/A/B updater, persistence, and assistant integration remain later milestones. Follow the layout, naming, and stack choices in `docs/DESIGN.md` §6 and §27 rather than inventing alternatives.
 
 ## Build and test commands
 
@@ -16,6 +16,10 @@ make lint          # golangci-lint run
 make fmt           # gofmt -l -w .
 make build         # host binaries into .bin/
 make build-device  # static linux/arm64 echod into .bin/linux_arm64/
+make build-device-ctl   # static linux/arm64 echoctl for the Dot
+make build-device-noasm # static linux/arm64 echod with portable vector fallback
+make check-portability  # compile all packages for darwin/arm64 and linux/arm64
+make bench              # Go benchmark results with allocation counts
 make version       # print the git-derived revision the build stamps in
 
 go test ./internal/<pkg>/...   # one package
@@ -24,6 +28,11 @@ go test ./internal/release -run TestFixtures_Regenerate -update-fixtures   # rew
 ```
 
 Run `make lint` while working, not only at the end: `.golangci.yml` is strict and `nolintlint` requires every suppression to name a specific linter and give a reason.
+
+Hardware access is confined to `internal/device/audio/alsa` and
+`internal/device/mixer`, behind Linux build tags with `!linux` stubs. LED,
+buttons and system code instead use injected filesystem roots, so their tests
+remain portable without build tags.
 
 ## Code conventions
 

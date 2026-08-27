@@ -5,6 +5,56 @@ Dot Gen 2 used during Milestone 1. Commands that access audio devices run
 through Magisk because the normal ADB shell is UID 2000 and the PCM nodes are
 owned by `system:audio`.
 
+## Task 25 closeout status
+
+The single-speaker `okay_nabu` qualification and all other Task 25 design
+answers are recorded below. The outstanding closeout requirement is a
+presence-dependent test: at least one additional speaker must complete 20
+timed trials using the qualified defaults, with at least 18 accepted, zero
+detections in red rest intervals, and zero dropped frames/XRuns. No raw voice
+audio is retained by default. This section will record only speaker count and
+aggregate results after the operator authorizes and completes that session.
+
+### 2026-08-26 attempted additional-speaker run (not qualifying)
+
+An operator-authorized live `okay_nabu` run used the qualified settings (wake
+threshold 0.50, level-VAD threshold 0.50, 1,200 ms lookback, 600 ms pre-roll,
+and `always_score_wake=true`) on rooted Dot `G090LF0964060EHP`. The speaker
+reported that the ring stayed solid red; this daemon has only the standard
+startup red indication and no timed green/red trial scheduler. The run was
+therefore stopped after its spoken sequence rather than being misrepresented as
+the required 20-trial qualification.
+
+It accepted 10 wakes across 4m56s of audio, with scores from 0.5036 to 0.9434.
+Periodic samples reported zero frames dropped and zero XRuns; RSS settled at
+15,933,440 bytes and CPU ranged from 49.88% to 51.12%. No raw voice audio was
+saved. Because the visual speaking/rest contract was absent, the sequence was
+not 20 trials, and no 15-minute idle phase ran, this result does not establish
+the additional-speaker acceptance floor or the red-rest false-accept
+requirement. A future qualifying diagnostic must supply visible timed green
+speaking and red rest intervals before capture begins.
+
+### Pure-Go Silero VAD assessment
+
+Silero was assessed as a future `wake.VAD` implementation, not run on the Dot:
+the available pure-Go ONNX runtimes cannot execute the required model graphs
+under `CGO_ENABLED=0`. `onnx-go`'s Gorgonia backend has no LSTM/GRU/RNN
+operators. `gonnx` implements recurrent operators, but its operator registry is
+unexported and fixed at opset 13, so the required operations cannot be added
+without a fork and newer exports are rejected. A static protobuf `op_type`
+inventory found the following missing `gonnx` operators:
+
+| Silero export | Nodes | Missing operators |
+|---|---:|---|
+| v5 | 685 | `If`, `Identity`, `Pad`, `Pow`, `ReduceMean`, `Sqrt` |
+| v4 | 250 | `If`, `Identity`, `Pad`, `Pow`, `ReduceMean`, `Sqrt`, `Log`, `Neg` |
+| op18 ifless | 90 | `If`, `Pad`, `Pow`, `ReduceMean`, `Split`, `Sqrt` |
+| OpenVINO 16 kHz | 167 | `Pad`, `Pow`, `ReduceMean`, `Sqrt` |
+
+The device therefore ships the adapted room-adaptive level detector. It
+structurally supplies a local VAD score and gate, but it is not
+Silero-equivalent.
+
 ## 2026-08-26 Hey_Prime compatibility installation (Task 26)
 
 Linux ADB preflight passed on rooted Dot `G090LF0964060EHP`: model `AEOBC`,

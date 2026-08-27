@@ -71,6 +71,47 @@ func TestStartLiveWakeIndicator_FileReplaySkipsHardware(t *testing.T) {
 	require.NoError(t, clearIndicator())
 }
 
+func TestWakeFeedback_FlashesGreenThenRestoresRed(t *testing.T) {
+	root := wakeIndicatorRoot(t)
+	red := led.Render(protocol.StateMuted, 0).EncodeHex() + "\n"
+	green := led.Render(protocol.StateListening, 3).EncodeHex() + "\n"
+	require.NoError(t, os.WriteFile(filepath.Join(root, "frame"), []byte(red), 0o600))
+
+	originalDuration := wakeFeedbackDuration
+	wakeFeedbackDuration = time.Millisecond
+	t.Cleanup(func() { wakeFeedbackDuration = originalDuration })
+
+	flash, closeFeedback, err := startWakeFeedback(wakeInputOptions{LEDRoot: root}, true)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, closeFeedback()) })
+	require.NoError(t, flash())
+	assertFileContents(t, filepath.Join(root, "frame"), green)
+	assert.Eventually(t, func() bool {
+		contents, readErr := os.ReadFile(filepath.Join(root, "frame")) //nolint:gosec // path is beneath a test-owned temporary directory.
+		return readErr == nil && string(contents) == red
+	}, time.Second, time.Millisecond)
+}
+
+func TestStartWakeFeedback_FileReplayIsRejected(t *testing.T) {
+	_, _, err := startWakeFeedback(wakeInputOptions{FromFile: "fixture.wav"}, true)
+	require.Error(t, err)
+}
+
+func TestWakeFeedback_RestoreFailureIsReportedOnClose(t *testing.T) {
+	root := wakeIndicatorRoot(t)
+	originalDuration := wakeFeedbackDuration
+	wakeFeedbackDuration = time.Millisecond
+	t.Cleanup(func() { wakeFeedbackDuration = originalDuration })
+
+	flash, closeFeedback, err := startWakeFeedback(wakeInputOptions{LEDRoot: root}, true)
+	require.NoError(t, err)
+	require.NoError(t, flash())
+	require.NoError(t, os.Remove(filepath.Join(root, "frame")))
+	require.NoError(t, os.Mkdir(filepath.Join(root, "frame"), 0o700))
+	time.Sleep(10 * time.Millisecond)
+	require.Error(t, closeFeedback())
+}
+
 func TestPlayWakeStartAudio_UsesQuarterVolume(t *testing.T) {
 	original := runWakeStartSpeakerTest
 	var got speakerTestCommand

@@ -4,11 +4,11 @@ Turn a rooted Amazon Echo Dot into a voice satellite for a self-hosted assistant
 gateway: the Dot listens for its wake word locally and streams a voice turn to a
 gateway that owns speech recognition, the assistant backend and the fleet.
 
-**Status: Milestone 0.** This repository currently delivers the foundation —
-module layout, build and CI, and the shared contracts (protocol, discovery,
-release trust). The four binaries build and are wired, but no microphone, wake
-model, WebSocket endpoint or mDNS advertisement is implemented yet; each binary
-says so when it starts. See `docs/DESIGN.md` §24 for the milestone sequence.
+**Status: Milestone 1 local-wake slice.** The Dot now has pure-Go microphone
+capture, local VAD-gated openWakeWord detection, speaker playback, LED and
+button diagnostics, and local wake-model installation. Gateway transport,
+mDNS, supervisor/A/B updates, persistence and assistant integration remain
+later milestones. See `docs/DESIGN.md` §24 for the milestone sequence.
 
 ## The two boundaries
 
@@ -35,6 +35,26 @@ make lint          # golangci-lint
 make build         # host binaries into .bin/
 make build-device  # static linux/arm64 echod for the Dot
 ```
+
+## Local wake models
+
+Wake detection is entirely local to the Dot. Cross-build `echoctl`, copy it and
+a vetted model to the Dot, then install using a local path and pinned digest:
+
+```sh
+make build-device-ctl
+adb -s <serial> push .bin/linux_arm64/echoctl /data/local/tmp/echoctl
+adb -s <serial> shell "su -c '/data/local/tmp/echoctl wake install okay_nabu \\
+  --from /data/local/tmp/okay_nabu.tflite \\
+  --metadata /data/local/tmp/okay_nabu.json --sha256 <sha256>'"
+adb -s <serial> shell "su -c '/data/local/tmp/echoctl wake list'"
+```
+
+Switch the active model with the `--wake-model` configuration option after it
+has been independently qualified. See [docs/wake-model-training.md](docs/wake-model-training.md)
+for the complete install, switch and qualification flow, and
+[docs/device-diagnostics.md](docs/device-diagnostics.md) for measured Dot
+hardware results and limitations.
 
 Verify a release bundle with the same checks a gateway and a device apply:
 

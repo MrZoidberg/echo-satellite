@@ -105,6 +105,7 @@ type wakeTestCommand struct {
 	NoVAD         bool    `long:"no-vad" description:"disable the local wake VAD gate"`
 	PreRollMS     int     `long:"preroll-ms" default:"600" description:"accepted-event pre-roll duration in milliseconds"`
 	SavePreRoll   string  `long:"save-preroll" description:"opt in to storing accepted raw pre-roll WAV files in this directory"`
+	GreenOnWake   bool    `long:"green-on-wake" description:"briefly flash green for each accepted live wake"`
 }
 
 type wakeVADTestCommand struct{ wakeInputOptions }

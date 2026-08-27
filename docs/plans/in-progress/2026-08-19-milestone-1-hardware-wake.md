@@ -1438,6 +1438,37 @@ Two device-state caveats: `speaker test` changes `Ext_Speaker_Amp_Switch` and mu
 
 ## Progress log
 
+- 2026-08-26, Task 25 additional-speaker attempt: Linux ADB staged the current
+  static ARM64 binaries, stopped `ledcontroller`, set `boot_animation=0`, and
+  confirmed GPIO 444 low before an operator-authorized live `okay_nabu` run
+  using the measured 0.50/0.50/1,200 ms/600 ms defaults. It accepted 10 wakes
+  in 4m56s, with zero dropped frames/XRuns and 49.88--51.12% CPU, then stopped
+  cleanly and cleared the LED; no raw audio was saved. The speaker reported a
+  solid-red ring throughout because `echod --wake-only` provides only its
+  startup indication, not the plan's timed green-speaking/red-rest scheduler.
+  The run did not reach 20 trials or an idle phase, so it is explicitly not
+  qualifying evidence. Task 25 remains in progress for a corrected visible
+  interval run; `docs/device-diagnostics.md` records the aggregate and
+  limitation.
+
+- 2026-08-26, Task 25 documentation closeout: Updated `docs/DESIGN.md` §§16,
+  18, 26 and 27 with the measured `okay_nabu` defaults, local-only diagnostic
+  execution model, hardware decisions, Silero runtime assessment, corrected
+  benchmark outcome, and the permitted Go-assembly/no-cgo boundary. Updated
+  `AGENTS.md`, `README.md`, and `docs/device-diagnostics.md` to reflect the
+  Milestone 1 local-wake slice and its authoritative measurements. Linux ADB
+  preflight saw rooted Dot `G090LF0964060EHP`; no presence-dependent test,
+  audio capture, or LED diagnostic was started. `make fmt-check`, `make lint`,
+  `make test`, `make check-portability`, `make build`, `make build-device`,
+  `make build-device-noasm`, and `make build-device-ctl` passed; the task's
+  required design/protocol greps and `git diff --check` also passed. Task 25
+  remains in progress: the required additional-speaker 20-trial qualification
+  is the sole task blocker and needs operator approval. A fresh-context review
+  found stale Silero semantics and provisional-lookback wording in
+  `docs/DESIGN.md`, plus missing verification evidence in this entry; all four
+  findings were fixed, and `make fmt-check`, `make lint`, and `make test` were
+  rerun successfully.
+
 - 2026-08-26, Task 25 started: Added the required Echo Dot session contract to
   `AGENTS.md` after device verification confirmed it: stop only the indicator
   service and disable its boot animation before the first live diagnostic;
@@ -1618,6 +1649,13 @@ To be filled in during execution: the exact commands from each task's Verificati
 
 ### Limitations and follow-up work (expected at completion)
 
+- **Timed visible wake-qualification intervals are not implemented.** The
+  attempted Task 25 additional-speaker run had only the startup red indication,
+  so it cannot establish the required speaking-window/rest-window result.
+  Before the next presence-dependent qualification, add a scoped diagnostic
+  runner that presents 20 timed green speaking intervals and red rest intervals
+  while preserving the single ALSA capture path; then repeat the full
+  additional-speaker run rather than reusing the caveated ten-accept result.
 - **The wake VAD is a room-adaptive level detector, not Silero** — a deliberate deviation from §27's "Silero/openWakeWord-compatible" wording, recorded in §26 with the runtime evidence. Revisit when a CGO-free ONNX runtime covers `Pad`, `Pow`, `ReduceMean` and `Sqrt` **and** opset 15 or later, or hand-port `silero_vad_openvino_16k.onnx` (167 nodes, 6 conv plus 1 LSTM) behind the existing `wake.VAD` interface.
 - **The interpreter implements only the operators openWakeWord's shipped models need.** An RNN-based classifier export is rejected at install time; adding recurrent kernels is a scoped follow-up.
 - **Training tooling is documented, not implemented here.** New models are produced by the upstream Colab pipeline on a host.

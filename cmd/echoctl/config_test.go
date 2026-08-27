@@ -111,11 +111,12 @@ func TestParseArgs_Commands(t *testing.T) {
 		assert.Equal(t, "wake vad-test", command)
 		assert.True(t, o.Wake.VADTest.PrintSteps)
 
-		o, command, err = parseArgs([]string{"wake", "test", "--start-audio=/tmp/start.wav", "--led-root=/tmp/led"})
+		o, command, err = parseArgs([]string{"wake", "test", "--start-audio=/tmp/start.wav", "--led-root=/tmp/led", "--green-on-wake"})
 		require.NoError(t, err)
 		assert.Equal(t, "wake test", command)
 		assert.Equal(t, "/tmp/start.wav", o.Wake.Test.StartAudio)
 		assert.Equal(t, "/tmp/led", o.Wake.Test.LEDRoot)
+		assert.True(t, o.Wake.Test.GreenOnWake)
 		assert.InDelta(t, 0.5, o.Wake.Test.Threshold, 0.0001)
 		assert.InDelta(t, 0.5, o.Wake.Test.VADThreshold, 0.0001)
 		assert.Equal(t, 1200, o.Wake.Test.VADLookbackMS)

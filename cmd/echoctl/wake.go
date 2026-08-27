@@ -83,6 +83,9 @@ func wakeTest(w io.Writer, command wakeTestCommand) error {
 	if command.Seconds < 0 {
 		return errors.New("wake diagnostic duration must not be negative")
 	}
+	if command.GreenOnWake && command.FromFile != "" {
+		return errors.New("green wake feedback requires live microphone capture")
+	}
 	store := wake.Store{Root: command.ModelDir}
 	model, err := store.Get(command.Model)
 	if err != nil {
@@ -116,10 +119,10 @@ func wakeTest(w io.Writer, command wakeTestCommand) error {
 		return fmt.Errorf("create pre-roll ring: %w", err)
 	}
 	pipeline := wake.Pipeline{Engines: []wake.Engine{engine}, VAD: vad, Gate: wake.Gate{Thresholds: wake.Thresholds{Wake: command.Threshold, VAD: command.VADThreshold}, MinInterval: time.Duration(config.MinIntervalMS) * time.Millisecond}, Ring: ring, Stats: stats, Config: config}
-	return runWakeDiagnostic(w, command.wakeInputOptions, pipeline, stats, command.SavePreRoll)
+	return runWakeDiagnostic(w, command.wakeInputOptions, pipeline, stats, command.SavePreRoll, command.GreenOnWake)
 }
 
-func runWakeDiagnostic(w io.Writer, input wakeInputOptions, pipeline wake.Pipeline, stats *wake.Stats, saveDir string) (returnErr error) {
+func runWakeDiagnostic(w io.Writer, input wakeInputOptions, pipeline wake.Pipeline, stats *wake.Stats, saveDir string, greenOnWake bool) (returnErr error) {
 	signalContext, stopSignals := diagnosticSignalContext(input.FromFile)
 	defer stopSignals()
 	clearIndicator, err := startLiveWakeIndicator(input)
@@ -127,6 +130,11 @@ func runWakeDiagnostic(w io.Writer, input wakeInputOptions, pipeline wake.Pipeli
 		return err
 	}
 	defer func() { returnErr = errors.Join(returnErr, clearIndicator()) }()
+	flashWake, closeFeedback, err := startWakeFeedback(input, greenOnWake)
+	if err != nil {
+		return err
+	}
+	defer func() { returnErr = errors.Join(returnErr, closeFeedback()) }()
 	ctx, cancel := diagnosticContext(signalContext, input.FromFile, input.Seconds)
 	defer cancel()
 	started := time.Now()
@@ -154,6 +162,9 @@ func runWakeDiagnostic(w io.Writer, input wakeInputOptions, pipeline wake.Pipeli
 		}
 		close(events)
 		for event := range events {
+			if feedbackErr := flashWake(); feedbackErr != nil {
+				return fmt.Errorf("flash accepted wake feedback: %w", feedbackErr)
+			}
 			accepted = append(accepted, event)
 		}
 		if input.PrintSteps {
