@@ -15,7 +15,7 @@ import (
 	"strings"
 
 	"github.com/MrZoidberg/echo-satellite/internal/device/wake/tflite"
-	"golang.org/x/sys/unix"
+	"github.com/gofrs/flock"
 )
 
 const DefaultRoot = "/data/local/etc/echo-satellite/wake-models"
@@ -388,23 +388,18 @@ func writeStagedTo(part, destination string, data []byte, mode os.FileMode) erro
 	return syncStoreDirectory(filepath.Dir(destination))
 }
 
-type storeLock struct{ file *os.File }
+type storeLock struct{ flock *flock.Flock }
 
 func (s Store) lock() (*storeLock, error) {
-	file, err := os.OpenFile(filepath.Join(s.root(), ".install.lock"), os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		return nil, fmt.Errorf("open model store lock: %w", err)
-	}
-	if err = unix.Flock(int(file.Fd()), unix.LOCK_EX); err != nil {
-		_ = file.Close()
+	lock := flock.New(filepath.Join(s.root(), ".install.lock"))
+	if err := lock.Lock(); err != nil {
 		return nil, fmt.Errorf("lock model store: %w", err)
 	}
-	return &storeLock{file: file}, nil
+	return &storeLock{flock: lock}, nil
 }
 
 func (l *storeLock) close() {
-	_ = unix.Flock(int(l.file.Fd()), unix.LOCK_UN)
-	_ = l.file.Close()
+	_ = l.flock.Close()
 }
 
 func syncStoreDirectory(path string) error {
