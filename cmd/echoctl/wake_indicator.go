@@ -16,6 +16,7 @@ const wakeIndicatorBlinkInterval = 200 * time.Millisecond
 var wakeFeedbackDuration = 200 * time.Millisecond
 
 var wakeIndicatorSleep = time.Sleep
+var wakeFeedbackAfterFunc = time.AfterFunc
 var runWakeStartSpeakerTest = speakerTest
 
 var playWakeStartAudio = func(path string) error {
@@ -101,7 +102,7 @@ func (f *wakeFeedback) flash() error {
 	if err := f.device.WriteFrame(f.green); err != nil {
 		return fmt.Errorf("write green wake frame: %w", err)
 	}
-	f.timer = time.AfterFunc(wakeFeedbackDuration, func() {
+	f.timer = wakeFeedbackAfterFunc(wakeFeedbackDuration, func() {
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		if f.closed {

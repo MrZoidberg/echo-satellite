@@ -99,16 +99,21 @@ func TestStartWakeFeedback_FileReplayIsRejected(t *testing.T) {
 
 func TestWakeFeedback_RestoreFailureIsReportedOnClose(t *testing.T) {
 	root := wakeIndicatorRoot(t)
-	originalDuration := wakeFeedbackDuration
-	wakeFeedbackDuration = time.Millisecond
-	t.Cleanup(func() { wakeFeedbackDuration = originalDuration })
+	originalAfterFunc := wakeFeedbackAfterFunc
+	var restore func()
+	wakeFeedbackAfterFunc = func(_ time.Duration, callback func()) *time.Timer {
+		restore = callback
+		return time.NewTimer(time.Hour)
+	}
+	t.Cleanup(func() { wakeFeedbackAfterFunc = originalAfterFunc })
 
 	flash, closeFeedback, err := startWakeFeedback(wakeInputOptions{LEDRoot: root}, true)
 	require.NoError(t, err)
 	require.NoError(t, flash())
+	require.NotNil(t, restore)
 	require.NoError(t, os.Remove(filepath.Join(root, "frame")))
 	require.NoError(t, os.Mkdir(filepath.Join(root, "frame"), 0o700))
-	time.Sleep(10 * time.Millisecond)
+	restore()
 	require.Error(t, closeFeedback())
 }
 
