@@ -57,7 +57,7 @@ Do not replace explicit decisions in these documents with assumptions. When impl
 
 ## How work gets done
 
-The loop below is the default for any change beyond a typo or a one-line fix. Skip a step only when it genuinely does not apply, and say which step you skipped and why.
+The loop below is the default for any change beyond simple fixes or one-off tasks that do not require a plan and prior design. Skip a step only when it genuinely does not apply, and say which step you skipped and why. If in doubt, ask before implementing.
 
 ### 1. Decide whether it needs a plan
 
