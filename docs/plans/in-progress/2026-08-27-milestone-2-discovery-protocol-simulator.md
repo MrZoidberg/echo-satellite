@@ -488,7 +488,7 @@ Expected: all checks pass, and no malformed discovery state becomes trusted.
 
 ### Task 5: Versioned gateway TOML profiles
 
-**Status:** not started
+**Status:** completed 2026-08-30
 
 **Purpose:** Give config push an operator-usable source before SQLite and the UI.
 
@@ -991,6 +991,10 @@ Docker, dotsim, and real-device evidence is recorded.
 
 ## Progress log
 
+- 2026-08-30: Started Task 5. The gateway profile package is isolated from WSS/session wiring, which remains Task 7.
+- 2026-08-30: Completed Task 5. Added strict TOML profile loading, complete-default and partial-override merging, immutable snapshots, and atomic monotonic reloads that return effective configuration for connected devices. `pelletier/go-toml/v2` is the Task 5-owned direct dependency.
+- 2026-08-30: Fresh-context review found that a zero-value `Snapshot` could seed an invalid store and that strictness cases were incomplete. Both findings were fixed: `NewStore` now validates its initial snapshot, an uninitialized zero-value store rejects reloads, and tests cover override-level unknown fields, whitespace device IDs, and duplicate override tables.
+- 2026-08-30: Task 5 verification passed: `go test -race ./internal/gateway/config/...`; `go test -race -count=20 ./internal/gateway/config/...`; `make fmt-check`; `make lint` (0 issues); and `make test`. The new package reached 82.6% statement coverage in the full test run.
 - 2026-08-27: Plan created from `docs/DESIGN.md` and the completed Milestone 1
   contracts. Chosen execution order is simulator-first. Gateway and dotsim run
   on the host for canonical mDNS/protocol proof; Docker is an explicit-URL

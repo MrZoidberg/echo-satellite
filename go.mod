@@ -20,4 +20,5 @@ require (
 require (
 	github.com/gofrs/flock v0.13.1
 	github.com/jessevdk/go-flags v1.6.1
+	github.com/pelletier/go-toml/v2 v2.2.4
 )
