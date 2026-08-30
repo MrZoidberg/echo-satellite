@@ -39,8 +39,20 @@ func TestEncodeDecode_RoundTripPayloads(t *testing.T) {
 			name:    "welcome",
 			msgType: TypeWelcome,
 			payload: Welcome{ServerID: "home-gateway", Protocol: ProtocolVersion,
-				Config: map[string]any{"volume": float64(7)}},
+				Config: testDeviceConfig()},
 			into: func() any { return &Welcome{} },
+		},
+		{
+			name:    "config",
+			msgType: TypeConfig,
+			payload: testDeviceConfig(),
+			into:    func() any { return &DeviceConfig{} },
+		},
+		{
+			name:    "config result",
+			msgType: TypeConfigResult,
+			payload: ConfigResult{Version: 1, Status: ConfigResultApplied},
+			into:    func() any { return &ConfigResult{} },
 		},
 		{
 			name:    "turn.start",
@@ -58,7 +70,7 @@ func TestEncodeDecode_RoundTripPayloads(t *testing.T) {
 		{
 			name:    "audio.stop",
 			msgType: TypeAudioStop,
-			payload: AudioStop{Reason: "endpointed"},
+			payload: AudioStop{Reason: AudioStopEndpointed},
 			into:    func() any { return &AudioStop{} },
 		},
 		{
@@ -130,6 +142,18 @@ func TestEncodeDecode_RoundTripPayloads(t *testing.T) {
 	}
 }
 
+func testDeviceConfig() DeviceConfig {
+	return DeviceConfig{
+		Version: 1,
+		Wake: WakeSettings{Engine: "openwakeword", Model: "okay_nabu", Threshold: 0.5,
+			VADEnabled: true, VADThreshold: 0.5, VADLookbackMS: 1200, PreRollMS: 600,
+			MinIntervalMS: 2000, AlwaysScoreWake: true},
+		Endpointing: EndpointingConfig{SpeechThreshold: 0.5, SpeechOnsetMS: 160,
+			TrailingSilenceMS: 1500, NoSpeechTimeoutMS: 3000, MaxTurnMS: 60000},
+		Logs: LogSettings{ForwardLevel: LogLevelInfo},
+	}
+}
+
 func TestEncode_NoPayload(t *testing.T) {
 	data, err := Encode(TypePing, "", time.Unix(0, 0).UTC(), nil)
 	require.NoError(t, err)
@@ -144,6 +168,31 @@ func TestEncode_NoPayload(t *testing.T) {
 func TestEncode_EmptyType(t *testing.T) {
 	_, err := Encode("", "id", time.Now(), nil)
 	assert.ErrorIs(t, err, ErrEmptyMessageType)
+}
+
+func TestEncodeDecode_RequireCorrelationIDs(t *testing.T) {
+	for _, msgType := range []MessageType{TypeTurnStart, TypeAudioStart, TypeAudioStop, TypeConfig} {
+		_, err := Encode(msgType, "", time.Now(), nil)
+		require.ErrorIs(t, err, ErrMissingCorrelationID, msgType)
+
+		_, err = Decode([]byte(`{"type":"` + string(msgType) + `","ts":"2026-08-19T12:00:00Z"}`))
+		assert.ErrorIs(t, err, ErrMissingCorrelationID, msgType)
+	}
+}
+
+func TestEncodeDecode_RequirePayloads(t *testing.T) {
+	for _, msgType := range []MessageType{TypeWelcome, TypeConfig, TypeConfigResult, TypeLog, TypeAudioStop} {
+		_, err := Encode(msgType, "message-id", time.Now(), nil)
+		require.ErrorIs(t, err, ErrNoRequiredPayload, msgType)
+
+		_, err = Decode([]byte(`{"type":"` + string(msgType) + `","id":"message-id","ts":"2026-08-19T12:00:00Z"}`))
+		require.ErrorIs(t, err, ErrNoRequiredPayload, msgType)
+	}
+}
+
+func TestDecodePayload_RejectsInvalidWelcomeConfig(t *testing.T) {
+	env := Envelope{Type: TypeWelcome, Payload: []byte(`{"server_id":"gateway","protocol":1,"config":{"version":1}}`)}
+	require.Error(t, env.DecodePayload(&Welcome{}))
 }
 
 func TestDecode_UnknownTypeIsNotAnError(t *testing.T) {

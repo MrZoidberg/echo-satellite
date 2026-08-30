@@ -149,7 +149,7 @@ The Echo Dot runs the full always-on wake stack: mic capture → optional DSP/be
 Two distinct uses of VAD exist and must not be conflated:
 
 - **Wake VAD** — device-only, always-on, gates whether a wake score is credible speech.
-- **Command endpointing** — decides when the user's command has ended; runs on the *gateway* for v0.1, consuming only active-turn audio.
+- **Command endpointing** — decides when the user's command has ended; runs on the *device* after a wake/button trigger, then closes the active-turn audio window.
 
 They have separate configuration and thresholds. There is deliberately no gateway wake mode, and the management UI must not offer one.
 

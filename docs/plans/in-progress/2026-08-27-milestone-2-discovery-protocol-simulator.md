@@ -1,10 +1,10 @@
 # Milestone 2 — Discovery, protocol, simulator, and device turns implementation plan
 
-**Status:** future
-**Owner or active agent:** unassigned
+**Status:** in-progress
+**Owner or active agent:** /root
 **Created:** 2026-08-27
-**Updated:** 2026-08-27
-**Started:** not started
+**Updated:** 2026-08-30
+**Started:** 2026-08-30
 **Completed:** not completed
 
 ## Objective
@@ -276,7 +276,7 @@ scan returns no output.
 
 ### Task 2: Update the governing boundary and wire contracts
 
-**Status:** not started
+**Status:** completed 2026-08-30
 
 **Purpose:** Make device-owned endpointing and versioned config authoritative
 before implementation.
@@ -947,9 +947,22 @@ Docker, dotsim, and real-device evidence is recorded.
 - 2026-08-27: Logging/audio choices: JSON local logs plus bounded low-priority
   WSS forwarding on the single connection, and opt-in diagnostic WAV storage.
   Response playback remains deferred.
+- 2026-08-30: Task 2 completed. The authoritative documents now assign command
+  endpointing to the device, describe its already-endpointed audio as the STT
+  input, and limit the shared bearer token/TLS bypass to development. Protocol
+  v1 now carries typed complete configuration, configuration acknowledgements,
+  structured log records, local-endpointing capability, typed input stop
+  reasons, and enforced turn/config correlation IDs.
+- 2026-08-30: Fresh-context review found incomplete configuration acceptance,
+  payload-less required frames, and a disabled-VAD validation gap. All three
+  findings were fixed; none were declined or postponed.
 
 ## Completion evidence
 
-No implementation or verification has run yet. Append dated command results,
-hardware observations, coverage notes, review dispositions, and remaining
-limitations here as tasks complete.
+- 2026-08-30: `go test -race ./internal/protocol/...` passed.
+- 2026-08-30: stale gateway-endpointing scan returned no matches:
+  `rg -n "gateway command endpointing|gateway-side initially|command endpointing.*gateway" docs/DESIGN.md docs/protocol.md AGENTS.md`.
+- 2026-08-30: `make fmt-check`, `make lint` (0 issues), and `make test` passed.
+  `internal/protocol` coverage was 92.5%; new config validation, required
+  payload, correlation-ID, and invalid-wire-config paths are covered.
+- 2026-08-30: No hardware verification applies to Tasks 1–2.

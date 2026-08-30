@@ -32,6 +32,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -45,6 +46,10 @@ var (
 	ErrEmptyMessageType = errors.New("protocol: empty message type")
 	// ErrNoPayload is returned when decoding the payload of an envelope that has none.
 	ErrNoPayload = errors.New("protocol: envelope has no payload")
+	// ErrMissingCorrelationID is returned for messages that must identify a turn or config revision.
+	ErrMissingCorrelationID = errors.New("protocol: missing correlation id")
+	// ErrNoRequiredPayload is returned for a message whose payload must be present.
+	ErrNoRequiredPayload = errors.New("protocol: missing required payload")
 )
 
 // Envelope is the JSON control frame every non-audio message travels in.
@@ -60,6 +65,17 @@ type Envelope struct {
 func Encode(msgType MessageType, id string, ts time.Time, payload any) ([]byte, error) {
 	if msgType == "" {
 		return nil, ErrEmptyMessageType
+	}
+	if requiresCorrelationID(msgType) && strings.TrimSpace(id) == "" {
+		return nil, ErrMissingCorrelationID
+	}
+	if requiresPayload(msgType) && payload == nil {
+		return nil, ErrNoRequiredPayload
+	}
+	if validatable, ok := payload.(interface{ Validate() error }); ok {
+		if err := validatable.Validate(); err != nil {
+			return nil, fmt.Errorf("protocol: validate %s payload: %w", msgType, err)
+		}
 	}
 
 	env := Envelope{Type: msgType, ID: id, TS: ts}
@@ -90,6 +106,12 @@ func Decode(data []byte) (Envelope, error) {
 	if env.Type == "" {
 		return Envelope{}, ErrEmptyMessageType
 	}
+	if requiresCorrelationID(env.Type) && strings.TrimSpace(env.ID) == "" {
+		return Envelope{}, ErrMissingCorrelationID
+	}
+	if requiresPayload(env.Type) && len(env.Payload) == 0 {
+		return Envelope{}, ErrNoRequiredPayload
+	}
 	return env, nil
 }
 
@@ -101,5 +123,23 @@ func (e Envelope) DecodePayload(v any) error {
 	if err := json.Unmarshal(e.Payload, v); err != nil {
 		return fmt.Errorf("protocol: unmarshal %s payload: %w", e.Type, err)
 	}
+	if validatable, ok := v.(interface{ Validate() error }); ok {
+		if err := validatable.Validate(); err != nil {
+			return fmt.Errorf("protocol: validate %s payload: %w", e.Type, err)
+		}
+	}
 	return nil
+}
+
+func requiresCorrelationID(msgType MessageType) bool {
+	return msgType == TypeTurnStart || msgType == TypeAudioStart || msgType == TypeAudioStop || msgType == TypeConfig
+}
+
+func requiresPayload(msgType MessageType) bool {
+	switch msgType {
+	case TypeWelcome, TypeConfig, TypeConfigResult, TypeLog, TypeAudioStop:
+		return true
+	default:
+		return false
+	}
 }

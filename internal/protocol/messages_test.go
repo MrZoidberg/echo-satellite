@@ -10,7 +10,7 @@ import (
 func TestAllMessageTypes_CoversDesignFamilies(t *testing.T) {
 	// the list from docs/DESIGN.md 8.6, verbatim
 	want := []string{
-		"hello", "welcome", "config", "state", "health", "log",
+		"hello", "welcome", "config", "config.result", "state", "health", "log",
 		"turn.start", "turn.cancel",
 		"wake.models", "wake.status",
 		"audio.start", "audio.stop", "play.start", "play.stop",

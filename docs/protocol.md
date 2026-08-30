@@ -13,6 +13,10 @@ This document is authoritative for what is actually on the wire.
 
 - One long-lived **outbound** secure WebSocket per device (`wss`). The device
   always dials the gateway; the gateway never dials a device.
+- Milestone 2 authenticates that connection with a shared development bearer
+  token. TLS verification is on by default; `tls_skip_verify` is a visible,
+  development-only escape hatch. Per-device authentication and mTLS are future
+  production work.
 - **Control and events** travel as JSON text frames, each carrying one envelope.
 - **Audio** travels as raw PCM in binary WebSocket frames. Binary frames are
   only valid inside an audio window:
@@ -31,6 +35,10 @@ This document is authoritative for what is actually on the wire.
 A binary frame received outside a window is a protocol error and must be
 answered with `error` and ignored, never buffered "just in case".
 
+For a device input window, all binary PCM is associated with the single active
+`turn.start`/`audio.start` correlation id. A device cannot open a second input
+window until it closes the first one.
+
 ## 2. Envelope
 
 Every control frame is:
@@ -47,7 +55,7 @@ Every control frame is:
 | Field | Type | Notes |
 |---|---|---|
 | `type` | string | one of the message types below |
-| `id` | string | optional correlation id; a reply echoes the id it answers |
+| `id` | string | required and non-empty for `turn.start`, `audio.start`, `audio.stop`, and `config`; one input turn reuses one id for its markers |
 | `ts` | RFC 3339 timestamp | when the sender produced the frame |
 | `payload` | object | omitted for messages that carry no data, such as `ping` |
 
@@ -63,12 +71,13 @@ fixed, and its payload lands with the milestone that needs it).
 
 | Type | Direction | Status | Purpose |
 |---|---|---|---|
-| `hello` | D→G | defined | identity, versions, capabilities, wake summary, update state |
+| `hello` | D→G | defined | identity, versions, capabilities, wake summary, active config version, update state |
 | `welcome` | G→D | defined | server identity and gateway-managed device config |
-| `config` | G→D | reserved | configuration update outside the handshake |
+| `config` | G→D | defined | versioned gateway-managed device configuration |
+| `config.result` | D→G | defined | device acknowledgement of a config revision |
 | `state` | both | defined | semantic device state (LED ring, listening, thinking) |
 | `health` | D→G | reserved | periodic device health report |
-| `log` | D→G | reserved | forwarded device log records |
+| `log` | D→G | defined | forwarded device log records |
 | `turn.start` | D→G | defined | opens a voice turn; **always produced by the device** |
 | `turn.cancel` | both | reserved | abandons the current turn |
 | `wake.models` | both | reserved | wake model inventory and synchronization |
@@ -112,6 +121,7 @@ fixed, and its payload lands with the milestone that needs it).
     "vad_threshold": 0.5,
     "pre_roll_ms": 500
   },
+  "config_version": 3,
   "update_state": "trial"
 }
 ```
@@ -125,11 +135,22 @@ trial slot, before anything else happens on the connection.
 ### `welcome` (G→D)
 
 ```json
-{ "server_id": "home-gateway", "protocol": 1, "config": {} }
+{ "server_id": "home-gateway", "protocol": 1, "config": { "version": 3, "wake": { "engine": "openwakeword", "model": "okay_nabu", "threshold": 0.5, "vad_enabled": true, "vad_threshold": 0.5, "vad_lookback_ms": 1200, "pre_roll_ms": 600, "min_interval_ms": 2000, "always_score_wake": true }, "endpointing": { "speech_threshold": 0.5, "speech_onset_ms": 160, "trailing_silence_ms": 1500, "no_speech_timeout_ms": 3000, "max_turn_ms": 60000 }, "logs": { "forward_level": "info" } } }
 ```
 
-`config` is gateway-managed device configuration. Its schema is owned by the
-gateway configuration layer and is opaque to the protocol.
+`config` is a typed, complete device configuration. Protocol version 1 owns its
+schema; its positive `version` orders gateway desired state and is not the wire
+protocol version. A `config` message uses the same payload and requires a
+non-empty envelope id.
+
+### `config.result` (D→G)
+
+```json
+{ "version": 3, "status": "applied", "code": "", "detail": "" }
+```
+
+`status` is `pending`, `applied`, or `rejected`. A rejected result includes a
+non-empty `code`; a pending wake-model change applies when the device is idle.
 
 ### `turn.start` (D→G)
 
@@ -152,6 +173,19 @@ inputs to a decision it re-makes.
 ```json
 { "reason": "endpointed" }
 ```
+
+For a device input window, `reason` is one of `endpointed`, `no_speech`,
+`timeout`, `eof`, or `capture_overrun`. `audio.stop` reuses the turn's
+non-empty correlation id. Playback stop reasons are gateway-defined.
+
+### `log` (D→G)
+
+```json
+{ "level": "info", "message": "connected", "fields": { "server_id": "home-gateway" } }
+```
+
+`level` is `debug`, `info`, `warn`, or `error`. Fields are structured string
+values; implementations sanitize credentials before forwarding them.
 
 ### `state` (both)
 
@@ -228,6 +262,7 @@ whether a feature may be used with a device:
 | `wake.model_sync` | can receive wake models from the gateway |
 | `audio.capture` | can stream command audio during a turn |
 | `audio.playback` | can play gateway-supplied audio |
+| `command.endpointing.local` | ends active-turn audio on the device |
 | `update.ab` | supports application-level A/B agent updates |
 | `led` | can display semantic LED states |
 | `button` | can report action-button presses |
@@ -246,9 +281,9 @@ These are properties of the protocol itself, not of any one implementation:
 - There is **no message that asks a gateway to score a wake word**, and no
   gateway wake mode to enable. `turn.start` is always produced by the device.
 - Wake VAD (device-local, gates whether a wake score is credible speech) and
-  command endpointing (gateway-side for v0.1, decides when a command ended) are
-  separate concerns with separate configuration. Only wake VAD appears in
-  `hello.wake_config`.
+  command endpointing (also device-local, ends an active command) are separate
+  concerns with separate configuration. Only wake VAD appears in
+  `hello.wake_config`; full desired settings are in `welcome.config`/`config`.
 
 ## 8. Connection flow
 
@@ -265,8 +300,8 @@ device boots
 
 wake accepted locally
   -> local LED/tone immediately
-  -> turn.start(trigger=wake, model, wake_score, vad_score)
-  -> audio.start, binary PCM, audio.stop
+  -> turn.start(id=turn-id, trigger=wake, model, wake_score, vad_score)
+  -> audio.start(id=turn-id), binary PCM, audio.stop(id=turn-id, reason=endpointed)
   <- state(thinking)
   <- play.start, binary PCM, play.stop
   -> back to idle
