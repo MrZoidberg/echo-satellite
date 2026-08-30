@@ -6,9 +6,8 @@
 // discovery metadata only and never credentials, and a discovered gateway is
 // still required to pass TLS and device authentication before it is trusted.
 //
-// This package deliberately contains no multicast code. The Advertiser and
-// Browser interfaces are the seam a real mDNS implementation plugs into in
-// Milestone 2, which keeps the resolution order testable without a network.
+// The Advertiser and Browser interfaces keep resolution testable without a
+// multicast network. Their concrete DNS-SD implementation lives in mdns.
 package discovery
 
 import (
@@ -92,16 +91,13 @@ func (i Instance) Compatible(protocolVersion int) bool {
 
 // Advertiser publishes a gateway instance on the local network.
 //
-// The real mDNS implementation lands in Milestone 2; this interface exists now
-// so the gateway composition root and its tests are written against the seam
-// rather than against a concrete library.
+// The interface keeps composition roots and their tests independent from the
+// selected DNS-SD library.
 type Advertiser interface {
 	Advertise(ctx context.Context, inst Instance) error
 }
 
 // Browser finds gateway instances on the local network.
-//
-// The real mDNS implementation lands in Milestone 2.
 type Browser interface {
 	Browse(ctx context.Context) ([]Instance, error)
 }
@@ -111,8 +107,17 @@ func (i Instance) Validate() error {
 	if i.ServerID == "" {
 		return fmt.Errorf("discovery: instance %q: %w", i.Host, ErrMissingServerID)
 	}
+	if i.Port < 0 || i.Port > 65535 {
+		return fmt.Errorf("discovery: instance %q has invalid port %d", i.Host, i.Port)
+	}
 	if _, err := i.EndpointURL(); err != nil {
 		return err
 	}
-	return i.TXT.Validate()
+	if err := i.TXT.Validate(); err != nil {
+		return err
+	}
+	if i.ServerID != i.TXT.ServerID {
+		return fmt.Errorf("discovery: instance server_id %q does not match TXT server_id %q", i.ServerID, i.TXT.ServerID)
+	}
+	return nil
 }

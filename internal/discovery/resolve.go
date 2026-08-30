@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"sort"
 	"strings"
 )
 
@@ -112,24 +113,32 @@ func (r *Resolver) fromPaired(cfg Config, lastPaired *Instance) (string, bool) {
 	return endpoint, true
 }
 
-// pick chooses among browsed instances: the preferred server_id first, then the
-// first protocol-compatible instance in browse order.
+// pick chooses among browsed instances: the preferred server_id first, then a
+// deterministic protocol-compatible candidate.
 func (r *Resolver) pick(instances []Instance, preferredServerID string) (Instance, bool) {
-	var fallback Instance
-	haveFallback := false
-
+	candidates := make([]Instance, 0, len(instances))
 	for _, inst := range instances {
 		if !inst.Compatible(r.protocol) || inst.ServerID == "" {
 			continue
 		}
-		if preferredServerID != "" && inst.ServerID == preferredServerID {
+		candidates = append(candidates, inst)
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		return instanceOrderKey(candidates[i]) < instanceOrderKey(candidates[j])
+	})
+	for _, inst := range candidates {
+		if preferredServerID == "" || inst.ServerID == preferredServerID {
 			return inst, true
 		}
-		if !haveFallback {
-			fallback, haveFallback = inst, true
-		}
 	}
-	return fallback, haveFallback
+	if len(candidates) == 0 {
+		return Instance{}, false
+	}
+	return candidates[0], true
+}
+
+func instanceOrderKey(inst Instance) string {
+	return inst.ServerID + "\x00" + inst.Host + "\x00" + fmt.Sprintf("%05d", inst.Port)
 }
 
 func validateEndpointURL(raw string) error {

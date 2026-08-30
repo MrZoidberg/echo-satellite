@@ -323,7 +323,7 @@ gateway-endpointing claim.
 
 ### Task 3: Device config persistence and endpointing core
 
-**Status:** not started
+**Status:** completed 2026-08-30
 
 **Purpose:** Provide deterministic components used first by dotsim and later by
 echod.
@@ -372,9 +372,39 @@ make test
 
 Expected: all tests pass repeatedly and no test uses sleeps as synchronization.
 
+#### Task 3 review remediation: fixture location and transmitted turn limit
+
+**Status:** completed 2026-08-30
+
+**Dependencies:** Task 3.
+
+**Files or components:**
+
+- Modify/test: `internal/device/endpointing`
+- Add: `testdata/audio/command_endpointing_16k_mono.wav`
+
+**Concrete changes:**
+
+- Correct the fixture path so regeneration writes to the repository-tracked
+  fixture directory and verify the WAV's duration and noise/speech sections.
+- Count transmitted wake pre-roll toward the hard turn deadline while continuing
+  to exclude it from onset and trailing-silence decisions.
+
+**Verification:**
+
+Run:
+
+```sh
+go test -race ./internal/device/endpointing/...
+go test -race -count=20 ./internal/device/endpointing/...
+```
+
+Expected: the fixture is available in a clean checkout and pre-roll cannot make
+a transmitted turn exceed its maximum duration.
+
 ### Task 4: Real mDNS and authenticated paired-gateway persistence
 
-**Status:** not started
+**Status:** completed 2026-08-30
 
 **Purpose:** Fill the existing discovery interfaces without coupling composition
 roots to the selected library.
@@ -400,8 +430,9 @@ roots to the selected library.
 - Shut down promptly on context cancellation.
 - Persist only the authenticated `server_id` and endpoint metadata, never
   credentials, through an atomic state store.
-- Persist after valid `welcome`. On connection failure, retry without the
-  paired candidate so mDNS can locate the same server at a new address.
+- Provide the strict atomic paired-gateway store that Task 6 writes after a
+  valid `welcome`; Task 6 also owns retrying without a paired candidate after
+  a connection failure because that behavior requires the WSS session.
 - Test IPv4/IPv6 conversion, malformed and secret-like TXT, cancellation,
   deduplication, preferred selection, corrupt state, and atomic replacement.
 
@@ -420,6 +451,40 @@ make test
 ```
 
 Expected: deterministic tests pass without multicast access in CI.
+
+#### Task 4 review remediation: secure record and strict state validation
+
+**Status:** completed 2026-08-30
+
+**Dependencies:** Task 4.
+
+**Files or components:**
+
+- Modify/test: `internal/discovery`, `internal/discovery/mdns`
+
+**Concrete changes:**
+
+- Reject plaintext or non-device-path advertisements, reject unknown fields in
+  paired state (including credentials), and preserve corrupt files.
+- Deduplicate mDNS responses by stable `server_id`, selecting conflicting
+  endpoint metadata deterministically and merging address sets only for the
+  same endpoint.
+- Test cancellation while a browse is active without sleep-based timing.
+
+**Verification:**
+
+Run:
+
+```sh
+go test -race ./internal/discovery/...
+go test -race -count=10 ./internal/discovery/...
+make check-portability
+make fmt-check
+make lint
+make test
+```
+
+Expected: all checks pass, and no malformed discovery state becomes trusted.
 
 ### Task 5: Versioned gateway TOML profiles
 
@@ -956,6 +1021,29 @@ Docker, dotsim, and real-device evidence is recorded.
 - 2026-08-30: Fresh-context review found incomplete configuration acceptance,
   payload-less required frames, and a disabled-VAD validation gap. All three
   findings were fixed; none were declined or postponed.
+- 2026-08-30: Task 3 completed. Added typed device configuration conversion,
+  version comparison, atomic staged JSON persistence with file and directory
+  sync, corrupt-state fallback, and a separately warmed local endpointing state
+  machine. The deterministic WAV fixture covers noise, speech, an internal
+  pause, resumed speech, and trailing silence. No hardware verification applies.
+- 2026-08-30: Fresh-context Task 3 review found a fixture path outside the
+  repository and a hard-timeout calculation that excluded transmitted wake
+  pre-roll. Both were fixed in Task 3 review remediation. The reviewer also
+  noted that fixture tests do not assert `vadlevel` classifications directly;
+  declined because the endpoint state machine's score semantics are isolated
+  through a scripted detector, while the fixture test verifies the required
+  deterministic acoustic structure. `vadlevel` remains independently tested.
+- 2026-08-30: Task 4 completed. Added the `grandcat/zeroconf` adapter behind
+  the discovery interfaces, three-second bounded browse, IPv4/IPv6 conversion,
+  validation, stable server-identity deduplication, and atomic strict-schema
+  paired-gateway persistence. Real multicast remains for Tasks 8 and 11.
+- 2026-08-30: Fresh-context Task 4 review found insecure advertisement input,
+  permissive paired-state decoding, endpoint-based rather than server-identity
+  deduplication, and missing in-flight cancellation coverage; all fixed in
+  Task 4 review remediation. The review also noted that no composition root
+  yet persists after `welcome` or retries after connection failure; postponed
+  to Task 6 because its explicitly scoped WSS session owns authentication,
+  handshake validation, and reconnect behavior.
 
 ## Completion evidence
 
@@ -966,3 +1054,8 @@ Docker, dotsim, and real-device evidence is recorded.
   `internal/protocol` coverage was 92.5%; new config validation, required
   payload, correlation-ID, and invalid-wire-config paths are covered.
 - 2026-08-30: No hardware verification applies to Tasks 1–2.
+- 2026-08-30: Task 3: `go test -race ./internal/device/config/... ./internal/device/endpointing/... ./internal/device/wake/vadlevel/...` passed.
+- 2026-08-30: Task 3: `go test -race -count=20 ./internal/device/endpointing/...` passed.
+- 2026-08-30: Task 3: `make fmt-check`, `make lint` (0 issues), and `make test` passed. New package coverage: `internal/device/config` 73.8%; `internal/device/endpointing` 84.6%.
+- 2026-08-30: Task 3 review remediation: `go test -race ./internal/device/endpointing/...` and `go test -race -count=20 ./internal/device/endpointing/...` passed; final `make fmt-check`, `make lint` (0 issues), and `make test` passed. Endpointing coverage was 85.5%.
+- 2026-08-30: Task 4 and review remediation: `go test -race ./internal/discovery/...`, `go test -race -count=10 ./internal/discovery/...`, `make check-portability`, `make fmt-check`, `make lint` (0 issues), and `make test` passed. Discovery coverage was 90.2%; the new mDNS adapter was 83.8%.
