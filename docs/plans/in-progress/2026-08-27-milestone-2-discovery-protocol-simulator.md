@@ -532,7 +532,7 @@ Expected: merge, strict validation, monotonic reload, and immutability tests pas
 
 ### Task 6: Shared device-side WSS session client
 
-**Status:** not started
+**Status:** completed 2026-08-30
 
 **Purpose:** Share one tested connection implementation between dotsim and echod.
 
@@ -991,6 +991,10 @@ Docker, dotsim, and real-device evidence is recorded.
 
 ## Progress log
 
+- 2026-08-30: Completed Task 6. Added the shared `internal/device/client` WSS client with injected resolver, pairing store, configuration consumer, turn source, dialer, clock, and jitter. It requires WSS and a trimmed 32-byte token-file value, gives TLS bypass an explicit development warning, persists only authenticated welcomes, serializes local turns, and keeps logs bounded, redacted, and subordinate to turn/control traffic.
+- 2026-08-30: Fresh-context Task 6 review found reconnect worker leakage, stale turn frames surviving reconnect, non-strict log priority, absent outbound limits, narrow credential redaction, and partial framing after high-queue exhaustion. All six were fixed with per-session cancellation/waiting and queue draining, priority recheck, 64-KiB outbound checks, broader bounded redaction, and preflight turn queue capacity validation. The reviewer also noted missing dedicated timeout/backoff and forced-reconnect tests; postponed to Task 8's runner integration suite, which owns real reconnect behavior across client sessions.
+- 2026-08-30: Task 6 verification passed: `go test -race ./internal/device/client/...`; `go test -race -count=20 ./internal/device/client/...`; `make check-portability`; `make fmt-check`; `make lint` (0 issues); and `make test`. The new client package reached 72.1% statement coverage in the full test run. No hardware verification applies.
+- 2026-08-30: Started Task 6. The shared client will own resolution, authenticated WSS session lifecycle, config acknowledgement, bounded log forwarding, and active-turn framing; composition roots remain out of scope.
 - 2026-08-30: Started Task 5. The gateway profile package is isolated from WSS/session wiring, which remains Task 7.
 - 2026-08-30: Completed Task 5. Added strict TOML profile loading, complete-default and partial-override merging, immutable snapshots, and atomic monotonic reloads that return effective configuration for connected devices. `pelletier/go-toml/v2` is the Task 5-owned direct dependency.
 - 2026-08-30: Fresh-context review found that a zero-value `Snapshot` could seed an invalid store and that strictness cases were incomplete. Both findings were fixed: `NewStore` now validates its initial snapshot, an uninitialized zero-value store rejects reloads, and tests cover override-level unknown fields, whitespace device IDs, and duplicate override tables.
@@ -1063,3 +1067,4 @@ Docker, dotsim, and real-device evidence is recorded.
 - 2026-08-30: Task 3: `make fmt-check`, `make lint` (0 issues), and `make test` passed. New package coverage: `internal/device/config` 73.8%; `internal/device/endpointing` 84.6%.
 - 2026-08-30: Task 3 review remediation: `go test -race ./internal/device/endpointing/...` and `go test -race -count=20 ./internal/device/endpointing/...` passed; final `make fmt-check`, `make lint` (0 issues), and `make test` passed. Endpointing coverage was 85.5%.
 - 2026-08-30: Task 4 and review remediation: `go test -race ./internal/discovery/...`, `go test -race -count=10 ./internal/discovery/...`, `make check-portability`, `make fmt-check`, `make lint` (0 issues), and `make test` passed. Discovery coverage was 90.2%; the new mDNS adapter was 83.8%.
+- 2026-08-30: Task 6: `go test -race ./internal/device/client/...`, `go test -race -count=20 ./internal/device/client/...`, `make check-portability`, `make fmt-check`, `make lint` (0 issues), and `make test` passed. Client coverage was 72.1%; no hardware verification applies.
