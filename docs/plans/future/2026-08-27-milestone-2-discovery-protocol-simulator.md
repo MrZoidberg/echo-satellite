@@ -120,7 +120,7 @@ always_score_wake = true
 [defaults.endpointing]
 speech_threshold = 0.50
 speech_onset_ms = 160
-trailing_silence_ms = 800
+trailing_silence_ms = 1500
 no_speech_timeout_ms = 3000
 max_turn_ms = 60000
 
@@ -169,7 +169,9 @@ Rules:
   `device_id`.
 - A high-priority control/audio queue and bounded low-priority log queue feed
   one WSS writer. Log pressure drops and counts records; it cannot block audio.
-- Disconnect cancels any active turn. Turns are not resumed after reconnect.
+- In this Milestone 2 slice, disconnect cancels any active turn. A later design
+  will define reconnect turn resumption with explicit turn detection and a
+  timeout; it is not implemented here.
 
 ### Device-local command endpointing
 
@@ -178,7 +180,7 @@ does not participate in wake acceptance. For each active turn it:
 
 - transmits wake pre-roll first but excludes it from command-speech decisions;
 - requires 160 ms of consecutive speech score at or above 0.50;
-- stops after 800 ms of consecutive sub-threshold audio after speech onset;
+- stops after 1.5 seconds of consecutive sub-threshold audio after speech onset;
 - stops with `no_speech` if onset does not occur within three seconds;
 - stops with `timeout` when transmitted audio reaches 60 seconds;
 - uses `eof` when a simulator fixture ends first;
@@ -348,8 +350,8 @@ echod.
   over a separate continuously warmed `vadlevel.Detector`.
 - Snapshot config per turn and expose the idle boundary used to apply staged
   revisions.
-- Generate a fixture containing room noise, speech, a sub-800-ms internal
-  pause, more speech, and at least 800 ms trailing silence.
+- Generate a fixture containing room noise, speech, a sub-1.5-second internal
+  pause, more speech, and at least 1.5 seconds of trailing silence.
 - Test onset, internal pauses, trailing silence, no speech, hard timeout, EOF,
   cancellation, config snapshotting, invalid/non-finite values, stale and
   conflicting versions, interrupted persistence, and restart recovery.
@@ -771,7 +773,7 @@ Milestone 1 model and hardware path, on the same multicast domain as the host.
 - Trigger repeated wake and Action-button turns.
 - Verify diagnostics, pre-roll continuity, active-only audio,
   `audio.stop(reason="endpointed")`, and intelligible WAV output.
-- Exercise pauses below and above 800 ms, no speech, quiet speech, background
+- Exercise pauses below and above 1.5 seconds, no speech, quiet speech, background
   noise, and the 60-second cap.
 - Record false cuts, endpoint latency, CPU/RSS, drops, and any measured tuning in
   `docs/DESIGN.md`.
@@ -797,7 +799,7 @@ command from `docs/development-windows-wsl.md`.
 
 Expected: mDNS resolves without `--gateway-url`; WSS/auth/handshake succeed;
 wake and Action each create one turn; no binary audio exists outside the audio
-window; sub-800-ms pauses remain inside a turn; longer silence endpoints it;
+window; sub-1.5-second pauses remain inside a turn; longer silence endpoints it;
 WAV audio is continuous; gateway restart reconnects with jitter; and measured
 results are recorded.
 
@@ -931,7 +933,7 @@ Docker, dotsim, and real-device evidence is recorded.
 - 2026-08-27: Deliberate design change: v0.1 command endpointing moves from the
   gateway to a separate device-local `vadlevel` instance. It reports the
   existing `audio.stop(reason="endpointed")` event. Balanced defaults are 0.50
-  speech threshold, 160-ms onset, 800-ms trailing silence, three-second
+  speech threshold, 160-ms onset, 1.5-second trailing silence, three-second
   no-speech timeout, and a user-selected 60-second hard cap.
 - 2026-08-27: Dependency choices: `coder/websocket`, `grandcat/zeroconf`, and
   `pelletier/go-toml/v2`.
