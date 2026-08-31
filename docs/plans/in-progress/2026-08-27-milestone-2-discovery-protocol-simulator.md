@@ -640,7 +640,7 @@ default-discard, and opt-in-WAV tests pass.
 
 ### Task 8: Complete dotsim and prove the host-run vertical slice
 
-**Status:** in progress
+**Status:** completed 2026-08-31 (local verification; manual host mDNS check deferred by user)
 
 **Purpose:** Establish complete protocol behavior before integrating echod.
 
@@ -991,7 +991,8 @@ Docker, dotsim, and real-device evidence is recorded.
 
 ## Progress log
 
-- 2026-08-31: Started Task 8. `dotsim` now composes the shared WSS client with
+- 2026-08-31: Completed Task 8 at user direction after local verification.
+  `dotsim` now composes the shared WSS client with
   bounded mDNS resolution, authenticated pairing/config persistence, local
   JSON logs, endpointed canonical WAV fixture turns, and one-shot completion
   after the terminal `audio.stop` is written. It accepts the planned token,
@@ -1000,8 +1001,9 @@ Docker, dotsim, and real-device evidence is recorded.
   welcome/config persistence, turn framing, and clean `--once` completion;
   it also exposed and fixed a nil response-body panic in `WSSDialer`.
   Focused race checks, `make fmt-check`, `make lint` (0 issues), `make test`,
-  and `make build` passed. The required manual host mDNS exercise remains
-  outstanding, so this task is not yet marked complete.
+  and `make build` passed. Manual explicit-URL gateway/dotsim testing also
+  completed successfully on Windows. The manual host mDNS exercise remains
+  deferred by user direction; it is not represented as completed evidence.
 
 - 2026-08-30: Completed Task 7. Added the authenticated WSS gateway server, in-memory duplicate-replacing device registry, typed welcome/config delivery, bounded structured device logs, strict device-turn framing, default PCM discard, and opt-in atomically published diagnostic WAVs. The gateway command now requires TLS, token-file, and TOML-profile inputs; always advertises WSS (unless mDNS is explicitly disabled); exposes a data-free `/healthz`; reloads validated higher-version profiles on SIGHUP; and shuts down sessions with the HTTP service. Fresh-context review found stalled config writes, incorrect pre-window PCM handling, an implicit 32-KiB WebSocket limit, dropped log fields, request-context use after upgrade, and missing acceptance coverage. The first four correctness issues were fixed with bounded config-write contexts plus close-before-lock, ignored pre-window PCM, an explicit 64-KiB read limit, and bounded redacted log fields; the remaining review test gaps were addressed in focused tests and existing config-store coverage. Verification passed: `go test -race ./internal/gateway/devices/... ./internal/gateway/turns/... ./cmd/gateway/...`; `go test -race -count=10 ./internal/gateway/devices/... ./internal/gateway/turns/...`; `make build`; `make fmt-check`; `make lint` (0 issues); and `make test`. No hardware verification applies.
 
@@ -1082,3 +1084,7 @@ Docker, dotsim, and real-device evidence is recorded.
 - 2026-08-30: Task 3 review remediation: `go test -race ./internal/device/endpointing/...` and `go test -race -count=20 ./internal/device/endpointing/...` passed; final `make fmt-check`, `make lint` (0 issues), and `make test` passed. Endpointing coverage was 85.5%.
 - 2026-08-30: Task 4 and review remediation: `go test -race ./internal/discovery/...`, `go test -race -count=10 ./internal/discovery/...`, `make check-portability`, `make fmt-check`, `make lint` (0 issues), and `make test` passed. Discovery coverage was 90.2%; the new mDNS adapter was 83.8%.
 - 2026-08-30: Task 6: `go test -race ./internal/device/client/...`, `go test -race -count=20 ./internal/device/client/...`, `make check-portability`, `make fmt-check`, `make lint` (0 issues), and `make test` passed. Client coverage was 72.1%; no hardware verification applies.
+- 2026-08-31: Task 8: local focused race checks, `make fmt-check`, `make lint`
+  (0 issues), `make test`, and `make build` passed. Windows explicit-WSS
+  gateway/dotsim testing completed one `--once` turn successfully. The
+  required real-mDNS manual check remains deferred and is not claimed here.

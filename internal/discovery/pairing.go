@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 )
 
 // ErrCorruptPairing is returned when persisted paired-gateway state cannot be
@@ -67,16 +68,21 @@ func (s PairingStore) Save(inst Instance) error {
 	if err = os.Rename(staged, s.Path); err != nil {
 		return fmt.Errorf("promote paired-gateway state: %w", err)
 	}
-	dir, err := os.Open(filepath.Dir(s.Path))
-	if err != nil {
-		return fmt.Errorf("open paired-gateway state directory: %w", err)
-	}
-	if err := dir.Sync(); err != nil {
-		_ = dir.Close()
-		return fmt.Errorf("sync paired-gateway state directory: %w", err)
-	}
-	if err := dir.Close(); err != nil {
-		return fmt.Errorf("close paired-gateway state directory: %w", err)
+	// Windows does not support opening/syncing directories. The file was
+	// durably flushed before rename; Unix additionally flushes the directory
+	// entry to make the rename durable across power loss.
+	if runtime.GOOS != "windows" {
+		dir, err := os.Open(filepath.Dir(s.Path))
+		if err != nil {
+			return fmt.Errorf("open paired-gateway state directory: %w", err)
+		}
+		if err := dir.Sync(); err != nil {
+			_ = dir.Close()
+			return fmt.Errorf("sync paired-gateway state directory: %w", err)
+		}
+		if err := dir.Close(); err != nil {
+			return fmt.Errorf("close paired-gateway state directory: %w", err)
+		}
 	}
 	return nil
 }

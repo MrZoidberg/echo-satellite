@@ -20,6 +20,7 @@ import (
 	"github.com/MrZoidberg/echo-satellite/internal/protocol"
 )
 
+// maxFrameBytes bounds a single WebSocket payload before protocol decoding.
 const maxFrameBytes = 64 << 10
 
 // Config selects the complete desired configuration for a connected device.
@@ -84,7 +85,8 @@ func New(opts Options) (*Server, error) {
 }
 
 // ServeHTTP authenticates before upgrade, so unauthenticated callers never
-// acquire a WebSocket or learn why a token did not match.
+// acquire a WebSocket or learn why a token did not match. Successful sessions
+// are logged only after the welcome handshake completes.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !s.authorized(r.Header.Get("Authorization")) {
 		http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
@@ -120,6 +122,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.register(session)
+	s.logger.Info("device connected", "device_id", hello.DeviceID, "server_id", s.serverID,
+		"config_version", config.Version, "capabilities", hello.Capabilities)
 	defer s.unregister(session)
 	sessionCtx, sessionCancel := context.WithCancel(context.Background())
 	defer sessionCancel()
@@ -313,6 +317,8 @@ func (s *session) handleControlLocked(ctx context.Context, env protocol.Envelope
 		}
 		s.active = active
 		s.metadata.ActiveTurn = env.ID
+		s.server.logger.Info("device turn started", "device_id", s.metadata.DeviceID, "turn_id", env.ID,
+			"trigger", start.Trigger, "model", start.Model, "wake_score", start.WakeScore, "vad_score", start.VADScore)
 	case protocol.TypeAudioStart:
 		var start protocol.AudioStart
 		if err := env.DecodePayload(&start); err != nil || s.active == nil || s.server.turns.StartAudio(s.active, env.ID, start) != nil {
@@ -325,10 +331,13 @@ func (s *session) handleControlLocked(ctx context.Context, env protocol.Envelope
 			s.server.closeProtocol(s.conn, "invalid audio stop")
 			return false
 		}
-		if _, err := s.server.turns.Stop(s.active, env.ID, stop); err != nil {
+		completed, err := s.server.turns.Stop(s.active, env.ID, stop)
+		if err != nil {
 			s.server.closeProtocol(s.conn, "invalid audio stop")
 			return false
 		}
+		s.server.logger.Info("device turn ended", "device_id", s.metadata.DeviceID, "turn_id", env.ID,
+			"reason", completed.Stop.Reason, "pcm_bytes", completed.Bytes)
 		s.active, s.metadata.ActiveTurn = nil, ""
 	case protocol.TypeConfigResult:
 		var result protocol.ConfigResult

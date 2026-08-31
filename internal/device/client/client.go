@@ -439,15 +439,12 @@ func (c *Client) SendTurn(ctx context.Context, turn Turn) error {
 		c.mu.Unlock()
 		return ErrTurnActive
 	}
-	frameCount := 3
-	for _, frame := range turn.PCM {
-		if len(frame) > 0 {
-			frameCount++
-		}
-	}
-	if frameCount > cap(c.high)-len(c.high) {
+	// Reserve room for turn.start, audio.start, and audio.stop. PCM is
+	// streamed below with context-aware backpressure instead of being queued
+	// in its entirety, so long fixtures cannot exceed the bounded queue.
+	if cap(c.high)-len(c.high) < 3 {
 		c.mu.Unlock()
-		return errors.New("device client: turn exceeds available high-priority queue capacity")
+		return errors.New("device client: turn control queue capacity unavailable")
 	}
 	c.active = true
 	c.mu.Unlock()
@@ -465,7 +462,7 @@ func (c *Client) SendTurn(ctx context.Context, turn Turn) error {
 		if len(frame) > maxFrameBytes || len(frame)%2 != 0 {
 			return errors.New("device client: PCM frame must be even and at most 64 KiB")
 		}
-		if err := c.enqueueBinary(frame); err != nil {
+		if err := c.enqueueBinaryBlocking(ctx, frame); err != nil {
 			return err
 		}
 	}
@@ -489,8 +486,20 @@ func (c *Client) enqueueControl(type_ protocol.MessageType, id string, payload a
 	}
 	return c.enqueue(outbound{type_: websocket.MessageText, data: data})
 }
-func (c *Client) enqueueBinary(data []byte) error {
-	return c.enqueue(outbound{type_: websocket.MessageBinary, data: append([]byte(nil), data...)})
+func (c *Client) enqueueBinaryBlocking(ctx context.Context, data []byte) error {
+	item := outbound{type_: websocket.MessageBinary, data: append([]byte(nil), data...)}
+	c.mu.Lock()
+	connected := c.conn != nil
+	c.mu.Unlock()
+	if !connected {
+		return ErrNoSession
+	}
+	select {
+	case c.high <- item:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("queue PCM frame: %w", context.Cause(ctx))
+	}
 }
 func (c *Client) enqueue(item outbound) error {
 	c.mu.Lock()

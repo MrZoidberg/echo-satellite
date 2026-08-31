@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 
 	"github.com/MrZoidberg/echo-satellite/internal/device/wake"
 	"github.com/MrZoidberg/echo-satellite/internal/protocol"
@@ -130,16 +131,21 @@ func (s Store) Save(value Settings) error {
 	if err != nil {
 		return fmt.Errorf("promote config state: %w", err)
 	}
-	dir, err := os.Open(filepath.Dir(s.Path))
-	if err != nil {
-		return fmt.Errorf("open config state directory: %w", err)
-	}
-	if err := dir.Sync(); err != nil {
-		_ = dir.Close()
-		return fmt.Errorf("sync config state directory: %w", err)
-	}
-	if err := dir.Close(); err != nil {
-		return fmt.Errorf("close config state directory: %w", err)
+	// Windows does not support opening/syncing directories. The file was
+	// durably flushed before rename; Unix additionally flushes the directory
+	// entry to make the rename durable across power loss.
+	if runtime.GOOS != "windows" {
+		dir, err := os.Open(filepath.Dir(s.Path))
+		if err != nil {
+			return fmt.Errorf("open config state directory: %w", err)
+		}
+		if err := dir.Sync(); err != nil {
+			_ = dir.Close()
+			return fmt.Errorf("sync config state directory: %w", err)
+		}
+		if err := dir.Close(); err != nil {
+			return fmt.Errorf("close config state directory: %w", err)
+		}
 	}
 	return nil
 }

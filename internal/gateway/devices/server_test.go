@@ -1,10 +1,14 @@
 package devices
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -80,6 +84,47 @@ func TestServer_TurnFramingIgnoresBinaryOutsideWindow(t *testing.T) {
 	require.NoError(t, conn.Write(ctx, websocket.MessageBinary, []byte{1, 2}))
 	require.NoError(t, write(t, conn, protocol.TypeAudioStop, "turn-1", protocol.AudioStop{Reason: protocol.AudioStopEndpointed}))
 	require.Eventually(t, func() bool { metadata, found := server.Snapshot("dot-1"); return found && metadata.ActiveTurn == "" }, time.Second, 10*time.Millisecond)
+}
+
+func TestServer_LogsDeviceAndTurnLifecycle(t *testing.T) {
+	var logs lockedBuffer
+	server, err := New(Options{Token: []byte("device-token"), ServerID: "gateway", Config: func(string) protocol.DeviceConfig { return testConfig() }, Logger: slog.New(slog.NewTextHandler(&logs, nil))})
+	require.NoError(t, err)
+	httpServer := httptest.NewTLSServer(server)
+	defer httpServer.Close()
+	conn := dialHello(t, httpServer)
+	defer func() { _ = conn.Close(websocket.StatusNormalClosure, "done") }()
+	require.Contains(t, logs.String(), "msg=\"device connected\"")
+	require.NoError(t, write(t, conn, protocol.TypeTurnStart, "turn-log", protocol.TurnStart{Trigger: protocol.TriggerButton}))
+	require.NoError(t, write(t, conn, protocol.TypeAudioStart, "turn-log", protocol.AudioStart{SampleRate: 16000, Channels: 1, Format: protocol.AudioFormatPCMS16LE}))
+	require.NoError(t, conn.Write(context.Background(), websocket.MessageBinary, []byte{1, 2, 3, 4}))
+	require.NoError(t, write(t, conn, protocol.TypeAudioStop, "turn-log", protocol.AudioStop{Reason: protocol.AudioStopEndpointed}))
+	require.Eventually(t, func() bool { return strings.Contains(logs.String(), "msg=\"device turn ended\"") }, time.Second, 10*time.Millisecond)
+	assert.Contains(t, logs.String(), "device_id=dot-1")
+	assert.Contains(t, logs.String(), "turn_id=turn-log")
+	assert.Contains(t, logs.String(), "reason=endpointed")
+	assert.Contains(t, logs.String(), "pcm_bytes=4")
+}
+
+type lockedBuffer struct {
+	mu sync.Mutex
+	bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(data []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	n, err := b.Buffer.Write(data)
+	if err != nil {
+		return n, fmt.Errorf("write test log buffer: %w", err)
+	}
+	return n, nil
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.Buffer.String()
 }
 
 func TestServer_Accepts64KiBPCMFrame(t *testing.T) {
