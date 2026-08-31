@@ -78,11 +78,17 @@ device-stopped:
 		echo "echod stopped"
 
 test:
-	go clean -testcache
-	go test -race -coverprofile=coverage.out ./...
+	@mkdir -p .bin
+	go test -count=1 -race -coverprofile=coverage.out ./...
 	grep -v -E "_mock.go|/mocks/" coverage.out > coverage_no_mocks.out
-	go tool cover -func=coverage_no_mocks.out
+	go tool cover -func=coverage_no_mocks.out > .bin/coverage-functions.txt
+	@echo "Total coverage:"
+	@tail -n 1 .bin/coverage-functions.txt
+	@echo "Per-function coverage report: .bin/coverage-functions.txt"
 	rm coverage.out coverage_no_mocks.out
+
+test-fast:
+	go test -race -timeout=100s ./...
 
 race:
 	go test -race -timeout=100s ./...
@@ -96,8 +102,10 @@ fmt:
 fmt-check:
 	@out=$$(gofmt -l .); if [ -n "$$out" ]; then echo "gofmt needed:"; echo "$$out"; exit 1; fi
 
+verify: fmt-check lint test build
+
 version:
 	@echo "branch: $(BRANCH), hash: $(HASH), timestamp: $(TIMESTAMP)"
 	@echo "revision: $(REV)"
 
-.PHONY: all build build-device build-device-ctl build-device-noasm check-portability bench device-check push-device run-device device-stopped test race lint fmt fmt-check version
+.PHONY: all build build-device build-device-ctl build-device-noasm check-portability bench device-check push-device run-device device-stopped test test-fast race lint fmt fmt-check verify version

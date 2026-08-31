@@ -34,6 +34,10 @@ go.work.sum
 # Build output
 .bin/
 
+# Python hook test bytecode
+__pycache__/
+*.py[cod]
+
 # Coverage artifacts
 coverage*.out
 

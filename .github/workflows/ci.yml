@@ -19,6 +19,12 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: set up uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: test Codex hooks
+        run: uv run --no-project --script .codex/hooks/agent_loop_test.py
+
       - name: set up go 1.26.7
         uses: actions/setup-go@v7
         with:

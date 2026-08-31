@@ -10,10 +10,13 @@ Milestone 1 has landed its device hardware and local-wake vertical slice: pure-G
 
 ```sh
 make all           # test, then build
-make test          # go test -race with coverage, mocks excluded from the profile
+make test-fast     # cached go test -race loop for iteration
+make test          # fresh race tests plus coverage; report at .bin/coverage-functions.txt
 make race          # go test -race -timeout=100s ./...
 make lint          # golangci-lint run
 make fmt           # gofmt -l -w .
+make fmt-check     # fail if any Go file needs formatting
+make verify        # final software check: formatting, lint, fresh tests, and host builds
 make build         # host binaries into .bin/
 make build-device  # static linux/arm64 echod into .bin/linux_arm64/
 make build-device-ctl   # static linux/arm64 echoctl for the Dot
@@ -33,6 +36,27 @@ Hardware access is confined to `internal/device/audio/alsa` and
 `internal/device/mixer`, behind Linux build tags with `!linux` stubs. LED,
 buttons and system code instead use injected filesystem roots, so their tests
 remain portable without build tags.
+
+## Codex automation
+
+This trusted repository includes project hooks under `.codex/`; re-review the
+hook configuration whenever it changes before trusting it. The hooks require
+`uv` locally and use `uv run --no-project --script` with only Python's standard
+library.
+
+- After `apply_patch`, the hook immediately runs `gofmt` only on existing Go
+  files safely identified as changed by that patch.
+- At session stop, it checks session-journaled Go changes with formatting,
+  scoped lint, and scoped race tests. A change to `go.mod`, `go.sum`,
+  `Makefile`, or `.golangci.yml` expands those checks to `./...`; it requests at
+  most one continuation after a failure.
+- Hooks are early feedback only: they never stage, commit, change plan status,
+  or access hardware. Run task-specific checks and `make verify` before final
+  software handoff.
+
+If hooks are disabled, unavailable, or `uv` is not installed, work normally
+with `make fmt-check`, `make lint`, the relevant `go test -race` command, and
+`make verify`. CI installs `uv` and runs the hook tests independently.
 
 ## Code conventions
 
@@ -55,48 +79,28 @@ Do not replace explicit decisions in these documents with assumptions. When impl
 
 `docs/DESIGN.md` §26 lists open questions that must be resolved by experiment on real hardware, not by guessing. If work depends on one of them, resolve it with a focused diagnostic and record the answer in the design document.
 
-## How work gets done
+## Planning, verification, and review
 
-The loop below is the default for any change beyond simple fixes or one-off tasks that do not require a plan and prior design. Skip a step only when it genuinely does not apply, and say which step you skipped and why. If in doubt, ask before implementing.
+For any non-trivial change, follow [docs/plans/README.md](docs/plans/README.md)
+for the required plan lifecycle, task ownership, progress record, and
+completion evidence. A plan is required when work spans packages, changes a
+documented behavior or boundary, or needs more than one verification command.
+An isolated bug fix, test addition, or documentation edit can proceed directly.
 
-### 1. Decide whether it needs a plan
+An approved numbered task in an in-progress plan is already designed; do not
+re-brainstorm it unless implementation reveals material ambiguity or a required
+design change. Do not expand a task's scope without first updating its plan.
+When multiple independent plan tasks run in one session, use one agent per task
+with non-overlapping files; the orchestrator owns plan state, cross-cutting
+checks, and final reporting.
 
-A plan is required when the work spans more than one package, changes a documented behavior or boundary, or cannot be verified by a single command. A plan is not required for an isolated bug fix, a test addition, or a documentation edit — do those directly and report what you verified.
-
-If it needs a plan and the request is ambiguous in a way that changes the work, ask before writing the plan, not after implementing.
-
-### 2. Write the plan to `docs/plans/`
-
-Follow [docs/plans/README.md](docs/plans/README.md) — it is authoritative for the template and the lifecycle. Create the plan in `future/`, then move it to `in-progress/` with an owner and start date when execution actually begins. Every task carries its own status, dependencies, files in scope, concrete changes, and exact verification.
-
-The plan document is the durable record. A plan that lives only in the conversation does not count.
-
-### 3. Implement — use subagents when executing several tasks in one session
-
-When more than one plan task will be implemented in the same session, dispatch a subagent per task rather than doing them all inline. Each subagent gets: the plan path, its task number, the files in scope, and the task's verification command. It implements and verifies that task only.
-
-- One task, one agent. Never let two agents claim the same task.
-- Run agents in parallel only when their file sets do not overlap. Tasks with a stated dependency run in order.
-- A subagent that cannot finish reports the blocker; it does not widen its scope to work around it.
-- The orchestrating session owns the shared state: the plan document, the cross-cutting checks in step 4, and the final report.
-
-For a single task, or for work whose steps are tightly coupled, implement inline. Delegation is for parallelism and context isolation, not ceremony.
-
-### 4. Get the static checks and coverage clean
-
-Before review, all of these pass:
-
-```sh
-make fmt-check   # or make fmt
-make lint        # 0 issues
-make test        # race detector, prints per-function coverage
-```
-
-`golangci-lint` findings are fixed, not suppressed. A `nolint` needs a specific linter and a reason that says why the code is correct as written; if you cannot write that sentence, fix the code.
-
-Coverage: read the per-function output for the code you touched, not the repository total. Every new exported function, every error path, and every rule that encodes a design boundary has a test. A new package landing below roughly 70% of statements needs either more tests or an explicit note saying which paths are deliberately untested and why. Do not add assertions that only move the number.
-
-Hardware-dependent behavior is not verified by a passing `dotsim` run. Say which checks ran against real hardware and which did not.
+Before review, run `make fmt-check`, `make lint`, `make test`, and the task's
+exact verification; `make verify` is the final software check. Fix lint
+findings rather than suppressing them. Review coverage for touched functions:
+test new exported functions, error paths, and design-boundary rules, and explain
+deliberately untested paths in new packages below roughly 70% coverage.
+Hardware-dependent behavior is not verified by a passing `dotsim` run; report
+which checks used real hardware.
 
 ### Echo Dot hardware sessions
 
@@ -114,7 +118,7 @@ scores. If microphone capture returns `ErrDeviceBusy`, treat it as evidence
 that another test or agent may be running: inspect the holder and coordinate
 rather than killing a process or stopping unrelated services.
 
-### 5. Self-review in a separate agent
+### Fresh-context self-review and finding triage
 
 Dispatch a review agent with fresh context — the implementing session is the worst reviewer of its own diff. Give it the diff, the plan, and `docs/DESIGN.md`, and ask it to look for:
 
@@ -124,8 +128,6 @@ Dispatch a review agent with fresh context — the implementing session is the w
 - tests that assert the implementation rather than the requirement;
 - unnecessary complexity and dead exported surface.
 
-### 6. Triage every finding, explicitly
-
 Each finding gets one of three dispositions, and none of them is silence:
 
 - **fix** — do it now, then re-run step 4;
@@ -134,9 +136,11 @@ Each finding gets one of three dispositions, and none of them is silence:
 
 Correctness and security findings are not postponed without saying so in the final report.
 
-### 7. Present results
-
-Report what was actually done and actually verified: the commands run and their outcomes, deviations from the plan and why, findings declined or postponed, and anything left open. If a check did not run, say it did not run. A plan with an unverified acceptance item stays in `in-progress/` with that item named as the blocker — it is not filed as finished.
+Report what was actually done and verified, including commands and outcomes,
+deviations, declined or postponed findings, and anything left open. An
+unverified acceptance item leaves its plan in `in-progress` with the blocker
+recorded. Hooks cannot reliably delegate review, so fresh-context review and
+explicit triage remain required.
 
 ## Architecture: the two boundaries that govern everything
 
@@ -175,24 +179,6 @@ The gateway advertises `_echo-satellite._tcp.local.`; TXT records carry discover
 ### Hardware-independent development
 
 `dotsim` speaks the same protocol as `echod` with files instead of hardware, and must also simulate update states, trial timeouts, crashes, rollbacks, and reconnects so fleet rollout logic is testable without breaking a real Dot. Gateway work should be testable without an Echo; wake/VAD correctness is tested separately against audio fixtures.
-
-## Implementation planning
-
-All non-trivial work is tracked as a plan document under `docs/plans/`. **Read [docs/plans/README.md](docs/plans/README.md) before creating or executing one** — it is authoritative and contains the required template. Steps 1–2 of "How work gets done" decide when a plan is needed; the rules below apply once one exists.
-
-Working rules that apply whenever a plan is active:
-
-1. An approved plan's scope and numbered tasks are the work boundaries. Review and update the plan before implementing a material scope expansion.
-2. Inspect the repository and working tree before editing. Preserve unrelated user changes; avoid unrelated refactors.
-3. Decompose into small, dependency-aware tasks with one observable outcome each. State dependencies explicitly instead of hiding them in prose.
-4. Give every task exact verification commands or concrete manual checks. Mark a task complete only after its verification succeeds.
-5. Plan location is the lifecycle state: `future/`, `in-progress/`, `finished/`, `superseded/`. Keep only actively executing work in `in-progress/`, and set the active owner when execution begins.
-6. Do not let multiple agents claim the same task. Overlapping plans must name their shared scope and coordination requirements before work proceeds.
-7. Keep failed, paused, or blocked work in `in-progress/` with an honest blocker and remaining work. Partial or unverified execution is not completion.
-8. Never rewrite a completed task; append a `Task N review remediation` subtask instead.
-9. Hardware-dependent verification is not satisfied by a passing `dotsim` run. Record which checks ran against real hardware.
-
-The milestone sequence in `docs/DESIGN.md` §24 is deliberately ordered — notably, the safe supervisor and A/B OTA (Milestone 3) land *before* Hermes integration so later device work uses the production update path. Plans should follow that sequence unless there is a recorded reason not to.
 
 ## Security-sensitive areas
 
