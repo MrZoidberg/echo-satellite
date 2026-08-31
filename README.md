@@ -84,6 +84,7 @@ Verify a release bundle with the same checks a gateway and a device apply:
 - [docs/DESIGN.md](docs/DESIGN.md) — architecture, boundaries, milestones. Authoritative.
 - [docs/protocol.md](docs/protocol.md) — the wire contract, tracking `internal/protocol`.
 - [docs/development-windows-wsl.md](docs/development-windows-wsl.md) — the reference dev environment and device build.
+- [docs/gateway-deployment.md](docs/gateway-deployment.md) — Docker Compose gateway deployment and the explicit-WSS smoke test.
 - [docs/plans/README.md](docs/plans/README.md) — how implementation work is planned and tracked.
 - [AGENTS.md](AGENTS.md) — instructions for AI coding agents, including build commands and code conventions.
 

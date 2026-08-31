@@ -3,7 +3,7 @@
 **Status:** in-progress
 **Owner or active agent:** /root
 **Created:** 2026-08-27
-**Updated:** 2026-08-30
+**Updated:** 2026-08-31
 **Started:** 2026-08-30
 **Completed:** not completed
 
@@ -700,7 +700,7 @@ the config version, sends `turn.start`, PCM, and
 
 ### Task 9: Docker gateway packaging and explicit-URL smoke test
 
-**Status:** not started
+**Status:** in progress
 
 **Purpose:** Verify the target deployment shape without making a false Docker
 multicast claim.
@@ -738,7 +738,7 @@ docker compose -f deploy/docker-compose.yml up -d gateway
   --gateway-url wss://localhost:8770/device \
   --gateway-token-file /tmp/echo-satellite-m2/device-token \
   --tls-skip-verify \
-  --mic testdata/audio/turn_speech_trailing_silence.wav --once
+  --mic testdata/audio/command_endpointing_16k_mono.wav --once
 
 docker compose -f deploy/docker-compose.yml down
 make fmt-check
@@ -990,6 +990,12 @@ Docker, dotsim, and real-device evidence is recorded.
 - [ ] Every review finding has an explicit disposition.
 
 ## Progress log
+
+- 2026-08-31: Started Task 9. Docker packaging is limited to the gateway's
+  explicit authenticated WSS endpoint: Compose disables mDNS and does not make
+  a multicast-visibility claim. Runtime credentials remain host-provided,
+  read-only bind mounts; diagnostic WAV output will require a separate explicit
+  Compose override.
 
 - 2026-08-31: Completed Task 8 at user direction after local verification.
   `dotsim` now composes the shared WSS client with
