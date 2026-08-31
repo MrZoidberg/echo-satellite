@@ -584,7 +584,7 @@ turn-order tests pass under the race detector.
 
 ### Task 7: Gateway WSS endpoint, registry, config delivery, and turn receiver
 
-**Status:** not started
+**Status:** completed 2026-08-30
 
 **Purpose:** Provide the server half of the simulator-first vertical slice.
 
@@ -990,6 +990,8 @@ Docker, dotsim, and real-device evidence is recorded.
 - [ ] Every review finding has an explicit disposition.
 
 ## Progress log
+
+- 2026-08-30: Completed Task 7. Added the authenticated WSS gateway server, in-memory duplicate-replacing device registry, typed welcome/config delivery, bounded structured device logs, strict device-turn framing, default PCM discard, and opt-in atomically published diagnostic WAVs. The gateway command now requires TLS, token-file, and TOML-profile inputs; always advertises WSS (unless mDNS is explicitly disabled); exposes a data-free `/healthz`; reloads validated higher-version profiles on SIGHUP; and shuts down sessions with the HTTP service. Fresh-context review found stalled config writes, incorrect pre-window PCM handling, an implicit 32-KiB WebSocket limit, dropped log fields, request-context use after upgrade, and missing acceptance coverage. The first four correctness issues were fixed with bounded config-write contexts plus close-before-lock, ignored pre-window PCM, an explicit 64-KiB read limit, and bounded redacted log fields; the remaining review test gaps were addressed in focused tests and existing config-store coverage. Verification passed: `go test -race ./internal/gateway/devices/... ./internal/gateway/turns/... ./cmd/gateway/...`; `go test -race -count=10 ./internal/gateway/devices/... ./internal/gateway/turns/...`; `make build`; `make fmt-check`; `make lint` (0 issues); and `make test`. No hardware verification applies.
 
 - 2026-08-30: Completed Task 6. Added the shared `internal/device/client` WSS client with injected resolver, pairing store, configuration consumer, turn source, dialer, clock, and jitter. It requires WSS and a trimmed 32-byte token-file value, gives TLS bypass an explicit development warning, persists only authenticated welcomes, serializes local turns, and keeps logs bounded, redacted, and subordinate to turn/control traffic.
 - 2026-08-30: Fresh-context Task 6 review found reconnect worker leakage, stale turn frames surviving reconnect, non-strict log priority, absent outbound limits, narrow credential redaction, and partial framing after high-queue exhaustion. All six were fixed with per-session cancellation/waiting and queue draining, priority recheck, 64-KiB outbound checks, broader bounded redaction, and preflight turn queue capacity validation. The reviewer also noted missing dedicated timeout/backoff and forced-reconnect tests; postponed to Task 8's runner integration suite, which owns real reconnect behavior across client sessions.

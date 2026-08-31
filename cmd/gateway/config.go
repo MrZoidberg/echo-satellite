@@ -16,12 +16,17 @@ import (
 
 // opts is the gateway command line.
 type opts struct {
-	Config   string `long:"config" env:"GATEWAY_CONFIG" description:"path to the gateway ini config file" no-ini:"true"`
-	Listen   string `long:"listen" env:"GATEWAY_LISTEN" default:":8770" description:"device endpoint listen address"`
-	ServerID string `long:"server-id" env:"GATEWAY_SERVER_ID" default:"echo-gateway" description:"stable gateway identity advertised over mdns"`
-	Hostname string `long:"hostname" env:"GATEWAY_HOSTNAME" default:"echo-gateway.local." description:"host name advertised over mdns"`
-	Path     string `long:"device-path" env:"GATEWAY_DEVICE_PATH" default:"/device" description:"device endpoint path"`
-	TLS      bool   `long:"tls" env:"GATEWAY_TLS" description:"advertise the device endpoint as wss"`
+	Config          string `long:"config" env:"GATEWAY_CONFIG" description:"path to the gateway ini config file" no-ini:"true"`
+	Listen          string `long:"listen" env:"GATEWAY_LISTEN" default:":8770" description:"device endpoint listen address"`
+	ServerID        string `long:"server-id" env:"GATEWAY_SERVER_ID" default:"echo-gateway" description:"stable gateway identity advertised over mdns"`
+	Hostname        string `long:"hostname" env:"GATEWAY_HOSTNAME" default:"echo-gateway.local." description:"host name advertised over mdns"`
+	Path            string `long:"device-path" env:"GATEWAY_DEVICE_PATH" default:"/device" description:"device endpoint path"`
+	TLSCert         string `long:"tls-cert" env:"GATEWAY_TLS_CERT" description:"TLS certificate PEM for the device endpoint"`
+	TLSKey          string `long:"tls-key" env:"GATEWAY_TLS_KEY" description:"TLS private-key PEM for the device endpoint"`
+	DeviceTokenFile string `long:"device-token-file" env:"GATEWAY_DEVICE_TOKEN_FILE" description:"file containing the device bearer token"`
+	DeviceConfig    string `long:"device-config" env:"GATEWAY_DEVICE_CONFIG" description:"strict TOML device configuration profile"`
+	NoMDNS          bool   `long:"no-mdns" env:"GATEWAY_NO_MDNS" description:"disable gateway mDNS advertisement"`
+	DiagnosticWAV   string `long:"diagnostic-wav-dir" env:"GATEWAY_DIAGNOSTIC_WAV_DIR" description:"optional directory for completed diagnostic turn WAV files"`
 
 	AllowUnsignedDevBuilds bool `long:"allow-unsigned-dev-builds" env:"GATEWAY_ALLOW_UNSIGNED_DEV_BUILDS" description:"accept releases with no signature; development only"`
 
@@ -44,7 +49,7 @@ func (o opts) advertisement() (discovery.Instance, error) {
 		TXT: discovery.TXTRecord{
 			Protocol: protocol.ProtocolVersion,
 			ServerID: o.ServerID,
-			TLS:      o.TLS,
+			TLS:      true,
 			Path:     o.Path,
 		},
 	}

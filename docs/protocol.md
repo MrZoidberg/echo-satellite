@@ -32,8 +32,9 @@ This document is authoritative for what is actually on the wire.
 | device → gateway | `audio.start` | `audio.stop` | `pcm_s16le`, sample rate and channel count from `audio.start` |
 | gateway → device | `play.start` | `play.stop` | `pcm_s16le`, sample rate and channel count from `play.start` |
 
-A binary frame received outside a window is a protocol error and must be
-answered with `error` and ignored, never buffered "just in case".
+A binary frame received outside a window is ignored, never buffered "just in
+case". Invalid control-frame sequencing remains a protocol error and closes
+the connection.
 
 For a device input window, all binary PCM is associated with the single active
 `turn.start`/`audio.start` correlation id. A device cannot open a second input
