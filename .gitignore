@@ -29,6 +29,7 @@ go.work.sum
 
 # Local Docker gateway credentials and diagnostic output
 .gateway-secrets/
+.m2/
 
 # Editor/IDE
 # .idea/

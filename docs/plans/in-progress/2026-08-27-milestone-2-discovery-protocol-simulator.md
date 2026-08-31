@@ -700,7 +700,7 @@ the config version, sends `turn.start`, PCM, and
 
 ### Task 9: Docker gateway packaging and explicit-URL smoke test
 
-**Status:** in progress
+**Status:** completed 2026-08-31
 
 **Purpose:** Verify the target deployment shape without making a false Docker
 multicast claim.
@@ -991,6 +991,25 @@ Docker, dotsim, and real-device evidence is recorded.
 
 ## Progress log
 
+- 2026-08-31: Completed Task 9. Added a static multi-stage `Dockerfile` with
+  a distroless non-root runtime, secret-aware `.dockerignore`, localhost-only
+  Compose publication, read-only credential/profile mounts, a read-only root
+  filesystem, dropped capabilities, explicit `--no-mdns`, and a ten-second
+  graceful-stop period. The optional diagnostics override is the only Compose
+  path that mounts a writable WAV directory, preserving default raw-audio
+  discard. Added an ignored `.gateway-secrets/` workflow, non-secret example
+  profile, and deployment guide for explicit host dotsim WSS. Docker Desktop
+  did not expose individual `/tmp` bind files reliably in this WSL session, so
+  the guide uses the ignored workspace directory instead. The Task 9 plan's
+  stale fixture reference was corrected to the tracked
+  `testdata/audio/command_endpointing_16k_mono.wav`. Compose validation and
+  image build passed; the Compose gateway accepted `dotsim-docker` over
+  `wss://localhost:8770/device`, recorded an endpointed 118400-byte turn, and
+  logged `gateway stopped` after Compose SIGTERM. Fresh-context review found
+  that pre-existing `.m2/` may contain generated development credentials but
+  was not ignored; fixed by ignoring it without modifying its contents. No
+  findings were declined or postponed.
+
 - 2026-08-31: Started Task 9. Docker packaging is limited to the gateway's
   explicit authenticated WSS endpoint: Compose disables mDNS and does not make
   a multicast-visibility claim. Runtime credentials remain host-provided,
@@ -1077,6 +1096,24 @@ Docker, dotsim, and real-device evidence is recorded.
 
 ## Completion evidence
 
+- 2026-08-31: Task 9: `docker compose -f deploy/docker-compose.yml config`
+  passed with host-provided read-only certificate, key, token, and TOML mounts,
+  `127.0.0.1:8770` publication, and mDNS disabled.
+- 2026-08-31: Task 9: `docker compose -f deploy/docker-compose.yml build
+  gateway` passed, producing `echo-satellite-gateway:local` from a static
+  multi-stage build.
+- 2026-08-31: Task 9: Compose gateway startup plus `.bin/dotsim
+  --device-id dotsim-docker --discover disabled --gateway-url
+  wss://localhost:8770/device --gateway-token-file
+  /home/mike/.cache/echo-satellite-m2/device-token --tls-skip-verify --mic
+  testdata/audio/command_endpointing_16k_mono.wav --once` passed. Gateway logs
+  show an authenticated device, `audio.stop(reason="endpointed")`, and 118400
+  PCM bytes. `docker compose ... stop` then logged `gateway stopped`; `down`
+  removed the container and network.
+- 2026-08-31: Task 9: `make fmt-check`, `make lint` (0 issues), and `make
+  test` passed; full race-test coverage was 71.9%.
+- 2026-08-31: Task 9 fresh-context review: fixed the P1 staging risk by adding
+  `.m2/` to `.gitignore`; reviewer found no other Task 9 blockers.
 - 2026-08-30: `go test -race ./internal/protocol/...` passed.
 - 2026-08-30: stale gateway-endpointing scan returned no matches:
   `rg -n "gateway command endpointing|gateway-side initially|command endpointing.*gateway" docs/DESIGN.md docs/protocol.md AGENTS.md`.
