@@ -18,7 +18,7 @@ func (WSSDialer) Dial(ctx context.Context, endpoint string, headers http.Header,
 		HTTPHeader: headers,
 		HTTPClient: &http.Client{Transport: &http.Transport{TLSClientConfig: tlsConfig}},
 	})
-	if response != nil {
+	if response != nil && response.Body != nil {
 		_ = response.Body.Close()
 	}
 	if err != nil {

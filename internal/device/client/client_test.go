@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -220,6 +222,21 @@ func TestSendTurn_UsesStrictControlBinaryControlOrder(t *testing.T) {
 	assert.Equal(t, []protocol.MessageType{protocol.TypeTurnStart, protocol.TypeAudioStart, protocol.TypeAudioStop}, controls)
 }
 
+func TestWriterCallsTurnSentAfterTerminalAudioStop(t *testing.T) {
+	sent := make(chan struct{}, 1)
+	client := testClient(t, &fakeConfig{result: protocol.ConfigResult{Version: 1, Status: protocol.ConfigResultApplied}})
+	client.opts.TurnSent = func() { sent <- struct{}{} }
+	conn := newFakeConn()
+	client.conn = conn
+	require.NoError(t, client.SendTurn(t.Context(), Turn{ID: "turn-1", Start: protocol.TurnStart{Trigger: protocol.TriggerButton}, Reason: protocol.AudioStopEOF}))
+	ctx, cancel := context.WithCancel(t.Context())
+	errCh := make(chan error, 1)
+	go func() { errCh <- client.writer(ctx, conn) }()
+	require.Eventually(t, func() bool { return len(sent) == 1 }, time.Second, time.Millisecond)
+	cancel()
+	<-errCh
+}
+
 func TestLog_SanitizesAndDropsUnderPressure(t *testing.T) {
 	client := testClient(t, &fakeConfig{result: protocol.ConfigResult{Version: 1, Status: protocol.ConfigResultApplied}})
 	require.True(t, client.Log(protocol.LogRecord{Level: protocol.LogLevelInfo, Message: "ok", Fields: map[string]string{"token": "do-not-send", "api_key": "also-hidden", "cookie": "hidden", "safe": string(make([]byte, 300))}}))
@@ -288,6 +305,21 @@ func TestClockAndJitter(t *testing.T) {
 }
 
 func TestNew_RequiresDependencies(t *testing.T) { _, err := New(Options{}); assert.Error(t, err) }
+
+func TestWSSDialerConnectsToTLSServer(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer func() { require.NoError(t, conn.Close(websocket.StatusNormalClosure, "done")) }()
+	}))
+	defer server.Close()
+	endpoint := "wss" + strings.TrimPrefix(server.URL, "https")
+	conn, err := (WSSDialer{}).Dial(t.Context(), endpoint, nil, &tls.Config{MinVersion: tls.VersionTLS12, InsecureSkipVerify: true}) //nolint:gosec // G402: test TLS server has a generated certificate.
+	require.NoError(t, err)
+	require.NoError(t, conn.Close(websocket.StatusNormalClosure, "done"))
+}
 
 func TestRun_AuthenticatesForwardsLocalTurnAndStopsOnCancel(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "token")

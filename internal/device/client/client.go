@@ -104,6 +104,10 @@ type Options struct {
 	Jitter        Jitter
 	SkipTLSVerify bool
 	Logger        *slog.Logger
+	// TurnSent runs after the terminal audio.stop frame for a local turn has
+	// reached the connection. It is intended for composition roots that need
+	// to stop after a bounded fixture, without racing queued PCM writes.
+	TurnSent func()
 }
 
 // Client maintains one reconnecting device session.
@@ -120,6 +124,7 @@ type Client struct {
 type outbound struct {
 	type_ websocket.MessageType
 	data  []byte
+	done  func()
 }
 
 // New validates options and creates a disconnected client.
@@ -301,7 +306,7 @@ func (c *Client) writer(ctx context.Context, conn Connection) error {
 	for {
 		select {
 		case item := <-c.high:
-			if err := conn.Write(ctx, item.type_, item.data); err != nil {
+			if err := c.writeOutbound(ctx, conn, item); err != nil {
 				return fmt.Errorf("write high-priority frame: %w", err)
 			}
 			continue
@@ -311,7 +316,7 @@ func (c *Client) writer(ctx context.Context, conn Connection) error {
 		case <-ctx.Done():
 			return nil
 		case item := <-c.high:
-			if err := conn.Write(ctx, item.type_, item.data); err != nil {
+			if err := c.writeOutbound(ctx, conn, item); err != nil {
 				return fmt.Errorf("write high-priority frame: %w", err)
 			}
 		case record := <-c.logs:
@@ -319,7 +324,7 @@ func (c *Client) writer(ctx context.Context, conn Connection) error {
 			// after the optimistic poll above. Recheck before committing a log.
 			select {
 			case item := <-c.high:
-				if err := conn.Write(ctx, item.type_, item.data); err != nil {
+				if err := c.writeOutbound(ctx, conn, item); err != nil {
 					return fmt.Errorf("write high-priority frame: %w", err)
 				}
 				select {
@@ -348,6 +353,16 @@ func (c *Client) writer(ctx context.Context, conn Connection) error {
 			}
 		}
 	}
+}
+
+func (c *Client) writeOutbound(ctx context.Context, conn Connection, item outbound) error {
+	if err := conn.Write(ctx, item.type_, item.data); err != nil {
+		return fmt.Errorf("write outbound frame: %w", err)
+	}
+	if item.done != nil {
+		item.done()
+	}
+	return nil
 }
 
 func (c *Client) reader(ctx context.Context, conn Connection) error {
@@ -454,7 +469,14 @@ func (c *Client) SendTurn(ctx context.Context, turn Turn) error {
 			return err
 		}
 	}
-	return c.enqueueControl(protocol.TypeAudioStop, turn.ID, protocol.AudioStop{Reason: turn.Reason})
+	data, err := protocol.Encode(protocol.TypeAudioStop, turn.ID, c.opts.Clock.Now(), protocol.AudioStop{Reason: turn.Reason})
+	if err != nil {
+		return fmt.Errorf("encode control frame: %w", err)
+	}
+	if len(data) > maxFrameBytes {
+		return errors.New("device client: control frame exceeds 64 KiB")
+	}
+	return c.enqueue(outbound{type_: websocket.MessageText, data: data, done: c.opts.TurnSent})
 }
 
 func (c *Client) enqueueControl(type_ protocol.MessageType, id string, payload any) error {
