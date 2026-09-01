@@ -92,8 +92,11 @@ type Jitter interface {
 
 // Options configures a shared session client.
 type Options struct {
-	Discovery     discovery.Config
-	Hello         protocol.Hello
+	Discovery discovery.Config
+	Hello     protocol.Hello
+	// HelloSource supplies current device state for each reconnect. When nil,
+	// Hello is retained for simple composition roots and tests.
+	HelloSource   func() protocol.Hello
 	Dialer        Dialer
 	Resolver      Resolver
 	Pairings      PairingStore
@@ -108,6 +111,10 @@ type Options struct {
 	// reached the connection. It is intended for composition roots that need
 	// to stop after a bounded fixture, without racing queued PCM writes.
 	TurnSent func()
+	// SessionChanged is called after a welcomed session becomes usable and when
+	// it ceases to be usable. Device composition roots use it to discard local
+	// turns rather than retaining microphone audio across an outage.
+	SessionChanged func(bool)
 }
 
 // Client maintains one reconnecting device session.
@@ -141,10 +148,10 @@ func New(opts Options) (*Client, error) {
 	if opts.Logger == nil {
 		opts.Logger = slog.Default()
 	}
-	if opts.Hello.Protocol == 0 {
+	if opts.HelloSource == nil && opts.Hello.Protocol == 0 {
 		opts.Hello.Protocol = protocol.ProtocolVersion
 	}
-	if opts.Hello.Protocol != protocol.ProtocolVersion {
+	if opts.HelloSource == nil && opts.Hello.Protocol != protocol.ProtocolVersion {
 		return nil, errors.New("device client: unsupported hello protocol")
 	}
 	return &Client{opts: opts, high: make(chan outbound, 64), logs: make(chan protocol.LogRecord, maxLogRecords)}, nil
@@ -219,10 +226,18 @@ func (c *Client) runOnce(ctx context.Context, usePairing bool) (bool, error) {
 	c.mu.Lock()
 	c.conn = conn
 	c.mu.Unlock()
+	if c.opts.SessionChanged != nil {
+		c.opts.SessionChanged(true)
+	}
 
 	sessionCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	defer c.disconnect(conn)
+	defer func() {
+		if c.opts.SessionChanged != nil {
+			c.opts.SessionChanged(false)
+		}
+	}()
 
 	errCh := make(chan error, 2)
 	var workers sync.WaitGroup
@@ -258,7 +273,17 @@ func (c *Client) forwardTurns(ctx context.Context) {
 }
 
 func (c *Client) handshake(ctx context.Context, conn Connection, endpoint string) error {
-	if err := c.writeControl(ctx, conn, protocol.TypeHello, "", c.opts.Hello); err != nil {
+	hello := c.opts.Hello
+	if c.opts.HelloSource != nil {
+		hello = c.opts.HelloSource()
+	}
+	if hello.Protocol == 0 {
+		hello.Protocol = protocol.ProtocolVersion
+	}
+	if hello.Protocol != protocol.ProtocolVersion {
+		return errors.New("device client: unsupported hello protocol")
+	}
+	if err := c.writeControl(ctx, conn, protocol.TypeHello, "", hello); err != nil {
 		return fmt.Errorf("send hello: %w", err)
 	}
 	handshakeCtx, cancel := context.WithTimeout(ctx, handshakeWait)
@@ -419,6 +444,19 @@ func (c *Client) Log(record protocol.LogRecord) bool {
 	default:
 		return false
 	}
+}
+
+// ReportConfigResult queues a configuration acknowledgement generated after a
+// deferred device-side apply reaches its idle boundary. It is intentionally a
+// control frame, so it remains ahead of logs and cannot be starved by them.
+func (c *Client) ReportConfigResult(result protocol.ConfigResult) error {
+	if err := result.Validate(); err != nil {
+		return fmt.Errorf("validate config result: %w", err)
+	}
+	if err := c.enqueueControl(protocol.TypeConfigResult, "", result); err != nil {
+		return fmt.Errorf("queue config result: %w", err)
+	}
+	return nil
 }
 
 // SendTurn sends one complete canonical PCM turn. It rejects disconnected and

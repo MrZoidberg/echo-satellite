@@ -3,10 +3,12 @@ package audio
 import (
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 )
 
 type Ring struct {
+	mu         sync.Mutex
 	samples    []int16
 	sampleRate int
 	start      int
@@ -28,6 +30,8 @@ func NewRing(format Format, duration time.Duration) (*Ring, error) {
 }
 
 func (r *Ring) Write(samples []int16) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if len(r.samples) == 0 || len(samples) == 0 {
 		return
 	}
@@ -49,6 +53,8 @@ func (r *Ring) Write(samples []int16) {
 }
 
 func (r *Ring) Tail(duration time.Duration) []int16 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if duration <= 0 || r.length == 0 {
 		return []int16{}
 	}
@@ -63,6 +69,31 @@ func (r *Ring) Tail(duration time.Duration) []int16 {
 }
 
 func (r *Ring) Reset() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.start = 0
 	r.length = 0
+}
+
+// EnsureDuration expands the ring when a new pre-roll setting requires more
+// history. It never shrinks the allocation, preserving recent audio while a
+// gateway configuration changes at runtime.
+func (r *Ring) EnsureDuration(duration time.Duration) error {
+	if duration < 0 {
+		return fmt.Errorf("expand audio ring: duration must not be negative: %s", duration)
+	}
+	capacity := int((int64(r.sampleRate) * int64(duration)) / int64(time.Second))
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if capacity <= len(r.samples) {
+		return nil
+	}
+	next := make([]int16, capacity)
+	if r.length > 0 {
+		for index := range r.length {
+			next[index] = r.samples[(r.start+index)%len(r.samples)]
+		}
+	}
+	r.samples, r.start = next, 0
+	return nil
 }

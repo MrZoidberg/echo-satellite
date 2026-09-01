@@ -4,6 +4,7 @@ package endpointing
 import (
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/MrZoidberg/echo-satellite/internal/device/wake/vadlevel"
@@ -30,6 +31,7 @@ const (
 // Controller continuously warms its detector. A configuration is copied at
 // Start, so config delivery cannot alter an active voice turn.
 type Controller struct {
+	mu                      sync.Mutex
 	detector                Detector
 	config                  protocol.EndpointingConfig
 	pending                 *protocol.EndpointingConfig
@@ -53,8 +55,17 @@ func NewDefault(config protocol.EndpointingConfig) (*Controller, error) {
 	return New(config, vadlevel.NewDetector())
 }
 
-func (c *Controller) State() State { return c.state }
-func (c *Controller) Idle() bool   { return c.state == Idle || c.state == Completed }
+func (c *Controller) State() State {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.state
+}
+
+func (c *Controller) Idle() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.idleLocked()
+}
 
 // StageConfig applies a revision at the idle boundary and otherwise holds it
 // for the next turn. It returns true when the revision is pending.
@@ -62,23 +73,34 @@ func (c *Controller) StageConfig(config protocol.EndpointingConfig) (bool, error
 	if err := config.Validate(); err != nil {
 		return false, fmt.Errorf("validate endpointing config: %w", err)
 	}
-	if c.Idle() {
+	return c.StageValidatedConfig(config), nil
+}
+
+// StageValidatedConfig stages a configuration already accepted by the protocol
+// boundary. It is infallible so callers can persist desired state before
+// publishing it without a post-persistence rejection path.
+func (c *Controller) StageValidatedConfig(config protocol.EndpointingConfig) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.idleLocked() {
 		c.config = config
 		c.pending = nil
-		return false, nil
+		return false
 	}
 	c.pending = &config
-	return true, nil
+	return true
 }
 
 // Start snapshots the current config. Pre-roll is excluded from speech
 // decisions but included in elapsed transmitted audio for the hard turn limit.
 func (c *Controller) Start(preRollSamples int) error {
-	if !c.Idle() {
-		return ErrActiveTurn
-	}
 	if preRollSamples < 0 {
 		return errors.New("endpointing: pre-roll sample count cannot be negative")
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.idleLocked() {
+		return ErrActiveTurn
 	}
 	c.state, c.turn = WaitingForSpeech, c.config
 	c.elapsed = time.Duration(preRollSamples) * time.Second / 16_000
@@ -89,6 +111,8 @@ func (c *Controller) Start(preRollSamples int) error {
 // Observe warms the detector whether or not a turn is active and returns a
 // stop reason only on the frame that completes the current turn.
 func (c *Controller) Observe(samples []int16) (protocol.AudioStopReason, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.detector.Observe(samples)
 	if c.state != WaitingForSpeech && c.state != InSpeech {
 		return "", false
@@ -123,6 +147,8 @@ func (c *Controller) Observe(samples []int16) (protocol.AudioStopReason, bool) {
 }
 
 func (c *Controller) EOF() (protocol.AudioStopReason, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c.state != WaitingForSpeech && c.state != InSpeech {
 		return "", false
 	}
@@ -130,7 +156,11 @@ func (c *Controller) EOF() (protocol.AudioStopReason, bool) {
 }
 
 // Cancel closes the active turn without inventing a wire-level endpoint reason.
-func (c *Controller) Cancel() { c.finish() }
+func (c *Controller) Cancel() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.finish()
+}
 
 func (c *Controller) complete(reason protocol.AudioStopReason) (protocol.AudioStopReason, bool) {
 	c.finish()
@@ -145,5 +175,7 @@ func (c *Controller) finish() {
 		c.config, c.pending = *c.pending, nil
 	}
 }
+
+func (c *Controller) idleLocked() bool { return c.state == Idle || c.state == Completed }
 
 func milliseconds(value int) time.Duration { return time.Duration(value) * time.Millisecond }

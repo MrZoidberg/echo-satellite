@@ -30,12 +30,16 @@ type Event struct {
 }
 
 type Pipeline struct {
-	Engines          []Engine
-	VAD              VAD
-	Gate             Gate
-	Ring             *audio.Ring
-	Stats            *Stats
-	Config           Config
+	Engines []Engine
+	VAD     VAD
+	Gate    Gate
+	Ring    *audio.Ring
+	Stats   *Stats
+	Config  Config
+	// ConfigSource optionally supplies an atomically swapped configuration at a
+	// step boundary. It lets the device apply gateway desired state while the
+	// capture/wake path remains open.
+	ConfigSource     func() Config
 	Now              func() time.Time
 	vadScores        []float64
 	samplesProcessed int64
@@ -82,7 +86,20 @@ func (p *Pipeline) validate(source FrameSource, events chan<- Event) error {
 	return nil
 }
 
+//nolint:gocyclo // One wake step intentionally keeps scoring and acceptance ordering together.
 func (p *Pipeline) processStep(ctx context.Context, step []int16, events chan<- Event) error {
+	config := p.Config
+	dynamicConfig := p.ConfigSource != nil
+	if p.ConfigSource != nil {
+		config = p.ConfigSource()
+	}
+	gate := &p.Gate
+	if dynamicConfig {
+		// Keep the gate's accepted-at state across dynamic configuration
+		// changes; recreating it here would silently disable refractory time.
+		p.Gate.Thresholds = Thresholds{Wake: config.Threshold, VAD: config.VAD.Threshold}
+		p.Gate.MinInterval = time.Duration(config.MinIntervalMS) * time.Millisecond
+	}
 	vadStarted := time.Now()
 	vadScore, err := p.VAD.Score(step)
 	vadElapsed := time.Since(vadStarted)
@@ -92,7 +109,7 @@ func (p *Pipeline) processStep(ctx context.Context, step []int16, events chan<- 
 	if !finite(vadScore) || vadScore < 0 || vadScore > 1 {
 		return fmt.Errorf("%w: VAD returned %.4g", ErrInvalidScore, vadScore)
 	}
-	effectiveVADScore := p.observeVAD(vadScore)
+	effectiveVADScore := p.observeVAD(vadScore, config.VAD.LookbackMS)
 	p.samplesProcessed += int64(len(step))
 	audioPosition := time.Duration(p.samplesProcessed) * time.Second / SampleRate
 	type scoredCandidate struct {
@@ -105,7 +122,7 @@ func (p *Pipeline) processStep(ctx context.Context, step []int16, events chan<- 
 	scored := make([]scoredCandidate, 0, len(p.Engines))
 	for _, engine := range p.Engines {
 		candidate := scoredCandidate{engine: engine, observedAt: p.Now()}
-		if p.Config.AlwaysScoreWake || !p.Config.VAD.Enabled || effectiveVADScore >= p.Gate.Thresholds.VAD {
+		if config.AlwaysScoreWake || !config.VAD.Enabled || effectiveVADScore >= gate.Thresholds.VAD {
 			candidate.measured = true
 			wakeStarted := time.Now()
 			candidate.wakeScore, err = engine.Score(step)
@@ -125,10 +142,10 @@ func (p *Pipeline) processStep(ctx context.Context, step []int16, events chan<- 
 	for _, candidate := range scored {
 		decision := DecisionBelowWake
 		if candidate.measured {
-			decision = p.Gate.Decide(Candidate{
+			decision = gate.Decide(Candidate{
 				ModelID: candidate.engine.ID(), WakeScore: candidate.wakeScore,
 				InstantVADScore: vadScore, EffectiveVADScore: effectiveVADScore,
-				VADEnabled: p.Config.VAD.Enabled, At: candidate.observedAt,
+				VADEnabled: config.VAD.Enabled, At: candidate.observedAt,
 			})
 		}
 		observation.Candidates = append(observation.Candidates, CandidateObservation{
@@ -139,8 +156,8 @@ func (p *Pipeline) processStep(ctx context.Context, step []int16, events chan<- 
 			accepted = append(accepted, Event{
 				ModelID: candidate.engine.ID(), WakeScore: candidate.wakeScore,
 				InstantVADScore: vadScore, EffectiveVADScore: effectiveVADScore,
-				VADLookbackMS: p.Config.VAD.LookbackMS, AudioPosition: audioPosition,
-				PreRoll: p.Ring.Tail(time.Duration(p.Config.PreRollMS) * time.Millisecond), At: candidate.observedAt,
+				VADLookbackMS: config.VAD.LookbackMS, AudioPosition: audioPosition,
+				PreRoll: p.Ring.Tail(time.Duration(config.PreRollMS) * time.Millisecond), At: candidate.observedAt,
 			})
 		}
 	}
@@ -155,10 +172,10 @@ func (p *Pipeline) processStep(ctx context.Context, step []int16, events chan<- 
 	return nil
 }
 
-func (p *Pipeline) observeVAD(score float64) float64 {
+func (p *Pipeline) observeVAD(score float64, lookbackMS int) float64 {
 	// The current step is always retained. Additional entries cover every prior
 	// complete 80 ms step whose start falls inside the configured lookback.
-	priorSteps := p.Config.VAD.LookbackMS / stepMilliseconds
+	priorSteps := lookbackMS / stepMilliseconds
 	capacity := priorSteps + 1
 	p.vadScores = append(p.vadScores, score)
 	if len(p.vadScores) > capacity {

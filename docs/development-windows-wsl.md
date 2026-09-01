@@ -92,6 +92,30 @@ pushes it to `/data/local/tmp/echod`, makes it executable, and runs `--version`
 as an execution check. `run-device` then starts it through Magisk in the
 foreground with debug logging. Press Ctrl+C to stop it.
 
+## Prepare LED and microphone hardware
+
+Before a live microphone, wake, LED, or button diagnostic, stop Amazon's LED
+service and clear the physical microphone cut. The full script must be passed
+as one quoted argument to the remote `su -c`: putting `>` redirections outside
+those quotes makes the unprivileged ADB shell perform them and fails with
+`Permission denied` even when `su -c id` reports root.
+
+```bash
+"$ADB" -s "$DEVICE_SERIAL" shell "su -c '
+  stop ledcontroller
+  echo 0 > /sys/bus/i2c/devices/0-003f/boot_animation
+  test -e /sys/class/gpio/gpio444/value || echo 444 > /sys/class/gpio/export
+  echo out > /sys/class/gpio/gpio444/direction
+  echo 0 > /sys/class/gpio/gpio444/value
+  cat /sys/class/gpio/gpio444/value
+'"
+```
+
+The command must print `0`. On the qualified Dot, GPIO 444 is MTK pin 87; high
+physically disconnects the microphones, while low enables them. `boot_animation`
+alone does not prove microphone state. `ledcontroller` can be restored with
+`"$ADB" -s "$DEVICE_SERIAL" shell "su -c 'start ledcontroller'"` or a reboot.
+
 Windows ADB reports transport exit code 58 when Ctrl+C closes a foreground
 shell. `run-device` accepts that code only if the device remains online and
 `ps` confirms `/data/local/tmp/echod` is no longer running. All other non-zero

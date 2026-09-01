@@ -104,19 +104,34 @@ which checks used real hardware.
 
 ### Echo Dot hardware sessions
 
-Before the first live diagnostic in an ADB session, run `su -c 'stop
-ledcontroller'` and write `0` to
-`/sys/bus/i2c/devices/0-003f/boot_animation` so Amazon's indicator service
-cannot overwrite project test feedback. Do this once per session; it is
-reversible with `start ledcontroller` or a reboot. Also confirm the physical
-microphone cut is off before interpreting a wake result. On the qualified Dot,
-the MTK pin-87 line is GPIO 444; if the microphone Mute button is red or the
-line is absent, export it, set its direction to `out`, write `0`, and read back
-`0` from `/sys/class/gpio/gpio444/value`. A high value physically cuts the
-microphones and can make an otherwise healthy wake run report only near-zero
-scores. If microphone capture returns `ErrDeviceBusy`, treat it as evidence
-that another test or agent may be running: inspect the holder and coordinate
-rather than killing a process or stopping unrelated services.
+Before the first live diagnostic in an ADB session, stop `ledcontroller` and
+write `0` to `/sys/bus/i2c/devices/0-003f/boot_animation` so Amazon's indicator
+service cannot overwrite project test feedback. Do this once per session; it is
+reversible with `start ledcontroller` or a reboot. The entire sysfs script must
+be quoted as the argument to the *remote* `su -c`; otherwise ADB's shell applies
+the redirections before privilege escalation and reports misleading permission
+errors. Also confirm the physical microphone cut is off before interpreting a
+wake result. On the qualified Dot, the MTK pin-87 line is GPIO 444; if the
+microphone Mute button is red or the line is absent, export it, set its
+direction to `out`, write `0`, and read back `0` from
+`/sys/class/gpio/gpio444/value`:
+
+```sh
+"$ADB" -s "$DEVICE_SERIAL" shell "su -c '
+  stop ledcontroller
+  echo 0 > /sys/bus/i2c/devices/0-003f/boot_animation
+  test -e /sys/class/gpio/gpio444/value || echo 444 > /sys/class/gpio/export
+  echo out > /sys/class/gpio/gpio444/direction
+  echo 0 > /sys/class/gpio/gpio444/value
+  cat /sys/class/gpio/gpio444/value
+'"
+```
+
+A high GPIO value physically cuts the microphones and can make an otherwise
+healthy wake run report only near-zero scores. If microphone capture returns
+`ErrDeviceBusy`, treat it as evidence that another test or agent may be
+running: inspect the holder and coordinate rather than killing a process or
+stopping unrelated services.
 
 ### Fresh-context self-review and finding triage
 

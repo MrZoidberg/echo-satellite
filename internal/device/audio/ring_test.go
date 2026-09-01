@@ -54,3 +54,13 @@ func TestNewRingRejectsInvalidConfiguration(t *testing.T) {
 	ring.Write([]int16{1})
 	assert.Empty(t, ring.Tail(time.Second))
 }
+
+func TestRingEnsureDurationExpandsWithoutDiscardingHistory(t *testing.T) {
+	ring, err := NewRing(Format{SampleRate: 10, Channels: 1, Layout: LayoutS16LE}, time.Second)
+	require.NoError(t, err)
+	ring.Write([]int16{1, 2, 3, 4, 5, 6, 7, 8, 9, 10})
+	require.NoError(t, ring.EnsureDuration(2*time.Second))
+	ring.Write([]int16{11, 12, 13, 14, 15, 16, 17, 18, 19, 20})
+	assert.Equal(t, []int16{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20}, ring.Tail(2*time.Second))
+	assert.Error(t, ring.EnsureDuration(-time.Second))
+}

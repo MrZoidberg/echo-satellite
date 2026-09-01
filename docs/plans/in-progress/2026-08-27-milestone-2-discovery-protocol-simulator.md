@@ -750,7 +750,7 @@ Expected: Compose validates/builds and dotsim completes one endpointed turn.
 
 ### Task 10: Integrate discovery, config, endpointing, and turns into echod
 
-**Status:** not started
+**Status:** completed 2026-08-31
 
 **Purpose:** Reuse the simulator-proven path on the real Milestone 1 runtime.
 
@@ -812,7 +812,11 @@ idle audio never reaches transport.
 
 ### Task 11: HARDWARE — mDNS, WSS turns, and endpointing on the Echo Dot
 
-**Status:** not started
+**Status:** in progress
+
+**Blocker:** The qualified Dot has no usable network route (`ping` to both the
+LAN host and WSL endpoint returned `Network is unreachable`), so mDNS and WSS
+hardware acceptance cannot proceed until it joins the test LAN.
 
 **Purpose:** Prove simulator behavior on target hardware and record the real
 endpointing experiment required by the architecture change.
@@ -990,6 +994,88 @@ Docker, dotsim, and real-device evidence is recorded.
 - [ ] Every review finding has an explicit disposition.
 
 ## Progress log
+
+- 2026-08-31: Started Task 11 preparation at user direction. The native Linux
+  ADB client and existing ignored `.m2` development credentials are the test
+  inputs. Preparation may build and stage the ephemeral `/data/local/tmp`
+  binary and protected token, but does not start the gateway or `echod`, stop
+  the Amazon LED service, change the microphone GPIO, or claim hardware
+  acceptance before the user authorizes the live diagnostic.
+
+- 2026-08-31: Preparation completed without a live diagnostic: native Linux
+  `adb` saw the qualified rooted `biscuit` / arm64-v8a / permissive device;
+  the static `echod` was staged at `/data/local/tmp/echod` and passed
+  `--version`; the development token was staged mode 0600 at
+  `/data/local/tmp/echo-satellite-state/device-token`; and the installed
+  `okay_nabu` model plus OpenWakeWord shared assets were confirmed. The
+  pre-existing `/data/local/etc/echo-satellite` rejects writes even through
+  Magisk `su`, so the eventual foreground test must explicitly use
+  `/data/local/tmp/echo-satellite-state/{paired-gateway,config}.json` rather
+  than the production-default state paths. No gateway or device agent process
+  was started, and the LED/microphone controls were left untouched.
+
+- 2026-09-01: Began the authorized live Task 11 diagnostic. Native Linux ADB
+  connected and the host gateway started with mDNS/WSS plus diagnostic WAVs.
+  `echod` ran without an explicit URL for a bounded discovery window but never
+  created pairing/config state, so no authenticated session occurred. Explicit
+  fallback diagnosis then found the Dot has no network route to either the
+  host LAN address or WSL address (`Network is unreachable`). The test gateway
+  and foreground agent were stopped. The LED boot animation was already `0`,
+  but this FireOS session denied the documented sysfs LED/GPIO writes and did
+  not expose GPIO 444 after export; consequently wake/microphone results were
+  not attempted or claimed. Task 11 remains in progress and blocked on joining
+  the Dot to the test LAN, then resolving the microphone-cut control path.
+
+- 2026-09-01: Corrected the microphone-cut preparation diagnosis. The initial
+  GPIO-444 writes were accidentally parsed outside the remote `su -c` shell;
+  the documented fully quoted root command exported GPIO 444, set it to output,
+  drove it low, and read back `0`. The physical microphone cut is therefore
+  cleared. The only remaining Task 11 blocker is the Dot's missing network
+  route.
+
+- 2026-08-31: Task 10 implementation is in progress. `echod` now composes the
+  existing single ALSA/FileSource capture through `audio.Fanout`, keeps its
+  wake pipeline and a separately warmed endpoint controller local, and gives
+  the shared WSS client only completed, active-turn PCM. Wake pre-roll joins
+  the next fanout frame by `audio.Frame.Offset`; Action starts a diagnostic-free
+  button turn; disconnected sessions cancel/discard turns rather than retain
+  microphone audio for a later reconnect. Normal mode now loads pairing/config
+  state, uses bounded mDNS resolution, and has token/TLS/state/timeout options;
+  `--wake-only` remains socket-free. Gateway configuration is model-prepared
+  before persistence and published at the idle boundary, with deferred results
+  reported explicitly. Fresh-context review initially found offline turn
+  retention, non-atomic ordering, unsupported model-engine acceptance, and
+  stale reconnect `hello` state; all were fixed. Focused coordinator tests
+  cover pre-roll overlap/continuity, Action diagnostics/nested rejection, and
+  offline discard. Broader composition-stub coverage remains to be added before
+  Task 10 can be marked completed.
+
+- 2026-08-31: A second fresh-context Task 10 review confirmed the offline,
+  reconnect-hello, and model-kind fixes, then found further configuration edge
+  cases. Pending revisions now participate in monotonic/conflict comparison
+  before model preparation, avoiding both revision rollback and prepared-model
+  leaks; disconnect cancellation now runs the idle callback so pending desired
+  state is not stranded. The review also identified two remaining blockers to
+  completion: dynamically increasing `wake.pre_roll_ms` needs safe ring-buffer
+  capacity handling, and wake-resource/config persistence publication needs a
+  fully transactional failure strategy. They remain in scope for Task 10.
+
+- 2026-08-31: Completed Task 10. The remaining review blockers were fixed and
+  regression-tested: pre-roll ring capacity grows without discarding history;
+  endpoint-controller state is synchronized with config delivery; disconnect
+  drains queued triggers but still invokes the idle callback; disconnected
+  triggers and stale queued requests cannot carry microphone audio across a
+  reconnect; and bounded, offset-aware handoff history fills frames consumed
+  by the turn subscriber before a delayed wake event arrives. Endpoint config
+  publication is now an infallible post-validation operation, so config state
+  cannot be persisted then rejected before runtime publication. The required
+  fresh-context review found four correctness/privacy issues; all were fixed,
+  with none declined or postponed. Verification passed: `go test -race
+  ./cmd/echod/... ./internal/device/...`; `go test -race -count=10
+  ./cmd/echod/... ./internal/device/client/... ./internal/device/endpointing/...`;
+  `make check-portability`; `make build-device`; `make fmt-check`; `make lint`
+  (0 issues); and `make test` (70.4% total non-mock coverage). No real-hardware
+  proof was attempted; that remains Task 11.
 
 - 2026-08-31: Completed Task 9. Added a static multi-stage `Dockerfile` with
   a distroless non-root runtime, secret-aware `.dockerignore`, localhost-only
