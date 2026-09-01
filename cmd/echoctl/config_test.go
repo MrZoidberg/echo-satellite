@@ -23,6 +23,17 @@ func TestParseArgs_Commands(t *testing.T) {
 		assert.Equal(t, "version", command)
 	})
 
+	t.Run("wifi set", func(t *testing.T) {
+		o, command, err := parseArgs([]string{"wifi", "set", "--ssid=hidden", "--passphrase=secret-passphrase"})
+		require.NoError(t, err)
+		assert.Equal(t, "wifi set", command)
+		assert.Equal(t, "hidden", o.WiFi.Set.SSID)
+		assert.Equal(t, "secret-passphrase", o.WiFi.Set.Passphrase)
+
+		_, _, err = parseArgs([]string{"wifi", "set"})
+		require.Error(t, err)
+	})
+
 	t.Run("release verify", func(t *testing.T) {
 		o, command, err := parseArgs([]string{
 			"release", "verify",

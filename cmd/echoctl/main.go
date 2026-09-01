@@ -59,6 +59,8 @@ func dispatch(w io.Writer, command string, o opts) error {
 		return wakeBench(w, o.Bench)
 	case "status":
 		return deviceStatus(w, o.Status)
+	case "wifi set":
+		return wifiSet(w, o.WiFi.Set)
 	default:
 		return fmt.Errorf("unknown command %q", command)
 	}
