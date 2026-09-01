@@ -53,3 +53,7 @@ coverage*.out
 !testdata/wake/synthetic/
 !testdata/wake/synthetic/*.tflite
 !testdata/wake/synthetic/*.onnx
+
+.assets/
+.dotsim/
+data/
