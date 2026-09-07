@@ -185,7 +185,13 @@ func TestEncodeDecode_RequirePayloads(t *testing.T) {
 		_, err := Encode(msgType, "message-id", time.Now(), nil)
 		require.ErrorIs(t, err, ErrNoRequiredPayload, msgType)
 
+		_, err = Encode(msgType, "message-id", time.Now(), (*Welcome)(nil))
+		require.ErrorIs(t, err, ErrNoRequiredPayload, msgType)
+
 		_, err = Decode([]byte(`{"type":"` + string(msgType) + `","id":"message-id","ts":"2026-08-19T12:00:00Z"}`))
+		require.ErrorIs(t, err, ErrNoRequiredPayload, msgType)
+
+		_, err = Decode([]byte(`{"type":"` + string(msgType) + `","id":"message-id","ts":"2026-08-19T12:00:00Z","payload":null}`))
 		require.ErrorIs(t, err, ErrNoRequiredPayload, msgType)
 	}
 }

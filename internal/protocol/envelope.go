@@ -32,6 +32,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"time"
 )
@@ -61,7 +62,7 @@ type Envelope struct {
 }
 
 // Encode marshals a control frame. A nil payload produces an envelope with no
-// payload field, which is correct for messages such as ping and audio.stop.
+// payload field, which is correct for messages such as ping.
 func Encode(msgType MessageType, id string, ts time.Time, payload any) ([]byte, error) {
 	if msgType == "" {
 		return nil, ErrEmptyMessageType
@@ -69,7 +70,7 @@ func Encode(msgType MessageType, id string, ts time.Time, payload any) ([]byte, 
 	if requiresCorrelationID(msgType) && strings.TrimSpace(id) == "" {
 		return nil, ErrMissingCorrelationID
 	}
-	if requiresPayload(msgType) && payload == nil {
+	if requiresPayload(msgType) && isNilPayload(payload) {
 		return nil, ErrNoRequiredPayload
 	}
 	if validatable, ok := payload.(interface{ Validate() error }); ok {
@@ -79,10 +80,13 @@ func Encode(msgType MessageType, id string, ts time.Time, payload any) ([]byte, 
 	}
 
 	env := Envelope{Type: msgType, ID: id, TS: ts}
-	if payload != nil {
+	if !isNilPayload(payload) {
 		raw, err := json.Marshal(payload)
 		if err != nil {
 			return nil, fmt.Errorf("protocol: marshal %s payload: %w", msgType, err)
+		}
+		if requiresPayload(msgType) && !hasPayload(raw) {
+			return nil, ErrNoRequiredPayload
 		}
 		env.Payload = raw
 	}
@@ -109,10 +113,29 @@ func Decode(data []byte) (Envelope, error) {
 	if requiresCorrelationID(env.Type) && strings.TrimSpace(env.ID) == "" {
 		return Envelope{}, ErrMissingCorrelationID
 	}
-	if requiresPayload(env.Type) && len(env.Payload) == 0 {
+	if requiresPayload(env.Type) && !hasPayload(env.Payload) {
 		return Envelope{}, ErrNoRequiredPayload
 	}
 	return env, nil
+}
+
+func hasPayload(payload json.RawMessage) bool {
+	payload = json.RawMessage(strings.TrimSpace(string(payload)))
+	return len(payload) > 0 && string(payload) != "null"
+}
+
+func isNilPayload(payload any) bool {
+	if payload == nil {
+		return true
+	}
+
+	value := reflect.ValueOf(payload)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Map, reflect.Pointer, reflect.Interface, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
 }
 
 // DecodePayload unmarshals the envelope payload into v.

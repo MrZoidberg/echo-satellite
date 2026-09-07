@@ -1815,6 +1815,15 @@ Docker, dotsim, and real-device evidence is recorded.
 
 ## Completion evidence
 
+- 2026-09-07: Task 12 Copilot review remediation completed. Finding 1
+  (**fix**, P2): required-payload decoding accepted JSON `null`; reject absent,
+  whitespace-only, and JSON-null payloads, and cover the matching typed-nil
+  encoding case. Finding 2 (**fix**, P2): correct `Encode` documentation to
+  state that only messages without a required payload, such as `ping`, may omit
+  it. Fresh-context review found a typed-nil `Validate` panic before the new
+  null check (**fix**, P1); typed nils now count as absent before validation.
+  `go test -race ./internal/protocol/...` and `make verify` passed.
+
 - 2026-09-02: Task 12 documentation and coverage review is in progress.
   Updated the README and Windows/WSL guide for the delivered local-endpointing,
   mDNS/WSS, state-path, token/TLS, profile-reload, dotsim, and Compose
