@@ -127,9 +127,43 @@ Pass different arguments without changing the Makefile:
 make run-device DEVICE_ARGS='--dbg --device-id bench-dot'
 ```
 
-Milestone 0's `echod` only logs its configuration and waits for a signal. The
-microphone, wake, speaker, LED, and button diagnostics arrive in Milestone 1;
-the same `DEVICE_ARGS` mechanism will run them when they exist.
+For a networked foreground diagnostic, supply the gateway settings through the
+same mechanism. `--gateway-url` bypasses mDNS but does not bypass WSS or token
+authentication. Use `--tls-skip-verify` only with a local development
+certificate; it disables certificate verification and must not be used in a
+production deployment.
+
+```bash
+make run-device DEVICE_ARGS='--dbg --device-id bench-dot \
+  --gateway-url wss://192.168.110.127:8770/device \
+  --gateway-token-file /data/local/tmp/echo-satellite-token \
+  --tls-skip-verify'
+```
+
+The normal device state paths are
+`/data/local/etc/echo-satellite/paired-gateway.json` and
+`/data/local/etc/echo-satellite/config.json`. For a disposable foreground
+experiment, set `--pairing-state` and `--config-state` to a separate directory
+instead of removing the normal state.
+
+## Gateway and simulator development
+
+Run the native gateway on the LAN for mDNS acceptance. Its certificate, private
+key, device token, and TOML profile are operator-provided files; the shared
+token is development-only and must contain at least 32 random bytes.
+
+```bash
+.bin/gateway --listen :8770 --tls-cert dev-cert.pem --tls-key dev-key.pem \
+  --device-token-file device-token --device-config devices.toml --dbg
+```
+
+Increment the profile's top-level `version` whenever its effective desired
+configuration changes. Send `SIGHUP` to reload it; an invalid or non-increasing
+profile leaves the active snapshot unchanged. `dotsim` persists pairing and
+configuration below `.dotsim` by default, and `--once` exits after one
+successfully transmitted fixture turn. See `docs/gateway-deployment.md` for
+the Compose explicit-WSS smoke test and its separate opt-in diagnostic-WAV
+directory.
 
 ## VS Code tasks
 
@@ -174,8 +208,8 @@ approval failure separately from an ADB or device failure.
 
 ## Debugging
 
-Foreground execution plus structured logs is the supported Milestone 1
-debugging workflow. Source-level VS Code debugging on the Dot is a later,
+Foreground execution plus structured logs is the supported device debugging
+workflow. Source-level VS Code debugging on the Dot is a later,
 experimental step: it requires an unstripped `-N -l` build, a Linux/ARM64
 Delve server, ADB port forwarding, and proof that ptrace works on this FireOS
 kernel. Do not use the stripped release binary for Delve and do not treat remote
@@ -188,6 +222,8 @@ through the gateway into the inactive application slot. That becomes the normal
 iteration loop because it exercises trial health and rollback. ADB remains the
 bootstrap, development, and recovery mechanism.
 
-mDNS must be tested from the actual Docker/WSL deployment because multicast
-visibility differs by network mode. An explicit gateway URL always wins over
-discovery and remains the fallback.
+Docker Compose deliberately disables mDNS and is validated only with an
+explicit WSS URL. Test mDNS with the native gateway on the physical LAN; VLANs,
+VPNs, container isolation, and multicast filtering can require an mDNS
+reflector or the explicit URL fallback. An explicit gateway URL always wins
+over discovery.

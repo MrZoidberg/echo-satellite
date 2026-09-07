@@ -155,6 +155,24 @@ func TestServer_InvalidTurnSequencingClosesConnection(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestServer_LogsAudioStopFinalizationError(t *testing.T) {
+	var logs lockedBuffer
+	server, err := New(Options{Token: []byte("device-token"), ServerID: "gateway", Config: func(string) protocol.DeviceConfig { return testConfig() }, Logger: slog.New(slog.NewTextHandler(&logs, nil))})
+	require.NoError(t, err)
+	httpServer := httptest.NewTLSServer(server)
+	defer httpServer.Close()
+	conn := dialHello(t, httpServer)
+	defer func() { _ = conn.Close(websocket.StatusNormalClosure, "done") }()
+	require.NoError(t, write(t, conn, protocol.TypeTurnStart, "turn-log", protocol.TurnStart{Trigger: protocol.TriggerButton}))
+	// Stop without audio.start reaches Receiver.Stop and fails with its useful,
+	// underlying error rather than the generic wire close reason.
+	require.NoError(t, write(t, conn, protocol.TypeAudioStop, "turn-log", protocol.AudioStop{Reason: protocol.AudioStopEndpointed}))
+	require.Eventually(t, func() bool { return strings.Contains(logs.String(), "msg=\"reject device audio stop\"") }, time.Second, 10*time.Millisecond)
+	assert.Contains(t, logs.String(), "device_id=dot-1")
+	assert.Contains(t, logs.String(), "turn_id=turn-log")
+	assert.Contains(t, logs.String(), "audio window is not open")
+}
+
 func TestServer_PushConfig(t *testing.T) {
 	t.Parallel()
 	server := testServer(t)

@@ -45,7 +45,7 @@ func TestResolve_ExplicitURLWins(t *testing.T) {
 	}, &paired)
 
 	require.NoError(t, err)
-	assert.Equal(t, "wss://192.168.10.20:8770/device", endpoint)
+	assert.Equal(t, "wss://192.168.10.20:8770/device", endpoint.URL)
 	assert.Zero(t, browser.calls, "an explicit URL must not trigger a browse")
 }
 
@@ -73,7 +73,7 @@ func TestResolve_PairedGatewayBeforeBrowse(t *testing.T) {
 	endpoint, err := r.Resolve(t.Context(), Config{Discovery: ModeMDNS}, &paired)
 
 	require.NoError(t, err)
-	assert.Equal(t, "wss://home.local.:8770/device", endpoint)
+	assert.Equal(t, "wss://home.local.:8770/device", endpoint.URL)
 	assert.Zero(t, browser.calls)
 }
 
@@ -94,8 +94,23 @@ func TestResolve_PairedGatewayFoundAtNewAddress(t *testing.T) {
 	}, nil)
 
 	require.NoError(t, err)
-	assert.Equal(t, "wss://192.168.10.55:8770/device", endpoint)
+	assert.Equal(t, "wss://192.168.10.55:8770/device", endpoint.URL)
 	assert.Equal(t, 1, browser.calls)
+}
+
+func TestResolve_MDNSAddressRetainsDNSNameForTLS(t *testing.T) {
+	inst := gateway("home-gateway", "gateway.local.")
+	inst.Addrs = []netip.Addr{netip.MustParseAddr("192.168.10.55")}
+	r := NewResolver(&stubBrowser{instances: []Instance{inst}}, protocol.ProtocolVersion)
+
+	endpoint, err := r.Resolve(t.Context(), Config{Discovery: ModeMDNS}, nil)
+
+	require.NoError(t, err)
+	assert.Equal(t, "wss://192.168.10.55:8770/device", endpoint.URL)
+	assert.Equal(t, "gateway.local", endpoint.TLSServerName)
+	if assert.NotNil(t, endpoint.Instance) {
+		assert.Equal(t, inst, *endpoint.Instance)
+	}
 }
 
 func TestResolve_PreferredServerIDOverridesStalePairing(t *testing.T) {
@@ -109,7 +124,7 @@ func TestResolve_PreferredServerIDOverridesStalePairing(t *testing.T) {
 	}, &paired)
 
 	require.NoError(t, err)
-	assert.Equal(t, "wss://new.local.:8770/device", endpoint)
+	assert.Equal(t, "wss://new.local.:8770/device", endpoint.URL)
 }
 
 func TestResolve_SkipsIncompatibleInstances(t *testing.T) {
@@ -121,7 +136,7 @@ func TestResolve_SkipsIncompatibleInstances(t *testing.T) {
 	endpoint, err := r.Resolve(t.Context(), Config{Discovery: ModeMDNS}, nil)
 
 	require.NoError(t, err)
-	assert.Equal(t, "wss://home.local.:8770/device", endpoint)
+	assert.Equal(t, "wss://home.local.:8770/device", endpoint.URL)
 }
 
 func TestResolve_IncompatiblePairedGatewayFallsBackToBrowse(t *testing.T) {
@@ -133,7 +148,7 @@ func TestResolve_IncompatiblePairedGatewayFallsBackToBrowse(t *testing.T) {
 	endpoint, err := r.Resolve(t.Context(), Config{Discovery: ModeMDNS}, &paired)
 
 	require.NoError(t, err)
-	assert.Equal(t, "wss://guest.local.:8770/device", endpoint)
+	assert.Equal(t, "wss://guest.local.:8770/device", endpoint.URL)
 }
 
 func TestResolve_NoGateway(t *testing.T) {

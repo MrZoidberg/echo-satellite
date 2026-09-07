@@ -1,10 +1,17 @@
-# Get the latest commit branch, hash, and date
+# Get the latest commit branch, hash, and date. Windows GNU Make uses cmd.exe,
+# which cannot run the Unix printf/date expression below.
+ifeq ($(OS),Windows_NT)
+REV=windows
+WINDOWS_GO=
+else
 TAG=$(shell git describe --tags --abbrev=0 --exact-match 2>/dev/null)
 BRANCH=$(if $(TAG),$(TAG),$(shell git rev-parse --abbrev-ref HEAD 2>/dev/null))
 HASH=$(shell git rev-parse --short=7 HEAD 2>/dev/null)
 TIMESTAMP=$(shell ts=$$(git log -1 --format=%ct HEAD 2>/dev/null); date -u -d @$$ts +%Y%m%dT%H%M%S 2>/dev/null || date -u -r $$ts +%Y%m%dT%H%M%S 2>/dev/null)
 GIT_REV=$(shell printf "%s-%s-%s" "$(BRANCH)" "$(HASH)" "$(TIMESTAMP)")
 REV=$(if $(filter --,$(GIT_REV)),latest,$(GIT_REV))
+WINDOWS_GO=GOOS=windows GOARCH=amd64
+endif
 
 LDFLAGS=-X main.revision=$(REV) -s -w
 CMDS=echod gateway echoctl dotsim
@@ -21,6 +28,16 @@ build:
 		echo "building $$cmd"; \
 		go build -ldflags "$(LDFLAGS)" -o .bin/$$cmd ./cmd/$$cmd || exit 1; \
 	done
+
+build-windows:
+	@echo building Windows echod
+	$(WINDOWS_GO) go build -ldflags "$(LDFLAGS)" -o .bin/echod.exe ./cmd/echod
+	@echo building Windows gateway
+	$(WINDOWS_GO) go build -ldflags "$(LDFLAGS)" -o .bin/gateway.exe ./cmd/gateway
+	@echo building Windows echoctl
+	$(WINDOWS_GO) go build -ldflags "$(LDFLAGS)" -o .bin/echoctl.exe ./cmd/echoctl
+	@echo building Windows dotsim
+	$(WINDOWS_GO) go build -ldflags "$(LDFLAGS)" -o .bin/dotsim.exe ./cmd/dotsim
 
 # device build: pure-Go static binary for the Echo Dot (see docs/DESIGN.md 22)
 build-device:
@@ -104,8 +121,13 @@ fmt-check:
 
 verify: fmt-check lint test build
 
+ifeq ($(OS),Windows_NT)
+version:
+	@echo revision: $(REV)
+else
 version:
 	@echo "branch: $(BRANCH), hash: $(HASH), timestamp: $(TIMESTAMP)"
 	@echo "revision: $(REV)"
+endif
 
-.PHONY: all build build-device build-device-ctl build-device-noasm check-portability bench device-check push-device run-device device-stopped test test-fast race lint fmt fmt-check verify version
+.PHONY: all build build-windows build-device build-device-ctl build-device-noasm check-portability bench device-check push-device run-device device-stopped test test-fast race lint fmt fmt-check verify version

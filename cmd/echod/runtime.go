@@ -28,12 +28,12 @@ type timedResolver struct {
 	timeout  time.Duration
 }
 
-func (r timedResolver) Resolve(ctx context.Context, cfg discovery.Config, paired *discovery.Instance) (string, error) {
+func (r timedResolver) Resolve(ctx context.Context, cfg discovery.Config, paired *discovery.Instance) (discovery.Endpoint, error) {
 	resolveCtx, cancel := context.WithTimeout(ctx, r.timeout)
 	defer cancel()
 	endpoint, err := r.resolver.Resolve(resolveCtx, cfg, paired)
 	if err != nil {
-		return "", fmt.Errorf("resolve within discovery timeout: %w", err)
+		return discovery.Endpoint{}, fmt.Errorf("resolve within discovery timeout: %w", err)
 	}
 	return endpoint, nil
 }
@@ -554,7 +554,7 @@ func runConnected(ctx context.Context, o opts) (returnErr error) {
 			animator.Set(protocol.StateIdle)
 		}
 	}
-	resolver := timedResolver{resolver: discovery.NewResolver(mdns.New(), protocol.ProtocolVersion), timeout: time.Duration(o.DiscoveryTimeout) * time.Millisecond}
+	resolver := timedResolver{resolver: discovery.NewResolver(mdns.NewDevice(), protocol.ProtocolVersion), timeout: time.Duration(o.DiscoveryTimeout) * time.Millisecond}
 	session, err := client.New(client.Options{Discovery: o.discoveryConfig(), HelloSource: func() protocol.Hello {
 		current := state.current()
 		return protocol.Hello{DeviceID: identity.DeviceID, AgentVersion: revision, Protocol: protocol.ProtocolVersion, Capabilities: announcedCapabilities(), WakeConfig: wakeSummary(current), ConfigVersion: current.Version}

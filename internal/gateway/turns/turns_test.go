@@ -56,6 +56,11 @@ func TestReceiver_PromotesCompletedDiagnosticWAV(t *testing.T) {
 	assert.Len(t, entries, 1)
 }
 
+func TestSyncDirectoryForOS_WindowsSkipsDirectoryHandleSync(t *testing.T) {
+	t.Parallel()
+	require.NoError(t, syncDirectoryForOS("windows", t.TempDir()))
+}
+
 func TestReceiver_AbortsDiagnosticWAV(t *testing.T) {
 	t.Parallel()
 	directory := t.TempDir()

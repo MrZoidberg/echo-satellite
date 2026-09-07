@@ -333,6 +333,7 @@ func (s *session) handleControlLocked(ctx context.Context, env protocol.Envelope
 		}
 		completed, err := s.server.turns.Stop(s.active, env.ID, stop)
 		if err != nil {
+			s.server.logger.Warn("reject device audio stop", "device_id", s.metadata.DeviceID, "turn_id", env.ID, "error", err)
 			s.server.closeProtocol(s.conn, "invalid audio stop")
 			return false
 		}

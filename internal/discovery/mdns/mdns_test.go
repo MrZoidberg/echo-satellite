@@ -3,10 +3,11 @@ package mdns
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
+	"net/netip"
 	"testing"
 
-	"github.com/grandcat/zeroconf"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -15,13 +16,13 @@ import (
 )
 
 type stubResolver struct {
-	entries []*zeroconf.ServiceEntry
+	entries []*serviceEntry
 	err     error
 	started chan<- struct{}
 	block   bool
 }
 
-func (r stubResolver) Browse(_ context.Context, _, _ string, entries chan<- *zeroconf.ServiceEntry) error {
+func (r stubResolver) Browse(ctx context.Context, _, _ string, entries chan<- *serviceEntry) error {
 	if r.err != nil {
 		return r.err
 	}
@@ -29,14 +30,12 @@ func (r stubResolver) Browse(_ context.Context, _, _ string, entries chan<- *zer
 		r.started <- struct{}{}
 	}
 	if r.block {
-		return nil
+		<-ctx.Done()
+		return fmt.Errorf("stub browse context: %w", ctx.Err())
 	}
-	go func() {
-		defer close(entries)
-		for _, entry := range r.entries {
-			entries <- entry
-		}
-	}()
+	for _, entry := range r.entries {
+		entries <- entry
+	}
 	return nil
 }
 
@@ -45,7 +44,7 @@ type stubServer struct{ stopped bool }
 func (s *stubServer) Shutdown() { s.stopped = true }
 
 func TestBrowseConvertsFiltersDeduplicatesAndSorts(t *testing.T) {
-	restore := swapResolver(t, stubResolver{entries: []*zeroconf.ServiceEntry{
+	restore := swapResolver(t, stubResolver{entries: []*serviceEntry{
 		entry("home", "gateway.local.", "192.168.1.3", "fe80::1"),
 		entry("guest", "guest.local.", "192.168.1.4"),
 		entry("home", "gateway.local.", "192.168.1.3"),
@@ -63,6 +62,39 @@ func TestBrowseConvertsFiltersDeduplicatesAndSorts(t *testing.T) {
 	assert.Len(t, instances[1].Addrs, 2)
 	assert.Equal(t, "192.168.1.3", instances[1].Addrs[0].String())
 	assert.Equal(t, "fe80::1", instances[1].Addrs[1].String())
+}
+
+func TestBrowseDoesNotReturnWithdrawnGateway(t *testing.T) {
+	added := entry("home", "gateway.local.", "192.168.1.3")
+	added.Name = "echo-satellite-home"
+	restore := swapResolver(t, stubResolver{entries: []*serviceEntry{
+		added,
+		{Name: "echo-satellite-home", Removed: true},
+	}})
+	defer restore()
+
+	instances, err := New().Browse(t.Context())
+	require.NoError(t, err)
+	assert.Empty(t, instances)
+}
+
+func TestBrowseWithdrawalRetainsAnotherInstanceForSameGateway(t *testing.T) {
+	first := entry("home", "gateway.local.", "192.168.1.3")
+	first.Name = "echo-satellite-home-a"
+	second := entry("home", "gateway.local.", "192.168.1.4")
+	second.Name = "echo-satellite-home-b"
+	restore := swapResolver(t, stubResolver{entries: []*serviceEntry{
+		first,
+		second,
+		{Name: "echo-satellite-home-a", Removed: true},
+	}})
+	defer restore()
+
+	instances, err := New().Browse(t.Context())
+	require.NoError(t, err)
+	require.Len(t, instances, 1)
+	assert.Equal(t, "home", instances[0].ServerID)
+	assert.Equal(t, []netip.Addr{netip.MustParseAddr("192.168.1.4")}, instances[0].Addrs)
 }
 
 func TestBrowseCanceledPromptly(t *testing.T) {
@@ -93,9 +125,257 @@ func TestBrowseWrapsResolverError(t *testing.T) {
 	restore := swapResolver(t, stubResolver{err: errors.New("multicast unavailable")})
 	defer restore()
 	_, err := New().Browse(t.Context())
-	require.Error(t, err)
-	assert.ErrorContains(t, err, "multicast unavailable")
+	require.ErrorContains(t, err, "multicast unavailable")
 }
+
+func TestPreferredInterfaces(t *testing.T) {
+	tests := map[string]struct {
+		iface *net.Interface
+		err   error
+		want  bool
+	}{
+		"usable wlan":  {iface: &net.Interface{Name: "wlan0", Flags: net.FlagUp | net.FlagMulticast}, want: true},
+		"missing wlan": {err: errors.New("not found")},
+		"down wlan":    {iface: &net.Interface{Name: "wlan0", Flags: net.FlagMulticast}},
+		"unicast wlan": {iface: &net.Interface{Name: "wlan0", Flags: net.FlagUp}},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			old := interfaceByName
+			defer func() { interfaceByName = old }()
+			interfaceByName = func(string) (*net.Interface, error) { return test.iface, test.err }
+			assert.Equal(t, test.want, len(preferredInterfaces()) == 1)
+		})
+	}
+}
+
+func TestNewDeviceResolverUsesPreferredInterfaces(t *testing.T) {
+	oldLookup := interfaceByName
+	oldCreate := createResolver
+	defer func() {
+		interfaceByName = oldLookup
+		createResolver = oldCreate
+	}()
+	interfaceByName = func(string) (*net.Interface, error) {
+		return &net.Interface{Name: "wlan0", Index: 7, Flags: net.FlagUp | net.FlagMulticast}, nil
+	}
+	var got []net.Interface
+	createResolver = func(interfaces []net.Interface) (resolver, error) {
+		got = interfaces
+		return stubResolver{}, nil
+	}
+	_, err := newDeviceResolver()
+	require.NoError(t, err)
+	require.Equal(t, []net.Interface{{Name: "wlan0", Index: 7, Flags: net.FlagUp | net.FlagMulticast}}, got)
+}
+
+func TestNewDeviceResolverFallsBackWithoutWLAN(t *testing.T) {
+	oldLookup := interfaceByName
+	oldCreate := createResolver
+	defer func() {
+		interfaceByName = oldLookup
+		createResolver = oldCreate
+	}()
+	interfaceByName = func(string) (*net.Interface, error) { return nil, errors.New("not found") }
+	var got []net.Interface
+	createResolver = func(interfaces []net.Interface) (resolver, error) {
+		got = interfaces
+		return stubResolver{}, nil
+	}
+	_, err := newDeviceResolver()
+	require.NoError(t, err)
+	assert.Nil(t, got)
+}
+
+func TestRegisterBindsProxyToSelectedLANInterface(t *testing.T) {
+	restore := stubAdvertisementNetwork(t, []net.Interface{
+		{Name: "Loopback Pseudo-Interface 1", Flags: net.FlagUp | net.FlagMulticast | net.FlagLoopback},
+		{Name: "vpn0", Flags: net.FlagUp},
+		{Name: "Wi-Fi", Index: 7, Flags: net.FlagUp | net.FlagMulticast},
+	}, map[string][]net.Addr{
+		"Loopback Pseudo-Interface 1": {cidrAddr("127.0.0.1/8")},
+		"vpn0":                        {cidrAddr("10.0.0.1/24")},
+		"Wi-Fi":                       {cidrAddr("192.168.1.20/24"), cidrAddr("2001:db8::20/64")},
+	})
+	defer restore()
+	oldRegister := registerProxy
+	defer func() { registerProxy = oldRegister }()
+	var gotIPs []string
+	var gotInterfaces []net.Interface
+	registerProxy = func(_ string, _ string, _ string, _ int, host string, ips []string, _ []string, ifaces []net.Interface) (server, error) {
+		assert.Equal(t, "gateway", host)
+		gotIPs = ips
+		gotInterfaces = ifaces
+		return &stubServer{}, nil
+	}
+
+	_, err := register(testInstance())
+	require.NoError(t, err)
+	assert.Equal(t, []string{"192.168.1.20", "2001:db8::20"}, gotIPs)
+	assert.Equal(t, []net.Interface{{Name: "Wi-Fi", Index: 7, Flags: net.FlagUp | net.FlagMulticast}}, gotInterfaces)
+}
+
+func TestAdvertisementTargetIncludesAllUsableMulticastInterfaces(t *testing.T) {
+	restore := stubAdvertisementNetwork(t, []net.Interface{
+		{Name: "vEthernet (WSL)", Index: 3, Flags: net.FlagUp | net.FlagMulticast},
+		{Name: "Wi-Fi", Index: 7, Flags: net.FlagUp | net.FlagMulticast},
+		{Name: "Loopback", Index: 1, Flags: net.FlagUp | net.FlagMulticast | net.FlagLoopback},
+	}, map[string][]net.Addr{
+		"vEthernet (WSL)": {cidrAddr("172.27.224.1/20")},
+		"Wi-Fi":           {cidrAddr("192.168.110.127/24")},
+		"Loopback":        {cidrAddr("127.0.0.1/8")},
+	})
+	defer restore()
+
+	targets, err := advertisementTargets(nil)
+	require.NoError(t, err)
+	assert.Equal(t, []advertisementTarget{
+		{iface: net.Interface{Name: "vEthernet (WSL)", Index: 3, Flags: net.FlagUp | net.FlagMulticast}, ips: []string{"172.27.224.1"}},
+		{iface: net.Interface{Name: "Wi-Fi", Index: 7, Flags: net.FlagUp | net.FlagMulticast}, ips: []string{"192.168.110.127"}},
+	}, targets)
+}
+
+func TestRegisterPublishesAndClosesEachInterfaceIndependently(t *testing.T) {
+	restore := stubAdvertisementNetwork(t, []net.Interface{
+		{Name: "vEthernet (WSL)", Index: 3, Flags: net.FlagUp | net.FlagMulticast},
+		{Name: "Wi-Fi", Index: 7, Flags: net.FlagUp | net.FlagMulticast},
+	}, map[string][]net.Addr{
+		"vEthernet (WSL)": {cidrAddr("172.27.224.1/20")},
+		"Wi-Fi":           {cidrAddr("192.168.110.127/24")},
+	})
+	defer restore()
+	oldRegister := registerProxy
+	defer func() { registerProxy = oldRegister }()
+	var calls []advertisementTarget
+	var opened []*stubServer
+	registerProxy = func(_ string, _ string, _ string, _ int, _ string, ips []string, _ []string, ifaces []net.Interface) (server, error) {
+		calls = append(calls, advertisementTarget{iface: ifaces[0], ips: append([]string(nil), ips...)})
+		value := &stubServer{}
+		opened = append(opened, value)
+		return value, nil
+	}
+
+	published, err := register(testInstance())
+	require.NoError(t, err)
+	assert.Equal(t, []advertisementTarget{
+		{iface: net.Interface{Name: "vEthernet (WSL)", Index: 3, Flags: net.FlagUp | net.FlagMulticast}, ips: []string{"172.27.224.1"}},
+		{iface: net.Interface{Name: "Wi-Fi", Index: 7, Flags: net.FlagUp | net.FlagMulticast}, ips: []string{"192.168.110.127"}},
+	}, calls)
+	published.Shutdown()
+	assert.True(t, opened[0].stopped)
+	assert.True(t, opened[1].stopped)
+}
+
+func TestRegisterClosesEarlierInterfacesWhenLaterPublishFails(t *testing.T) {
+	restore := stubAdvertisementNetwork(t, []net.Interface{
+		{Name: "vEthernet (WSL)", Flags: net.FlagUp | net.FlagMulticast},
+		{Name: "Wi-Fi", Flags: net.FlagUp | net.FlagMulticast},
+	}, map[string][]net.Addr{
+		"vEthernet (WSL)": {cidrAddr("172.27.224.1/20")},
+		"Wi-Fi":           {cidrAddr("192.168.110.127/24")},
+	})
+	defer restore()
+	oldRegister := registerProxy
+	defer func() { registerProxy = oldRegister }()
+	first := &stubServer{}
+	calls := 0
+	registerProxy = func(_ string, _ string, _ string, _ int, _ string, _ []string, _ []string, _ []net.Interface) (server, error) {
+		calls++
+		if calls == 1 {
+			return first, nil
+		}
+		return nil, errors.New("socket unavailable")
+	}
+
+	_, err := register(testInstance())
+	require.ErrorContains(t, err, "interface Wi-Fi")
+	assert.True(t, first.stopped)
+}
+
+func TestProxyHost(t *testing.T) {
+	assert.Equal(t, "echo-gateway", proxyHost("echo-gateway"))
+	assert.Equal(t, "echo-gateway", proxyHost("echo-gateway.local"))
+	assert.Equal(t, "echo-gateway", proxyHost("echo-gateway.local."))
+	assert.Equal(t, "echo-gateway", proxyHost("echo-gateway.LOCAL."))
+	assert.Equal(t, "echo-gateway", proxyHost("echo-gateway.LoCaL"))
+}
+
+func TestRegisterUsesForkCompatibleHostname(t *testing.T) {
+	oldRegister := registerProxy
+	defer func() { registerProxy = oldRegister }()
+	var gotHost string
+	registerProxy = func(_ string, _ string, _ string, _ int, host string, _ []string, _ []string, _ []net.Interface) (server, error) {
+		gotHost = host
+		return &stubServer{}, nil
+	}
+	restore := stubAdvertisementNetwork(t, []net.Interface{{Name: "Wi-Fi", Flags: net.FlagUp | net.FlagMulticast}}, map[string][]net.Addr{"Wi-Fi": {cidrAddr("192.168.1.20/24")}})
+	defer restore()
+
+	_, err := register(testInstance())
+	require.NoError(t, err)
+	assert.Equal(t, "gateway", gotHost)
+	assert.Equal(t, "gateway.local", forkHostname(gotHost))
+}
+
+func TestRegisterRejectsAddresslessAdvertisement(t *testing.T) {
+	restore := stubAdvertisementNetwork(t, []net.Interface{
+		{Name: "Wi-Fi", Flags: net.FlagUp | net.FlagMulticast},
+	}, map[string][]net.Addr{"Wi-Fi": {cidrAddr("fe80::20/64")}})
+	defer restore()
+
+	_, err := register(testInstance())
+	require.ErrorContains(t, err, "no usable multicast interface")
+}
+
+func TestAdvertisementTargetRejectsSourceWithoutUsableInterface(t *testing.T) {
+	restore := stubAdvertisementNetwork(t, []net.Interface{
+		{Name: "lo", Flags: net.FlagUp | net.FlagMulticast | net.FlagLoopback},
+		{Name: "vpn0", Flags: net.FlagUp},
+	}, map[string][]net.Addr{
+		"lo":   {cidrAddr("192.168.1.20/24")},
+		"vpn0": {cidrAddr("192.168.1.20/24")},
+	})
+	defer restore()
+
+	_, err := advertisementTargets(nil)
+	require.ErrorContains(t, err, "no usable multicast interface")
+}
+
+func TestAdvertisementTargetConfiguredAddressesMustBelongToSelectedInterface(t *testing.T) {
+	restore := stubAdvertisementNetwork(t, []net.Interface{
+		{Name: "Wi-Fi", Flags: net.FlagUp | net.FlagMulticast},
+	}, map[string][]net.Addr{"Wi-Fi": {cidrAddr("192.168.1.20/24"), cidrAddr("2001:db8::20/64")}})
+	defer restore()
+
+	targets, err := advertisementTargets([]netip.Addr{netip.MustParseAddr("2001:db8::20")})
+	require.NoError(t, err)
+	assert.Equal(t, []advertisementTarget{{iface: net.Interface{Name: "Wi-Fi", Flags: net.FlagUp | net.FlagMulticast}, ips: []string{"2001:db8::20"}}}, targets)
+	_, err = advertisementTargets([]netip.Addr{netip.MustParseAddr("192.168.1.21")})
+	require.ErrorContains(t, err, "not assigned to a selected multicast interface")
+}
+
+func TestPreferInterfaceSubnetsKeepsReachableAddressFirst(t *testing.T) {
+	oldAddresses := addressesForInterface
+	defer func() { addressesForInterface = oldAddresses }()
+	addressesForInterface = func(net.Interface) ([]net.Addr, error) {
+		return []net.Addr{cidrAddr("192.168.110.216/24")}, nil
+	}
+
+	got := preferInterfaceSubnets([]net.IP{
+		net.ParseIP("172.27.224.1"),
+		net.ParseIP("192.168.110.127"),
+		net.ParseIP("192.168.56.1"),
+	}, []net.Interface{{Name: "wlan0"}})
+	assert.Equal(t, "192.168.110.127", got[0].String())
+	assert.Equal(t, "172.27.224.1", got[1].String())
+	assert.Equal(t, "192.168.56.1", got[2].String())
+}
+
+type cidrAddr string
+
+func (addr cidrAddr) Network() string { return "ip" }
+
+func (addr cidrAddr) String() string { return string(addr) }
 
 func TestAdvertiseUsesOnlyDiscoveryMetadataAndStops(t *testing.T) {
 	old := register
@@ -127,8 +407,8 @@ func TestAdvertiseRejectsInsecureOrNonDeviceEndpoint(t *testing.T) {
 	}
 }
 
-func entry(serverID, host string, ips ...string) *zeroconf.ServiceEntry {
-	entry := &zeroconf.ServiceEntry{HostName: host, Port: 8770, Text: []string{
+func entry(serverID, host string, ips ...string) *serviceEntry {
+	entry := &serviceEntry{HostName: host, Port: 8770, Text: []string{
 		"protocol=1", "server_id=" + serverID, "tls=1", "path=/device",
 	}}
 	for _, raw := range ips {
@@ -145,6 +425,18 @@ func entry(serverID, host string, ips ...string) *zeroconf.ServiceEntry {
 func testInstance() discovery.Instance {
 	return discovery.Instance{ServerID: "home", Host: "gateway.local.", Port: 8770,
 		TXT: discovery.TXTRecord{Protocol: protocol.ProtocolVersion, ServerID: "home", TLS: true, Path: discovery.DefaultPath}}
+}
+
+func stubAdvertisementNetwork(t *testing.T, interfaces []net.Interface, addresses map[string][]net.Addr) func() {
+	t.Helper()
+	oldInterfaces := listInterfaces
+	oldAddresses := addressesForInterface
+	listInterfaces = func() ([]net.Interface, error) { return interfaces, nil }
+	addressesForInterface = func(iface net.Interface) ([]net.Addr, error) { return addresses[iface.Name], nil }
+	return func() {
+		listInterfaces = oldInterfaces
+		addressesForInterface = oldAddresses
+	}
 }
 
 func swapResolver(t *testing.T, value resolver) func() {

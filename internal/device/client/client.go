@@ -56,7 +56,7 @@ type Dialer interface {
 
 // Resolver implements the explicit, paired, then mDNS endpoint selection.
 type Resolver interface {
-	Resolve(context.Context, discovery.Config, *discovery.Instance) (string, error)
+	Resolve(context.Context, discovery.Config, *discovery.Instance) (discovery.Endpoint, error)
 }
 
 // PairingStore persists a gateway only after its authenticated welcome.
@@ -201,9 +201,11 @@ func (c *Client) runOnce(ctx context.Context, usePairing bool) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("resolve gateway: %w", err)
 	}
-	if wssErr := requireWSS(endpoint); wssErr != nil {
+	if wssErr := requireWSS(endpoint.URL); wssErr != nil {
 		return false, wssErr
 	}
+	scheme, host := endpointLogValues(endpoint.URL)
+	c.opts.Logger.Debug("resolved gateway endpoint", "scheme", scheme, "host", host, "paired_candidate", paired != nil)
 	token, err := LoadToken(c.opts.TokenPath)
 	if err != nil {
 		return false, err
@@ -211,11 +213,14 @@ func (c *Client) runOnce(ctx context.Context, usePairing bool) (bool, error) {
 	headers := make(http.Header)
 	headers.Set("Authorization", "Bearer "+token)
 	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12}
+	if endpoint.TLSServerName != "" {
+		tlsConfig.ServerName = endpoint.TLSServerName
+	}
 	if c.opts.SkipTLSVerify {
 		tlsConfig.InsecureSkipVerify = true
 		c.opts.Logger.Warn("TLS certificate verification disabled", "security_mode", "development", "tls_skip_verify", true)
 	}
-	conn, err := c.opts.Dialer.Dial(ctx, endpoint, headers, tlsConfig)
+	conn, err := c.opts.Dialer.Dial(ctx, endpoint.URL, headers, tlsConfig)
 	if err != nil {
 		return false, fmt.Errorf("dial gateway: %w", err)
 	}
@@ -272,7 +277,7 @@ func (c *Client) forwardTurns(ctx context.Context) {
 	}
 }
 
-func (c *Client) handshake(ctx context.Context, conn Connection, endpoint string) error {
+func (c *Client) handshake(ctx context.Context, conn Connection, endpoint discovery.Endpoint) error {
 	hello := c.opts.Hello
 	if c.opts.HelloSource != nil {
 		hello = c.opts.HelloSource()
@@ -631,8 +636,21 @@ func requireWSS(raw string) error {
 	}
 	return nil
 }
-func pairingInstance(raw, serverID string) (discovery.Instance, error) {
+
+func endpointLogValues(raw string) (string, string) {
 	u, err := url.Parse(raw)
+	if err != nil {
+		return "", ""
+	}
+	return u.Scheme, u.Host
+}
+func pairingInstance(endpoint discovery.Endpoint, serverID string) (discovery.Instance, error) {
+	if endpoint.Instance != nil {
+		inst := *endpoint.Instance
+		inst.ServerID, inst.TXT.ServerID = serverID, serverID
+		return inst, nil
+	}
+	u, err := url.Parse(endpoint.URL)
 	if err != nil {
 		return discovery.Instance{}, fmt.Errorf("parse paired endpoint: %w", err)
 	}

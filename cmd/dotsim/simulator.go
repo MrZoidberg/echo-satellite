@@ -25,12 +25,12 @@ type timedResolver struct {
 	timeout  time.Duration
 }
 
-func (r timedResolver) Resolve(ctx context.Context, cfg discovery.Config, paired *discovery.Instance) (string, error) {
+func (r timedResolver) Resolve(ctx context.Context, cfg discovery.Config, paired *discovery.Instance) (discovery.Endpoint, error) {
 	resolveCtx, cancel := context.WithTimeout(ctx, r.timeout)
 	defer cancel()
 	endpoint, err := r.resolver.Resolve(resolveCtx, cfg, paired)
 	if err != nil {
-		return "", fmt.Errorf("resolve within discovery timeout: %w", err)
+		return discovery.Endpoint{}, fmt.Errorf("resolve within discovery timeout: %w", err)
 	}
 	return endpoint, nil
 }

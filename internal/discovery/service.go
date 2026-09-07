@@ -18,6 +18,7 @@ import (
 	"net/netip"
 	"net/url"
 	"strconv"
+	"strings"
 )
 
 // DNS-SD identifiers for the satellite protocol.
@@ -48,16 +49,26 @@ type Instance struct {
 	TXT      TXTRecord
 }
 
+// Endpoint is a resolved connection target. URL may use the A/AAAA address
+// supplied by DNS-SD while TLSServerName retains the advertised DNS identity
+// for certificate verification.
+type Endpoint struct {
+	URL           string
+	TLSServerName string
+	Instance      *Instance
+}
+
 // ErrNoEndpoint is returned when an instance carries neither a host name nor an
 // address, so no endpoint URL can be built from it.
 var ErrNoEndpoint = errors.New("discovery: instance has no host or address")
 
-// EndpointURL builds the device WebSocket URL for the instance. The host name
-// is preferred over a resolved address so a gateway keeps working when its IP
-// address changes.
+// EndpointURL builds the device WebSocket URL for the instance. A DNS-SD
+// response's address is authoritative for a .local host: using it directly
+// avoids requiring the operating system resolver to perform a second mDNS
+// lookup after discovery has already supplied the A/AAAA record.
 func (i Instance) EndpointURL() (string, error) {
 	host := i.Host
-	if host == "" && len(i.Addrs) > 0 {
+	if len(i.Addrs) > 0 && (host == "" || strings.HasSuffix(strings.TrimSuffix(host, "."), ".local")) {
 		host = i.Addrs[0].String()
 	}
 	if host == "" {
@@ -81,6 +92,20 @@ func (i Instance) EndpointURL() (string, error) {
 
 	u := url.URL{Scheme: scheme, Host: net.JoinHostPort(host, strconv.Itoa(port)), Path: path}
 	return u.String(), nil
+}
+
+// Endpoint builds a connection target while preserving a DNS-SD host name for
+// TLS verification when dialing the response's address directly.
+func (i Instance) Endpoint() (Endpoint, error) {
+	raw, err := i.EndpointURL()
+	if err != nil {
+		return Endpoint{}, err
+	}
+	endpoint := Endpoint{URL: raw, Instance: &i}
+	if len(i.Addrs) > 0 && strings.HasSuffix(strings.TrimSuffix(i.Host, "."), ".local") {
+		endpoint.TLSServerName = strings.TrimSuffix(i.Host, ".")
+	}
+	return endpoint, nil
 }
 
 // Compatible reports whether the instance speaks a protocol version this build

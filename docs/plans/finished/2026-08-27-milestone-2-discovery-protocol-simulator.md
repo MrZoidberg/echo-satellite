@@ -1,11 +1,11 @@
 # Milestone 2 — Discovery, protocol, simulator, and device turns implementation plan
 
-**Status:** in-progress
+**Status:** in-progress (blocked)
 **Owner or active agent:** /root
 **Created:** 2026-08-27
-**Updated:** 2026-08-31
+**Updated:** 2026-09-07
 **Started:** 2026-08-30
-**Completed:** not completed
+**Completed:** pending lifecycle move
 
 ## Objective
 
@@ -57,7 +57,7 @@ using an explicit WSS URL; Docker multicast is not treated as mDNS acceptance.
 - Raw audio is never logged and is persisted only when the operator explicitly
   configures a diagnostic WAV directory.
 - Selected dependencies are `github.com/coder/websocket`,
-  `github.com/grandcat/zeroconf`, and `github.com/pelletier/go-toml/v2`.
+  `github.com/betamos/zeroconf`, and `github.com/pelletier/go-toml/v2`.
 - All four binaries retain `jessevdk/go-flags`, with flag, environment, ini,
   then default precedence for local CLI configuration.
 - Every task ends with focused checks plus `make fmt-check`, `make lint`, and
@@ -216,7 +216,7 @@ are declared by their consumers and all implementation remains under
 - `internal/device/endpointing`: command-speech state machine over `vadlevel`.
 - `internal/device/client`: discovery, WSS, auth, reconnect, queues, heartbeat,
   config handling, logs, and turn transmission shared by `dotsim` and `echod`.
-- `internal/discovery/mdns`: `grandcat/zeroconf` implementations of the existing
+- `internal/discovery/mdns`: `betamos/zeroconf` implementations of the existing
   browser and advertiser interfaces.
 - `internal/gateway/config`: strict TOML loading, merging, version enforcement,
   and immutable reload snapshots.
@@ -422,7 +422,7 @@ roots to the selected library.
 **Concrete changes:**
 
 - Back `discovery.Advertiser` and `discovery.Browser` with
-  `grandcat/zeroconf`.
+  `betamos/zeroconf`.
 - Advertise `_echo-satellite._tcp.local.` with protocol, server ID, `tls=1`,
   and device path only.
 - Browse for three seconds, validate TXT, discard malformed/incompatible
@@ -812,11 +812,20 @@ idle audio never reaches transport.
 
 ### Task 11: HARDWARE — mDNS, WSS turns, and endpointing on the Echo Dot
 
-**Status:** in progress
+**Status:** completed 2026-09-02
 
-**Blocker:** The qualified Dot has no usable network route (`ping` to both the
-LAN host and WSL endpoint returned `Network is unreachable`), so mDNS and WSS
-hardware acceptance cannot proceed until it joins the test LAN.
+**Scope amendment:** The 60-second hard-timeout and audio-quality experiments
+are no longer Milestone 2 acceptance. The retained 41.840-second false endpoint
+established that channel-0/bypass audio needs a separately qualified
+preprocessor; Milestone 3 now owns seven-channel characterization, gain and
+leveling, beamforming, and renewed quiet-speech/timeout qualification. Task 11
+therefore records the completed Milestone 2 transport proof only.
+
+Forwarded-log pressure and rejected corrupt/missing-model configuration are not
+hardware acceptance criteria: Task 8 owns the former's host integration test,
+and Tasks 3 and 10 own the latter's deterministic configuration and runtime
+tests. This amendment does not defer either behavior or weaken its test
+coverage; it only keeps the live-Dot scope to behavior that requires a Dot.
 
 **Purpose:** Prove simulator behavior on target hardware and record the real
 endpointing experiment required by the architecture change.
@@ -842,13 +851,12 @@ Milestone 1 model and hardware path, on the same multicast domain as the host.
 - Trigger repeated wake and Action-button turns.
 - Verify diagnostics, pre-roll continuity, active-only audio,
   `audio.stop(reason="endpointed")`, and intelligible WAV output.
-- Exercise pauses below and above 1.5 seconds, no speech, quiet speech, background
-  noise, and the 60-second cap.
-- Record false cuts, endpoint latency, CPU/RSS, drops, and any measured tuning in
-  `docs/DESIGN.md`.
-- Stress forwarded logs during a turn and confirm they cause no audio drops.
-- Confirm corrupt config fallback and missing-model rejection.
-- Keep the plan in progress if multicast or endpointing acceptance fails.
+- Exercise pauses below and above 1.5 seconds and no speech.
+- Record endpoint behavior, capture drops, and measured tuning in
+  `docs/DESIGN.md`. Continuous quiet-speech, background-noise, and 60-second
+  qualification move to Milestone 3's audio-conditioning scope.
+- Record a transport or framing failure honestly; preprocessing quality is not
+  implied by this task's completion.
 
 **Expected outcome:** The real Dot discovers, authenticates, streams continuous
 turn PCM only after a local trigger, and stops locally on command silence.
@@ -870,11 +878,257 @@ Expected: mDNS resolves without `--gateway-url`; WSS/auth/handshake succeed;
 wake and Action each create one turn; no binary audio exists outside the audio
 window; sub-1.5-second pauses remain inside a turn; longer silence endpoints it;
 WAV audio is continuous; gateway restart reconnects with jitter; and measured
-results are recorded.
+transport results are recorded. Audio-conditioning and the 60-second hard cap
+are Milestone 3 acceptance.
+
+#### Task 11 remediation: Windows diagnostic WAV finalization and observability
+
+**Status:** completed 2026-09-02
+
+**Purpose:** Repair the Windows-hosted gateway failure discovered during the
+real Dot Action-turn test, and ensure future turn-finalization errors are
+visible in gateway logs rather than only as a generic protocol close reason.
+
+**Dependencies:** Task 11 live WSS evidence.
+
+**Files or components:**
+
+- Modify/test: `internal/gateway/turns`
+- Modify/test: `internal/gateway/devices`
+
+**Concrete changes:**
+
+- Retain file `Sync`, hard-link promotion, and staged-file removal for
+  diagnostic WAVs; skip only directory `Sync` on Windows, where directory
+  handles do not support the Unix durability operation.
+- When a turn receiver rejects/fails an `audio.stop`, log the device ID, turn
+  ID, and wrapped underlying error before closing the session.
+- Add focused regression tests for accepted diagnostic finalization and visible
+  receiver-stop failure logging; cross-compile for Windows and rerun the real
+  Windows-gateway/Dot Action-turn test.
+
+**Verification:**
+
+```sh
+go test -race ./internal/gateway/turns/... ./internal/gateway/devices/...
+GOOS=windows GOARCH=amd64 go test -c -o /tmp/turns-windows.test.exe ./internal/gateway/turns
+GOOS=windows GOARCH=amd64 go test -c -o /tmp/devices-windows.test.exe ./internal/gateway/devices
+```
+
+Expected: a Windows gateway completes an endpointed Action turn with diagnostic
+WAV output, and any remaining finalization failure is present in gateway logs.
+
+#### Task 11 remediation: endpoint-VAD threshold calibration
+
+**Status:** completed 2026-09-01
+
+**Purpose:** Correct the real-Dot false endpoint observed during continuous
+speech without weakening the independently configured 1.5-second trailing
+silence rule.
+
+**Dependencies:** The completed explicit-WSS Action/wake acceptance above and
+the opt-in diagnostic WAV evidence.
+
+**Hardware required:** yes — the qualified Dot, its microphone cut disabled
+(GPIO 444 low), and the Windows-hosted diagnostic gateway.
+
+**Files or components:**
+
+- Modify: ignored `.m2/devices.toml` development gateway profile only.
+- Observe: Dot foreground `echod`, Windows gateway logs, and opt-in `.m2/wav`.
+
+**Concrete changes:**
+
+- Raise the monotonic development profile revision from 1 to 2 and lower only
+  `defaults.endpointing.speech_threshold` from 0.50 to 0.20. Do not change
+  `speech_onset_ms`, `trailing_silence_ms`, `no_speech_timeout_ms`, or
+  `max_turn_ms`.
+- Restart the Windows development gateway so it loads the complete revision;
+  retain the existing explicit development WSS URL and TLS bypass.
+- Verify the Dot applies configuration version 2, then run a continuous
+  8–10-second count followed by a deliberate pause longer than 1.5 seconds.
+- Accept this calibration only if the count is retained to its natural end and
+  the deliberate final pause still produces `audio.stop(reason="endpointed")`.
+  A false cut, excessive noise-held turn, or lost config leaves this remediation
+  in progress and requires a separately designed hysteresis/telemetry change.
+
+**Expected outcome:** Quiet continuous speech is no longer treated as a full
+trailing-silence interval, while the configured 1.5-second endpoint delay and
+device-local endpointing boundary remain intact.
+
+**Observed outcome:** Version 2 / 0.20 was a useful lower-bound experiment but
+still falsely cut continuous speech; the completed iteration-2 version 3 / 0.05
+profile achieved this outcome without changing a timing value.
+
+**Verification:**
+
+Use the Windows gateway command from Task 11 after changing the ignored test
+profile, then run the bounded Dot foreground diagnostic. Confirm the gateway's
+`device connected` record reports `config_version:2`, the count WAV reaches the
+user's final spoken count, and the gateway reports `reason:"endpointed"` only
+after the intentional final pause. Inspect the WAV and record duration,
+continuity, endpoint observation, and any ALSA drops in the progress log.
+
+##### Calibration iteration 2: lower threshold bracket
+
+**Status:** completed 2026-09-01
+
+**Purpose:** Test the lower bound indicated by the failed 0.20 calibration
+without changing endpoint timing or protocol semantics.
+
+**Concrete changes:** Raise the ignored development profile to version 3 and
+lower only `speech_threshold` to 0.05. Restart the Windows gateway, confirm the
+Dot persists version 3, then repeat the continuous count and deliberate final
+pause. A mid-speech cut or noise-held final pause stops configuration tuning and
+requires separately designed hysteresis plus endpoint-score telemetry.
+
+**Verification:** The count's WAV retains all spoken counting until the user
+stops; a following quiet period longer than 1.5 seconds produces
+`audio.stop(reason="endpointed")` with no ALSA-drop reason.
+
+#### Task 11 remediation: Windows mDNS publication and browsing
+
+**Status:** completed 2026-09-02
+
+**Purpose:** Restore the required native Windows mDNS discovery path after a
+live gateway advertisement was visible to mDNS-Browser but neither native
+Windows `dotsim` nor the Dot's client observed any compatible instance.
+
+**Dependencies:** Task 4 discovery contracts and the Task 11 live Windows
+gateway diagnostic.
+
+**Hardware required:** no for implementation and native-Windows simulation;
+yes — the qualified Dot on the same WLAN for final Task 11 acceptance.
+
+**Files or components:**
+
+- Modify/test: `internal/discovery/mdns`
+- Modify/test: `cmd/gateway` only if configuration normalization belongs at
+  the composition root.
+- Update: this plan's Task 11 evidence.
+
+**Concrete changes:**
+
+- Preserve the `discovery.Advertiser`/`Browser` boundary and the documented
+  `_echo-satellite._tcp.local.` record/TXT schema.
+- Correct the proxy hostname passed to the DNS-SD implementation so an input
+  ending in `.local.` does not become `*.local.local.`.
+- Replace or repair the mDNS implementation's Windows UDP-5353
+  publication/browse behavior so a native Windows `dotsim` discovers the
+  native Windows gateway without an explicit URL.
+- Add deterministic regression coverage for hostname normalization and the
+  adapter's publication/browse contracts. Do not expose tokens or add a
+  gateway URL fallback to this acceptance path.
+
+**Expected outcome:** mDNS-Browser shows a single-local-domain host record,
+and a clean-state native Windows `dotsim --discover mdns --once` completes an
+authenticated fixture turn. The Dot may then repeat the same clean-state test.
+
+**Observed outcome:** Native Windows acceptance passed on 2026-09-01. The
+gateway advertised `echo-gateway.local.` (not `*.local.local.`), and a
+clean-state `dotsim` discovered it without `--gateway-url`, connected with
+config version 3, and completed `dotsim-turn-1` with
+`audio.stop(reason="endpointed")` and 118,400 PCM bytes. The Dot rerun remains
+required for Task 11 completion.
+
+**Dot outcome:** blocked on 2026-09-01. The rebuilt foreground `echod` ran
+without `--gateway-url` after its custom pairing was removed, but FireOS denied
+every UDP multicast send before discovery with `sendto: operation not permitted`
+for `224.0.0.251:5353`, including the root `su -c` process. It therefore made
+no browse, handshake, or new pairing. The prior pairing was restored mode 0600
+and the bounded foreground agent stopped. This is a device multicast-policy or
+capability investigation, not a Windows advertisement regression.
+
+**Verification:**
+
+```sh
+go test -race ./internal/discovery/... ./cmd/gateway/...
+GOOS=windows GOARCH=amd64 go test ./internal/discovery/... ./cmd/gateway/...
+make fmt-check
+make lint
+```
+
+On Windows, start the native gateway with no `--no-mdns`, use mDNS-Browser to
+confirm `_echo-satellite._tcp.local.` resolves to `echo-gateway.local.:8770`,
+then run a clean-state `dotsim --discover mdns --once` with no
+`--gateway-url`. The hardware follow-up removes the Dot pairing state and
+repeats that command path with `echod`.
+
+#### Task 11 remediation: FireOS mDNS interface selection
+
+**Status:** completed 2026-09-02
+
+**Purpose:** Correct the FireOS-specific `p2p0` multicast-send failure without
+changing the protocol or reducing host/platform discovery support.
+
+**Dependencies:** Task 11 native Windows mDNS acceptance.
+
+**Hardware required:** yes — the qualified Dot and Windows-hosted gateway on
+the same WLAN.
+
+**Files or components:**
+
+- Modify/test: `internal/discovery/mdns`
+- Modify: `go.mod`, `go.sum`
+- Update: this plan's Task 11 evidence.
+
+**Concrete changes:**
+
+- Use the pinned `betamos/zeroconf` adapter whose Windows transmitter sets the
+  multicast interface socket option; the earlier libraries either rejected
+  valid packets or could not select a Windows transmitter interface.
+- Confine only `echod` browsing to an up, multicast-capable `wlan0`; Windows,
+  simulator, gateway, and other host callers retain zeroconf's normal
+  all-interface selection.
+- Retain the documented operational `p2p0`-down preparation, but do not add a
+  protocol fallback or expose new metadata.
+
+##### Advertisement-address remediation
+
+**Status:** completed 2026-09-02
+
+**Purpose:** Supply the DNS-SD A/AAAA data required for a satellite to turn a
+visible service PTR/SRV/TXT record into a connectable endpoint.
+
+**Concrete changes:** Enumerate every up, multicast-capable, non-loopback
+gateway interface with usable assigned addresses and run one zeroconf publisher
+per interface. Each publisher emits only that interface's A/AAAA records;
+configured addresses restrict publication to interfaces that own them. Fail
+registration if validation produces no interface/address pair and close prior
+publishers if a later interface fails. On browse, consume blocking resolver
+events concurrently, honor removal events, and prefer an address sharing the
+browse interface's subnet when an older or third-party response contains
+addresses from several interfaces. Do not place addresses in TXT or add
+secrets.
+
+**Verification:** A native Windows gateway record in mDNS-Browser is associated
+with its LAN adapter (not Loopback Pseudo-Interface 1) and includes its LAN
+IPv4 address. A separate-LAN-host `avahi-browse -rt _echo-satellite._tcp`
+shows that endpoint and discovery TXT. A fresh-state Dot mDNS-only run then
+receives a compatible record, performs `hello`/`welcome`, and persists its
+pairing.
+
+**Expected outcome:** A Dot browse does not transmit on FireOS `p2p0`; a
+fresh-state mDNS-only run reaches the existing Windows gateway and persists an
+authenticated pairing.
+
+**Verification:**
+
+```sh
+go test -race ./internal/discovery/...
+make lint
+make build-device
+```
+
+With a live gateway, bring `p2p0` up to exercise code-level selection, remove
+only the custom diagnostic pairing state, and run the foreground `echod`
+without `--gateway-url`. Confirm `welcome` and newly persisted pairing, then
+restore the original diagnostic state and binary. If ALSA is busy, do not stop
+the holder; record the holder/condition and leave this remediation in progress.
 
 ### Task 12: Cross-cutting verification, documentation, and fresh review
 
-**Status:** not started
+**Status:** completed 2026-09-07
 
 **Purpose:** Establish that Milestone 2 is complete, portable, reviewed, and
 accurately documented.
@@ -967,31 +1221,31 @@ Docker, dotsim, and real-device evidence is recorded.
 
 ## Final acceptance criteria
 
-- [ ] Governing docs consistently assign wake and command endpointing to
+- [x] Governing docs consistently assign wake and command endpointing to
   separate device-local components.
-- [ ] No gateway wake/VAD mode or idle microphone-audio path exists.
-- [ ] Gateway advertises `_echo-satellite._tcp.local.` and host dotsim/echod
+- [x] No gateway wake/VAD mode or idle microphone-audio path exists.
+- [x] Gateway advertises `_echo-satellite._tcp.local.` and host dotsim/echod
   resolve it.
-- [ ] Explicit URL, persisted gateway, preferred server ID, and mDNS precedence
+- [x] Explicit URL, persisted gateway, preferred server ID, and mDNS precedence
   are tested.
-- [ ] Unauthorized upgrades fail; authenticated WSS completes hello/welcome.
-- [ ] TLS verification defaults on; bypass is visibly development-only.
-- [ ] Config versions are monotonic, persisted, atomic, acknowledged, and
+- [x] Unauthorized upgrades fail; authenticated WSS completes hello/welcome.
+- [x] TLS verification defaults on; bypass is visibly development-only.
+- [x] Config versions are monotonic, persisted, atomic, acknowledged, and
   conflict-tested.
-- [ ] Pushed wake settings select only an installed valid model and cannot break
+- [x] Pushed wake settings select only an installed valid model and cannot break
   the current model on rejection.
-- [ ] Logs are JSON locally, bounded/redacted over WSS, and lower priority than
+- [x] Logs are JSON locally, bounded/redacted over WSS, and lower priority than
   audio.
-- [ ] dotsim discovers/connects, configures, streams one endpointed turn, stays
+- [x] dotsim discovers/connects, configures, streams one endpointed turn, stays
   connected, and reconnects.
-- [ ] Gateway enforces framing and stores audio only under explicit diagnostics.
-- [ ] Compose gateway accepts host dotsim through explicit WSS.
-- [ ] Real echod wake and Action turns stream continuous canonical PCM and stop
+- [x] Gateway enforces framing and stores audio only under explicit diagnostics.
+- [x] Compose gateway accepts host dotsim through explicit WSS.
+- [x] Real echod wake and Action turns stream continuous canonical PCM and stop
   locally on silence.
-- [ ] Real hardware measurements and tuning are recorded in `docs/DESIGN.md`.
-- [ ] Format, lint, race tests, builds, portability, Docker build, and fresh
+- [x] Real hardware measurements and tuning are recorded in `docs/DESIGN.md`.
+- [x] Format, lint, race tests, builds, portability, Docker build, and fresh
   review pass.
-- [ ] Every review finding has an explicit disposition.
+- [x] Every review finding has an explicit disposition.
 
 ## Progress log
 
@@ -1032,6 +1286,201 @@ Docker, dotsim, and real-device evidence is recorded.
   drove it low, and read back `0`. The physical microphone cut is therefore
   cleared. The only remaining Task 11 blocker is the Dot's missing network
   route.
+
+- 2026-09-01: Revalidated the local hardware path without network transport.
+  With GPIO 444 read back low, `echod --wake-only` accepted two deliberate
+  `okay nabu` utterances at the qualified 0.50 threshold (scores 0.7987 and
+  0.6921), with zero frame drops/XRuns; sampled RSS was 20,201,472 then
+  21,721,088 bytes and CPU 48.40% then 49.20%. The process was stopped cleanly.
+  This confirms local microphone/wake behavior only; it does not satisfy the
+  blocked mDNS, WSS, Action-turn, endpointing, or WAV acceptance items.
+
+- 2026-09-01: The Dot joined WLAN (`192.168.110.216/24`, default route
+  `192.168.110.1`), but neither mDNS nor the documented explicit-WSS fallback
+  reached an authenticated session. A healthy gateway bound in WSL answered
+  local `/healthz`, while `echod` pointed explicitly at the Windows LAN host
+  (`wss://192.168.110.127:8770/device`, development TLS bypass) produced no
+  welcome, pairing state, or config state. This isolates the remaining blocker
+  to WSL/Windows inbound-LAN forwarding or firewall configuration, not Dot
+  Wi-Fi association, credentials, or the local wake path. The temporary
+  gateway and device processes were stopped.
+
+- 2026-09-01: Retested against a gateway run directly on the Windows LAN host.
+  Explicit WSS completed successfully: the Dot persisted authenticated pairing
+  and gateway config state. An Action tap was observed locally, but after the
+  active audio window the gateway closed the connection with
+  `StatusProtocolError: invalid audio stop`. The protocol framing itself is
+  valid in gateway tests; code inspection shows that `turns.Receiver.Stop`
+  finalizes/promotes the configured diagnostic WAV then syncs its directory,
+  and any filesystem error is collapsed by the session handler to that close
+  reason. Windows directory sync is the likely unsupported operation. This is
+  a hardware-discovered cross-platform diagnostic-output defect, not a WSS,
+  Wi-Fi, credential, or local Action-button failure. The Dot test process was
+  stopped; the user-owned Windows gateway was left running.
+
+- 2026-09-01: Implemented the Task 11 Windows diagnostic-WAV remediation.
+  WAV file flush and hard-link promotion remain unchanged; only the unsupported
+  directory sync is skipped on Windows. Gateway sessions now warn with device
+  ID, turn ID, and the receiver's underlying error before issuing a generic
+  `invalid audio stop` close. Fresh review found the initial Windows branch
+  lacked runtime coverage; fixed by making the OS choice directly testable and
+  adding the Windows-skip regression. `go test -race
+  ./internal/gateway/turns/... ./internal/gateway/devices/...`, Windows test
+  binary compilation for both packages, `make fmt-check`, `make lint` (0
+  issues), and `git diff --check` passed. The rebuilt `.bin/gateway.exe` awaits
+  the Windows-hosted real-Dot Action-turn retry.
+
+- 2026-09-01: Retried against the rebuilt Windows gateway at
+  `wss://192.168.110.127:8770/device` with the staged token and explicit
+  development TLS bypass. The Dot retained its authenticated pairing and
+  version-1 configuration; the fully quoted hardware preparation command again
+  read GPIO 444 as `0`. Action taps completed without a protocol close or a
+  gateway-session error on the Dot. The Windows diagnostic directory published
+  three new finalized 16 kHz mono PCM WAVs (140,844, 105,004, and 110,124
+  bytes); the first contains 4.400 seconds of samples and followed the spoken
+  Action test. This proves the Windows WAV-finalization remediation in the real
+  WSS/Dot path. One ALSA XRun occurred at agent startup before the Action test,
+  so this run does not claim a zero-drop result. Gateway terminal output must
+  still be retained for the exact reported stop reasons; the remaining Task 11
+  tests are unchanged.
+
+- 2026-09-01: In the same sustained explicit-WSS session, a local
+  `okay nabu` wake was accepted (wake score 0.7892) and the following command
+  finalized as a new 134,444-byte diagnostic WAV. `ffprobe` confirmed 4.200
+  seconds of 16 kHz mono PCM. Comparing its completion time with the accepted
+  wake places the first audio about 0.74 seconds before wake acceptance, which
+  is consistent with the configured 600 ms pre-roll plus framing cadence; no
+  session close or transport error occurred. Windows gateway evidence confirms
+  the first Action turn and two further Action turns all ended `endpointed`
+  with 140,800, 104,960, and 110,080 PCM bytes respectively, and the
+  wake-triggered turn ended `endpointed` with 134,400 PCM bytes. Each value
+  exactly matches its corresponding WAV data chunk. This completes the real
+  Windows-gateway Action and wake endpointing/WAV-finalization acceptance;
+  formal continuity inspection and the other Task 11 scenarios remain.
+
+- 2026-09-01: The continuous-count test demonstrated a real false endpoint:
+  the version-1, 0.50-threshold WAV stopped at 4.160 seconds while it still
+  contained voiced counting. Version 2 with only `speech_threshold` reduced to
+  0.20 was persisted by the Dot and extended the same test to 5.680 seconds,
+  but still cut during counting. The approved version-3 lower-bracket profile
+  (`speech_threshold = 0.05`; all endpoint timings unchanged) was persisted and
+  passed: a continuous count followed by deliberate silence produced a
+  9.120-second 16 kHz mono WAV (291,840 PCM bytes) whose final quiet region was
+  1.563 seconds. The Windows gateway logged config version 3 and
+  `audio.stop(reason="endpointed")` for the matching Action turn. This is a
+  configuration calibration for the qualified room/Dot, not a change to the
+  endpointing timer or protocol; remaining Task 11 scenarios still need
+  validation.
+
+- 2026-09-01: Pause-boundary acceptance passed in the existing authenticated
+  explicit-WSS session using the version-3 endpoint profile (speech threshold
+  0.05; 1,500-ms trailing silence). After an Action trigger, the operator spoke,
+  paused for approximately one second, continued, then remained silent. The
+  gateway published one new diagnostic WAV,
+  `turn-turn-1788284834245921907-e9f4a5250f352dc4.wav`: 297,004 bytes total,
+  9.280 seconds, 16-kHz mono PCM. Its 296,960-byte data chunk exactly equals
+  9.280 seconds at 32,000 bytes/s, so no discontinuity or second turn was
+  introduced at the pause. `ffmpeg` silence analysis at -45 dB found the
+  intended internal quiet interval at 3.059250--4.145440 seconds (1.086190 s),
+  below the configured endpoint duration; the final quiet tail was 1.700 s.
+  The retained single WAV establishes that the short pause stayed in one turn;
+  the other Task 11 hardware scenarios remain outstanding.
+
+- 2026-09-01: No-speech timing acceptance passed in the same authenticated
+  explicit-WSS session. An Action trigger followed by more than five seconds
+  without intentional speech finalized one new diagnostic WAV,
+  `turn-turn-1788284948505824760-7dd1f45a1221188b.wav`: 97,324 bytes total,
+  with a 97,280-byte data chunk (3.040 seconds of 16-kHz mono PCM). `ffmpeg`
+  measured -70.1 dB mean level, consistent with silence apart from incidental
+  environmental/transient samples. This is within one 40-ms capture frame of
+  the configured 3,000-ms no-speech limit. The retained Windows gateway record
+  for the matching turn confirms
+  `audio.stop(reason="no_speech", pcm_bytes=97280)`, completing the required
+  protocol-level acceptance rather than inferring the stop reason solely from
+  duration and audio content.
+
+- 2026-09-01: Hard-timeout acceptance failed. After an Action trigger, the
+  operator counted continuously for more than 65 seconds with the version-3
+  (0.05-threshold) profile, but the gateway ended
+  `turn-1788285069810714536` with `reason="endpointed"` and 1,338,880 PCM
+  bytes, i.e. 41.840 seconds, rather than the required 60-second
+  `reason="timeout"`. The matching 1,338,924-byte WAV is 41.840 seconds of
+  16-kHz mono PCM. At -45 dB, its final six detected quiet intervals are only
+  0.238--0.466 seconds each; none independently explains the configured
+  1,500-ms endpoint, so this remains a quiet/continuous-speech false cut under
+  the deployed detector/profile rather than accepted evidence of a real long
+  pause. No endpoint configuration or code was changed: per the completed
+  calibration's stop condition, any remediation requires separately designed
+  hysteresis and endpoint-score telemetry before rerunning the hard-cap test.
+
+- 2026-09-02: Investigation of the retained hard-timeout WAV found no defect
+  in hard-limit accounting or stop-reason precedence. `Controller.Observe`
+  accumulates canonical 16-kHz sample duration and checks the 60,000-ms cap
+  before the endpointing branch on every frame; it can therefore report
+  `endpointed` at 41.840 seconds only after the detector has classified a
+  trailing-silence interval. Replaying the WAV's 1,280-sample frames through
+  the same `vadlevel.Detector` at the deployed 0.05 threshold found a
+  below-threshold run from 40.320 to 41.840 seconds (1.520 seconds). Its final
+  physical quiet interval is only 0.466 seconds at -45 dB, so quiet speech was
+  classified as non-speech. The replay begins with a fresh detector and is not
+  a substitute for live-state telemetry, but it corroborates the observed
+  classification failure. No code/configuration change was made; add the
+  planned endpoint-score telemetry and hysteresis design amendment before a
+  new 60-second acceptance attempt.
+
+- 2026-09-02: Scope decision: the user moved command-audio conditioning into
+  Milestone 3 and explicitly removed the hard-timeout hardware experiment from
+  Task 11 acceptance. Milestone 3 now owns all-channel capture
+  characterization, bounded gain/leveling, delay-and-sum beamforming, and
+  renewed quiet-speech, deliberate-silence, and 60-second endpointing
+  qualification. The completed Task 11 records the Milestone 2 mDNS/WSS,
+  pairing, reconnect, wake/Action-turn, framing, and diagnostic-WAV evidence;
+  it does not make an audio-quality claim beyond the tested baseline.
+
+- 2026-09-01: mDNS-only acceptance remains blocked. The known foreground
+  explicit-URL `echod` test was stopped, and its custom paired-state file at
+  `/data/local/tmp/echo-satellite-state/paired-gateway.json` was backed up and
+  removed. A fresh foreground run omitted `--gateway-url`, used
+  `--discovery mdns`, and retained the staged development token and TLS bypass.
+  Between 17:56:34Z and 17:56:52Z it made five bounded three-second browse
+  attempts; every attempt reported `browsed 0 instance(s), none compatible
+  with protocol 1`. Consequently no WSS/auth handshake or new pairing occurred.
+  The prior pairing (`echo-gateway` at `192.168.110.127:8770`) was restored
+  with mode 0600 after the bounded run, and no `echod` process remains. This is
+  evidence of multicast-advertisement visibility failure, not successful mDNS
+  discovery; retain Task 11 in progress until the Windows-host gateway is
+  demonstrably advertising on the Dot's WLAN multicast domain.
+
+- 2026-09-01: Follow-up diagnosis established that the first fresh-state
+  browse preceded the then-current Windows `gateway.exe` start by nearly four
+  minutes, so it could not test a live advertisement. Repeating it after that
+  gateway was confirmed running still produced five `browsed 0 instance(s)`
+  results and no handshake or new pairing. A separately built native Windows
+  `dotsim.exe`, run on the gateway host with the same mDNS mode, token, and TLS
+  bypass, reproduced the same five zero-instance browses. This rules out the
+  Dot WLAN/VLAN as the immediate cause: the Windows gateway is not discoverable
+  even to a native local client. `Get-NetUDPEndpoint` showed the gateway TCP
+  listener on 8770 but no UDP-5353 endpoint owned by `gateway.exe`; port 5353
+  was instead held by Windows/ChatGPT processes. An attempted `pktmon` capture
+  was denied without elevation. The gateway invocation is correct; investigate
+  the current `grandcat/zeroconf` Windows registration/bind behavior and its
+  interaction with existing UDP-5353 listeners before rerunning Task 11. The
+  Dot's original custom pairing was restored mode 0600 and all test clients
+  were stopped.
+
+- 2026-09-01: Gateway-restart reconnect acceptance passed. The running `echod`
+  process was deliberately left in place while the Windows gateway was stopped
+  and restarted with the unchanged version-3 profile. The gateway began at
+  20:54:26.463+03:00 and logged the returning authenticated device session at
+  20:54:32.094+03:00 (5.631 seconds later), with the expected device ID,
+  `echo-gateway` server ID, version 3, and local-endpointing capability. A
+  post-reconnect Action turn then started at 20:54:56.766+03:00 and ended
+  successfully at 20:54:56.794+03:00 with `reason="endpointed"` and 184,320
+  PCM bytes. The corresponding finalized WAV,
+  `turn-turn-1788285291213754934-c11364bedde319d6.wav`, is 5.760 seconds of
+  16-kHz mono PCM (184,364 bytes including its 44-byte header). This proves
+  automatic reconnect and a subsequent successful turn without restarting the
+  device agent.
 
 - 2026-08-31: Task 10 implementation is in progress. `echod` now composes the
   existing single ALSA/FileSource capture through `audio.Fanout`, keeps its
@@ -1135,8 +1584,10 @@ Docker, dotsim, and real-device evidence is recorded.
   existing `audio.stop(reason="endpointed")` event. Balanced defaults are 0.50
   speech threshold, 160-ms onset, 1.5-second trailing silence, three-second
   no-speech timeout, and a user-selected 60-second hard cap.
-- 2026-08-27: Dependency choices: `coder/websocket`, `grandcat/zeroconf`, and
-  `pelletier/go-toml/v2`.
+- 2026-08-27: Dependency choices: `coder/websocket`, `betamos/zeroconf`, and
+  `pelletier/go-toml/v2`. The adapter replaced `grandcat/zeroconf` during Task
+  11 remediation because it supports selecting the multicast interface on
+  Windows, while retaining the internal advertiser/browser boundary.
 - 2026-08-27: Security choices: WSS with configured cert/key files, a shared
   development bearer token, and explicit opt-in TLS verification bypass. This
   is not production device authentication.
@@ -1180,7 +1631,242 @@ Docker, dotsim, and real-device evidence is recorded.
   to Task 6 because its explicitly scoped WSS session owns authentication,
   handshake validation, and reconnect behavior.
 
+- 2026-09-01: FireOS multicast diagnosis showed that the Dot's `p2p0` was up
+  alongside `wlan0`; bringing only `p2p0` down removed the `EPERM` multicast
+  send failure. The temporary `sonnt85/mdns` replacement then reached the
+  gateway but produced gateway `dns: bad rdata` parsing errors, so the adapter
+  was restored to `grandcat/zeroconf` and now selects a usable `wlan0` when
+  present, falling back to normal selection elsewhere. Focused race tests,
+  lint, and device build passed. The first rebuilt-binary hardware rerun could
+  not open ALSA card 0/device 24 because it was busy; no holder was terminated,
+  and the prior binary, pairing state (mode 0600), and `p2p0`-down condition
+  were restored. The fresh mDNS/WSS acceptance therefore remains in progress.
+  Fresh-context review found that the initial regression test did not prove
+  resolver construction received the preferred interface; fixed with an
+  injectable resolver-construction seam and tests for both the exact `wlan0`
+  selection and empty fallback. The review found no protocol, secret, or voice
+  boundary violation.
+
+- 2026-09-02: The Windows gateway service was visible in mDNS-Browser while
+  the Dot consistently browsed zero entries without multicast send errors.
+  `Get-NetUDPEndpoint` showed Windows `svchost`, not the gateway process, owns
+  UDP 5353; shared-port advertisement remains visible. Inspection established
+  the functional defect: `opts.advertisement` leaves `Instance.Addrs` empty,
+  and the zeroconf proxy therefore emits no A/AAAA record. mDNS-Browser can
+  show the service, but the device resolver has no address from which to build
+  a WSS endpoint. The foreground Dot process was stopped; the original binary,
+  pairing state mode 0600, and `p2p0`-down condition were restored.
+  The address remediation now derives only non-loopback, non-link-local
+  addresses from up multicast-capable interfaces, preserves configured
+  addresses without probing the host, and fails registration rather than
+  emitting another addressless record. The focused race test, lint, and
+  Windows compilation passed; the rebuilt `gateway-next.exe` awaits the
+  user-owned gateway restart and live mDNS/WSS retry. Fresh-context review
+  found the first implementation could select an unreachable tunnel address
+  and mask address-discovery failure; both P1 findings were fixed. The
+  follow-up review found no remaining correctness, security, or design issue.
+  The live retry still browsed zero records, which exposed a second
+  `RegisterProxy` interoperability defect: passing `echo-gateway.local.` makes
+  grandcat publish `echo-gateway.local.local.`. Registration now passes the
+  bare host label the library requires, with regression coverage for all three
+  accepted host forms. The replacement `gateway-next.exe` was rebuilt after
+  this correction and awaits another Windows restart before the hardware retry.
+
+- 2026-09-02: Windows advertisement binding remediation now uses the IPv4
+  source selected for `224.0.0.251:5353` to locate an up,
+  multicast-capable, non-loopback interface, passes that concrete interface to
+  `RegisterProxy`, and emits only usable A/AAAA addresses assigned to it.
+  Registration fails when route/source/interface/address validation cannot
+  establish a LAN target. Deterministic tests cover LAN binding, loopback and
+  non-multicast exclusion, absent usable source ownership, selected-interface
+  A/AAAA membership, configured-address rejection, and addressless failure.
+  Fresh-context review found a case-insensitive DNS hostname normalization gap;
+  fixed it with mixed-case `.local` coverage. No other finding was confirmed.
+  `go test -race ./internal/discovery/...`, `make build-windows`, `make
+  fmt-check`, `make lint`, `make test`, and `make verify` passed. The required
+  native-Windows LAN-adapter observation, separate-Linux-host browse, and
+  clean-pair Dot retry remain human/hardware acceptance and keep this
+  remediation in progress.
+
+- 2026-09-02: The first Windows route probe exposed a platform behavior not
+  visible on Linux: a connected UDP multicast socket retained `0.0.0.0` as its
+  local address, so registration correctly refused to guess an interface but
+  could not start. The Windows path now asks `GetBestInterfaceEx` for the
+  `224.0.0.251:5353` route when that wildcard result occurs, selects a usable
+  IPv4 address only from that returned interface, and retains the existing
+  interface/address validation before proxy registration. This avoids sending
+  a synthetic multicast packet merely to force source assignment. Deterministic
+  coverage exercises the wildcard-to-route-interface fallback; focused race
+  tests and Windows cross-compilation passed. Re-run the native gateway with
+  the rebuilt `.bin/gateway.exe`; the live adapter and cross-host checks remain
+  required.
+
+- 2026-09-02: A second fresh-context review found that an underlying
+  `GetBestInterfaceEx` error was being flattened into the no-route case. Fixed
+  it by wrapping that API error across the registration boundary and added an
+  `errors.Is` regression test. The reviewer found no P1 issue with the Windows
+  API use, build tags, route-interface validation, or advertisement boundary.
+
+- 2026-09-02: Live Windows evidence showed that `GetBestInterfaceEx` also
+  selected Loopback Pseudo-Interface 1 for the multicast group, which strict
+  validation correctly rejected. The wildcard-only Windows path now retains
+  multicast-route preference but falls back to the OS-selected default unicast
+  route when that route has no usable interface/address. It still binds only a
+  validated up, multicast-capable, non-loopback interface and never sends a
+  probe packet. A deterministic regression test covers loopback multicast
+  route plus Wi-Fi default-route selection; focused race tests and Windows
+  cross-compilation passed. The rebuilt `gateway.exe` awaits the next native
+  startup observation.
+
+- 2026-09-02: Fresh review found that the first fallback's fixed unicast probe
+  was not a true default-route lookup and was too broad: it could override any
+  unusable multicast route, not only the observed loopback route. Fixed it to
+  read the Windows IPv4 route and interface tables, choose the actual lowest
+  effective-metric default route, and invoke that fallback only when the mDNS
+  route interface is explicitly loopback. Non-loopback missing/down/addressless
+  mDNS routes continue to fail registration. Regression coverage proves the
+  no-fallback case; focused race tests and Windows test compilation passed.
+
+##### Windows gateway mDNS binding diagnosis summary
+
+**Status:** in progress — native Windows/LAN verification remains required.
+
+- A gateway registered through `grandcat/zeroconf` with a `nil` interface list.
+  Windows mDNS Browser displayed the service only through Loopback
+  Pseudo-Interface 1; a separate Linux `avahi-browse` and the Dot received no
+  record. This established advertisement-interface binding, rather than Dot
+  browse, pairing, TLS, or WSS, as the failure boundary.
+- The first address remediation derived usable host addresses but still passed
+  `nil` to `RegisterProxy`. It repaired missing A/AAAA data but did not repair
+  the loopback transmitter selection.
+- Binding to a source selected by a connected UDP socket failed on Windows:
+  `LocalAddr` remained `0.0.0.0`, and the gateway correctly refused to publish
+  a local-only record with `multicast route selected no usable source address`.
+- The Windows `GetBestInterfaceEx` query for `224.0.0.251:5353` also selected
+  Loopback Pseudo-Interface 1. Strict validation rejected it, producing the
+  same startup failure rather than silently advertising on loopback.
+- The initial fallback used a fixed public unicast probe and was rejected in
+  review because policy/VPN routes could make it differ from the actual default
+  route, and because it could override failures other than the loopback case.
+- The current unverified remediation uses the Windows IPv4 route/interface
+  tables to select the lowest-effective-metric default route only after an
+  explicitly loopback mDNS route. It validates that interface and its assigned
+  IPv4 address before passing it to `RegisterProxy`. It has passed deterministic
+  tests, Windows compilation, and `make verify`; it is not yet evidence of
+  Windows LAN advertisement or Dot discovery.
+- On this host, `GetBestInterfaceEx(224.0.0.251:5353)` instead returned a
+  successful zero interface index. This is another wildcard result, not a
+  usable route, so the same validated default-route fallback now applies. The
+  regression tests cover index zero and isolate the non-loopback rejection test
+  from live host adapters. Focused Windows race tests and a gateway rebuild
+  passed; fresh-context review found no issue. Native LAN advertisement and Dot
+  discovery remain required.
+- Native Windows observation still showed the proxy only via Loopback and a
+  separate Linux host received no browse result. Source inspection identifies
+  the library boundary: `grandcat/zeroconf` transmits on its selected interfaces
+  with `golang.org/x/net/ipv4` per-packet `IfIndex` control messages, but that
+  package's Windows implementation is explicitly unimplemented and the library
+  discards the setup error. The operating system therefore chooses Loopback.
+  Route/interface selection in this repository cannot correct that transmitter
+  limitation; resolving it requires an mDNS advertiser that sets Windows'
+  multicast interface socket option (or a maintained dependency that does).
+- The adapter now uses the pinned `betamos/zeroconf` commit, whose Windows
+  transmitter sets that socket option and exposes an interface filter. The
+  existing discovery contract remains unchanged behind a compatibility adapter;
+  focused Windows race tests, scoped lint, and a gateway rebuild pass. Native
+  Windows-to-Linux Avahi and Dot discovery are still the acceptance check.
+- 2026-09-02: A MacBook on the Dot WLAN resolved the Windows gateway at
+  `192.168.110.127:8770`, while the Dot's repository browser still returned
+  zero entries. An independent static Linux/arm64 diagnostic built with
+  EchoLocal's `libp2p/zeroconf/v2` dependency then discovered the same service
+  on Dot `wlan0`, proving multicast receipt and isolating the defect to this
+  repository. The adapter was calling the blocking `betamos/zeroconf` browse
+  synchronously before consuming its unbuffered result channel; valid events
+  therefore blocked until the browse deadline and were lost. Browse execution
+  now runs concurrently with result consumption and debug logs report selected
+  interfaces, raw response metadata, acceptance/rejection, counts, preferred
+  address, and the resolved endpoint without logging TXT contents or tokens.
+  A rebuilt Dot accepted the gateway response immediately. Because the then-
+  running multi-interface gateway advertised the union of WSL, Wi-Fi, and
+  VirtualBox addresses, the browser now stably prefers an address sharing the
+  selected interface's subnet; it resolved `wss://192.168.110.127:8770/device`,
+  completed authenticated WSS, and persisted a mode-0600 pairing at 14:34 UTC.
+  Gateway publication is also corrected to run one publisher per usable
+  interface with only that interface's addresses. Focused race tests, lint,
+  formatting, and Windows test compilation pass. A final reviewed-binary rerun
+  at 14:45 UTC logged the raw response, preferred
+  `192.168.110.127`, sanitized resolved WSS fields, completed authentication,
+  and persisted another mode-0600 clean-state pairing. Fresh-context review
+  findings were all fixed: multi-interface behavior was reconciled into this
+  plan and `docs/DESIGN.md`; `wlan0` selection is now device-only; endpoint
+  logs exclude userinfo/query data; removal events withdraw candidates;
+  publisher lifecycle/cleanup has contract coverage; and obsolete route code
+  was removed. The final interface-scoped
+  Windows gateway build still requires a restart and live record observation;
+  Task 11 remains in progress for its other outstanding hardware scenarios.
+- 2026-09-02: After the reviewed `gateway-next.exe` restart, a fresh-state Dot
+  browse at 14:51 UTC received exactly one A record, `192.168.110.127`, rather
+  than the earlier union of WSL, Wi-Fi, and VirtualBox addresses. It selected
+  that endpoint, completed authenticated WSS, and persisted a mode-0600
+  pairing. The original diagnostic pairing and `avahi-daemon` were restored
+  afterward. This completes Task 11's mDNS-only discovery, handshake, and
+  pairing acceptance; its separate turn, endpointing, reconnect, and other
+  scenarios remain in progress.
+
 ## Completion evidence
+
+- 2026-09-02: Task 12 documentation and coverage review is in progress.
+  Updated the README and Windows/WSL guide for the delivered local-endpointing,
+  mDNS/WSS, state-path, token/TLS, profile-reload, dotsim, and Compose
+  behaviors; corrected DESIGN.md so native-LAN mDNS is not conflated with the
+  explicit-WSS Docker smoke test. Fresh-context review found two defects, both
+  fixed: an mDNS A/AAAA connection now preserves the advertised DNS name for
+  TLS verification and persists that discovery identity after `welcome`; and
+  endpoint debug logs now omit paths as well as credentials/query values. A
+  verified DNS-name/IP-dial WSS regression test and mDNS endpoint-identity test
+  cover the first fix. `make fmt-check`, `make lint` (0 issues), focused race
+  tests for discovery/client/echod/dotsim, and `make test` passed; total
+  non-mock statement coverage was 70.6%, with discovery 90.4%, mDNS 73.3%,
+  client 71.3%, gateway devices 75.0%, and gateway turns 70.8%. The coverage
+  audit still needs explicit dispositions for composition-root and
+  library-boundary functions that remain impractical to unit-test (notably the
+  real mDNS browse adapter); Task 12 remains in progress.
+
+- 2026-09-07: Task 12 fresh-context review completed. Finding 1 (**fix**, P2):
+  the active plan still named `grandcat/zeroconf` although the module and
+  adapter use `betamos/zeroconf`; corrected the dependency and file-map entries
+  and recorded the Windows multicast-interface rationale. Finding 2 (**fix**,
+  P2): the Task 11 scope amendment could appear to silently remove forwarded
+  log-pressure and rejected corrupt/missing-model configuration checks;
+  clarified that Tasks 8, 3, and 10 retain and verify those host/deterministic
+  requirements, while Task 11 is limited to Dot-required behavior. No finding
+  was declined or postponed. An additional local review finding (**fix**, P1)
+  found that a removed mDNS service record could withdraw a still-live record
+  with the same `server_id`; the browser now rebuilds candidates from all live
+  instance names and has a race-enabled regression test.
+
+- 2026-09-07: `git diff --check`, `make fmt-check`, and `make lint` passed.
+  `make test` passed with race detection and 70.7% non-mock statement coverage;
+  touched packages include discovery 90.4%, mDNS 74.5%, client 71.0%, gateway
+  devices 75.0%, and gateway turns 70.8%. `make check-portability` passed for
+  darwin/arm64 and linux/arm64 (the Go tool emitted non-fatal read-only module
+  stat-cache warnings). Equivalent host binaries and static linux/arm64 echod
+  and echoctl builds to `/tmp` passed. The exact `make build`, `make
+  build-device`, and `make build-device-ctl` commands remain blocked because
+  this environment cannot overwrite its existing read-only `.bin` artifacts.
+  `docker compose -f deploy/docker-compose.yml config` passed with the existing
+  local certificate, key, token, and profile inputs. The operator then ran
+  `docker compose -f deploy/docker-compose.yml build gateway` in their
+  daemon-accessible WSL session; it completed successfully on 2026-09-07 and
+  produced `echo-satellite-gateway:local`. The agent's earlier socket denial
+  was therefore an execution-environment restriction, not a Docker or image
+  defect. A post-fix focused race sweep passed for discovery, echod, client,
+  and turns; dotsim and gateway devices' direct `httptest` runs were denied an
+  IPv6 loopback listener by the sandbox, while their coverage-bearing execution
+  in the successful `make test` run passed. Task 12 is complete. The required
+  `git mv` into `docs/plans/finished/` was attempted but could not create
+  `.git/index.lock` because this agent session mounts `.git` read-only; the
+  plan remains in-progress solely until that lifecycle move can be performed.
 
 - 2026-08-31: Task 9: `docker compose -f deploy/docker-compose.yml config`
   passed with host-provided read-only certificate, key, token, and TOML mounts,

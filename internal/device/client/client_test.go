@@ -37,11 +37,12 @@ func (zeroJitter) Duration(time.Duration) time.Duration { return 0 }
 
 type fakeResolver struct {
 	endpoint string
+	tlsName  string
 	err      error
 }
 
-func (r fakeResolver) Resolve(context.Context, discovery.Config, *discovery.Instance) (string, error) {
-	return r.endpoint, r.err
+func (r fakeResolver) Resolve(context.Context, discovery.Config, *discovery.Instance) (discovery.Endpoint, error) {
+	return discovery.Endpoint{URL: r.endpoint, TLSServerName: r.tlsName}, r.err
 }
 
 type fakePairings struct {
@@ -136,7 +137,7 @@ func TestHandshake_SendsHelloAppliesWelcomeAndPairs(t *testing.T) {
 	require.NoError(t, err)
 	conn.reads <- incoming{type_: websocket.MessageText, data: welcome}
 
-	require.NoError(t, client.handshake(t.Context(), conn, "wss://gateway.test:8770/device"))
+	require.NoError(t, client.handshake(t.Context(), conn, discovery.Endpoint{URL: "wss://gateway.test:8770/device"}))
 	require.Len(t, consumer.got, 1)
 	assert.Equal(t, "home", pairings.saved.ServerID)
 	require.Len(t, conn.writes, 2)
@@ -155,7 +156,7 @@ func TestHandshake_RejectsNonWelcome(t *testing.T) {
 	payload, err := protocol.Encode(protocol.TypePing, "", time.Now(), nil)
 	require.NoError(t, err)
 	conn.reads <- incoming{type_: websocket.MessageText, data: payload}
-	assert.ErrorContains(t, client.handshake(t.Context(), conn, "wss://gateway.test/device"), "first gateway frame must be welcome")
+	assert.ErrorContains(t, client.handshake(t.Context(), conn, discovery.Endpoint{URL: "wss://gateway.test/device"}), "first gateway frame must be welcome")
 }
 
 func TestReader_ConfigAcknowledged(t *testing.T) {
@@ -321,6 +322,26 @@ func TestWSSDialerConnectsToTLSServer(t *testing.T) {
 	require.NoError(t, conn.Close(websocket.StatusNormalClosure, "done"))
 }
 
+func TestWSSDialerVerifiesDNSNameWhileDialingAddress(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err == nil {
+			defer func() { _ = conn.Close(websocket.StatusNormalClosure, "done") }()
+		}
+	}))
+	defer server.Close()
+	transport := server.Client().Transport.(*http.Transport).Clone()
+	tlsConfig := transport.TLSClientConfig.Clone()
+	tlsConfig.MinVersion = tls.VersionTLS12
+	tlsConfig.ServerName = "example.com"
+	endpoint := "wss" + strings.TrimPrefix(server.URL, "https")
+
+	conn, err := (WSSDialer{}).Dial(t.Context(), endpoint, nil, tlsConfig)
+
+	require.NoError(t, err)
+	require.NoError(t, conn.Close(websocket.StatusNormalClosure, "done"))
+}
+
 func TestRun_AuthenticatesForwardsLocalTurnAndStopsOnCancel(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "token")
 	require.NoError(t, os.WriteFile(path, []byte("01234567890123456789012345678901"), 0o600))
@@ -350,4 +371,10 @@ func TestResolverErrorIsPreserved(t *testing.T) {
 	require.NoError(t, err)
 	_, err = client.runOnce(t.Context(), true)
 	assert.ErrorIs(t, err, errWant)
+}
+
+func TestEndpointLogValuesExcludeCredentialsQueryAndPath(t *testing.T) {
+	scheme, host := endpointLogValues("wss://user:secret@gateway.test:8770/secret-path?token=leak")
+	assert.Equal(t, "wss", scheme)
+	assert.Equal(t, "gateway.test:8770", host)
 }

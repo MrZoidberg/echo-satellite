@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -154,6 +155,16 @@ func (r Receiver) Stop(active *Active, id string, stop protocol.AudioStop) (Turn
 }
 
 func syncDirectory(path string) error {
+	return syncDirectoryForOS(runtime.GOOS, path)
+}
+
+func syncDirectoryForOS(goos, path string) error {
+	// Windows does not support syncing directory handles. The WAV file itself
+	// is flushed before its hard-link promotion; Unix additionally persists the
+	// directory entry to make that promotion durable across power loss.
+	if goos == "windows" {
+		return nil
+	}
 	directory, err := os.Open(path) //nolint:gosec // G304: path is the receiver's operator-configured output directory.
 	if err != nil {
 		return fmt.Errorf("open diagnostic WAV directory: %w", err)

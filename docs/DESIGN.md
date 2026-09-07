@@ -623,6 +623,21 @@ TXT:
 
 TXT records contain discovery metadata only. No credentials or secrets are advertised.
 
+The gateway publishes independently on every up, multicast-capable,
+non-loopback interface that has a usable assigned address. Each interface's
+A/AAAA records contain only addresses assigned to that interface, so a WLAN
+response never claims that a WSL, VM, VPN, or container-only address is
+reachable on the WLAN. Explicitly configured advertisement addresses restrict
+publication to the interfaces that own them. Registration fails if no validated
+interface/address pair exists; it must not publish a local-only or addressless
+record.
+
+An `echod` browse is explicitly confined to the Dot's infrastructure `wlan0`
+interface; host tools retain normal all-interface browsing. When a compatible
+response contains addresses from several interfaces, the browser retains them
+but prefers an address sharing the browse interface's subnet. This selection is
+only endpoint routing; WSS/TLS and device authentication remain mandatory.
+
 Satellite resolution order:
 
 ```text
@@ -1839,7 +1854,10 @@ build signed/dev release bundle
 
 This becomes the preferred device iteration loop because it exercises the same mechanism used in real deployments.
 
-mDNS must be tested from the actual Docker/WSL deployment because multicast visibility can differ by network mode. Explicit host/port remains the fallback.
+mDNS acceptance is performed with a native gateway on the physical LAN. Docker
+Compose deliberately disables mDNS and is smoke-tested only through an explicit
+WSS URL; it cannot establish multicast reachability. Explicit host/port remains
+the fallback.
 
 ---
 
@@ -1858,7 +1876,9 @@ persistent data volume
 
 The gateway should also run as a native Go binary.
 
-Deployment documentation must explain how mDNS advertisement reaches the physical LAN. Static gateway configuration remains the universal fallback.
+Deployment documentation must distinguish the Compose explicit-WSS smoke test
+from native-gateway mDNS acceptance on the physical LAN. Static gateway
+configuration remains the universal fallback.
 
 Future target: Raspberry Pi / ARM64 host without architectural changes.
 
@@ -1918,7 +1938,7 @@ Success criterion: the Dot repeatedly detects a selected wake model locally, wit
 - binary turn-audio framing;
 - `dotsim` integration tests.
 
-### Milestone 3 — Safe supervisor + A/B agent OTA
+### Milestone 3 — Safe supervisor + A/B agent OTA and command-audio conditioning
 
 Implement this **before Hermes integration** so subsequent device development can use the production update path.
 
@@ -1936,8 +1956,18 @@ Implement this **before Hermes integration** so subsequent device development ca
 - persistent supervisor recovery log;
 - manual rollback;
 - simulator update/rollback tests.
+- characterize all seven physical microphone channels on the qualified Dot;
+- retain the single capture path while comparing channel 0, an unsteered mix,
+  and a steerable delay-and-sum beamformer;
+- add bounded capture gain and output leveling with clipping, gain, and
+  speech/noise metrics rather than a blind fixed boost;
+- requalify local wake and command endpointing with the selected preprocessing,
+  including continuous quiet speech, deliberate silence, and the 60-second
+  hard timeout.
 
-Success criterion: deliberately broken agent builds recover to the previous slot without ADB.
+Success criteria: deliberately broken agent builds recover to the previous slot
+without ADB; and the qualified command-audio path preserves continuous quiet
+speech until the 60-second cap while still endpointing deliberate silence.
 
 ### Milestone 4 — Gateway Update Manager
 
@@ -2084,6 +2114,14 @@ This sequence avoids debugging wake inference, update recovery, audio transport,
 - **Pre-roll:** 600 ms is the measured shortest value that retains the first
   command word without retaining the wake phrase. Evidence:
   [`docs/device-diagnostics.md`](device-diagnostics.md).
+- **Command endpointing:** on the qualified Dot/room, the independently
+  configured level-VAD speech threshold is 0.05. The original 0.50 and an
+  intermediate 0.20 setting falsely endpointed continuous quiet counting;
+  0.05 retained the 10-count test and then endpointed after a measured 1.563 s
+  final quiet region with the configured 1,500 ms trailing-silence limit.
+  This is a gateway profile calibration, not a wake-VAD setting or a change to
+  device-local endpointing ownership. Evidence: Task 11 in
+  [`docs/plans/in-progress/2026-08-27-milestone-2-discovery-protocol-simulator.md`](plans/in-progress/2026-08-27-milestone-2-discovery-protocol-simulator.md).
 - What is the cost of one versus multiple active local wake models?
 - **Beamforming:** beamforming initially bypassed; the `Preprocessor` seam reserves it for
   later hardware qualification. Evidence:
