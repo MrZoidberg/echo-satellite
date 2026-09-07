@@ -4,11 +4,15 @@ Turn a rooted Amazon Echo Dot into a voice satellite for a self-hosted assistant
 gateway: the Dot listens for its wake word locally and streams a voice turn to a
 gateway that owns speech recognition, the assistant backend and the fleet.
 
-**Status: Milestone 1 local-wake slice.** The Dot now has pure-Go microphone
-capture, local VAD-gated openWakeWord detection, speaker playback, LED and
-button diagnostics, and local wake-model installation. Gateway transport,
-mDNS, supervisor/A/B updates, persistence and assistant integration remain
-later milestones. See `docs/DESIGN.md` §24 for the milestone sequence.
+**Status: Milestone 2 discovery, authenticated transport, simulator, and
+device-turn slice.** The Dot now has pure-Go microphone capture, local
+VAD-gated openWakeWord detection, speaker playback, LED and button diagnostics,
+local wake-model installation, device-local command endpointing, and
+authenticated WSS device turns. The gateway advertises over mDNS; `dotsim` and
+`echod` can resolve it or use an explicit WSS URL. Supervisor/A/B updates,
+assistant integration, production device authentication, and command-audio
+conditioning remain later-milestone work. See `docs/DESIGN.md` §24 for the
+milestone sequence.
 
 ## The two boundaries
 
@@ -16,7 +20,8 @@ later milestones. See `docs/DESIGN.md` §24 for the milestone sequence.
 credible speech, is always device-local. The gateway never scores wake words and
 never receives a continuous microphone stream; it sees audio only after the
 device has opened a turn. Command endpointing — deciding when the user stopped
-talking — is a separate gateway-side concern with its own configuration.
+talking — is also device-local, after a wake or Action-button trigger, with
+configuration independent of wake VAD.
 
 **Updates.** Agent updates are application-level A/B slots under `/data`, never
 FireOS OTA. The gateway owns the desired software state; the device owns its own
@@ -84,6 +89,7 @@ Verify a release bundle with the same checks a gateway and a device apply:
 - [docs/DESIGN.md](docs/DESIGN.md) — architecture, boundaries, milestones. Authoritative.
 - [docs/protocol.md](docs/protocol.md) — the wire contract, tracking `internal/protocol`.
 - [docs/development-windows-wsl.md](docs/development-windows-wsl.md) — the reference dev environment and device build.
+- [docs/gateway-deployment.md](docs/gateway-deployment.md) — Docker Compose gateway deployment and the explicit-WSS smoke test.
 - [docs/plans/README.md](docs/plans/README.md) — how implementation work is planned and tracked.
 - [AGENTS.md](AGENTS.md) — instructions for AI coding agents, including build commands and code conventions.
 

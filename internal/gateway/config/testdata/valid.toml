@@ -1,0 +1,28 @@
+version = 7
+
+[defaults.wake]
+engine = "openwakeword"
+model = "okay_nabu"
+threshold = 0.50
+vad_enabled = true
+vad_threshold = 0.50
+vad_lookback_ms = 1200
+pre_roll_ms = 600
+min_interval_ms = 2000
+always_score_wake = true
+
+[defaults.endpointing]
+speech_threshold = 0.50
+speech_onset_ms = 160
+trailing_silence_ms = 1500
+no_speech_timeout_ms = 3000
+max_turn_ms = 60000
+
+[defaults.logs]
+forward_level = "info"
+
+[devices."dot-kitchen".endpointing]
+trailing_silence_ms = 1000
+
+[devices."dot-kitchen".logs]
+forward_level = "debug"

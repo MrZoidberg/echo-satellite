@@ -110,7 +110,8 @@ There are two different uses of voice activity detection in the system:
 1. **Wake VAD — device-local, always-on.** It helps decide whether a wake-word score is credible speech and should be allowed to trigger.
 2. **Command endpointing — after a wake/button trigger.** It decides when the user's spoken command has ended so STT can proceed.
 
-For v0.1, command endpointing may run on the gateway. This does not make wake detection gateway-side: the gateway sees audio only after the device has already created a voice turn.
+For v0.1, command endpointing runs on the device after a local wake/button trigger.
+Only the completed active-turn audio window is sent upstream.
 
 The two functions have separate configuration and thresholds.
 
@@ -121,7 +122,7 @@ The gateway is responsible for:
 - advertising its local endpoint using mDNS;
 - device registration and configuration;
 - turn lifecycle after a local wake/button trigger;
-- post-wake command endpointing;
+- consume device-endpointed active-turn audio for STT;
 - speech-to-text provider selection;
 - assistant backend selection;
 - conversation management;
@@ -339,7 +340,7 @@ Another important operational lesson is that anything placed on the Dot only dur
 | stable supervisor            |       | mDNS advertisement             |
 |   +-> echod -> echod_a       |       | device manager                 |
 |   |           echod_b        |       | turn/conversation managers     |
-|   |                          |       | command endpointing             |
+|   |                          |       | endpointed-turn receiver         |
 |   +-> trial/rollback state   |       | STT/TTS + assistant routing    |
 |------------------------------|       | Update Manager                 |
 | mDNS discovery               |       | Release Source(s)              |
@@ -370,7 +371,7 @@ local microphone
   -> wake accepted
   -> immediate local feedback
   -> turn.start + command audio over WSS
-  -> gateway command endpointing
+  -> device-local command endpointing closes audio window
   -> STT
   -> assistant
   -> TTS
@@ -413,6 +414,7 @@ echo-satellite/
 ├── internal/
 │   ├── device/
 │   │   ├── audio/
+│   │   ├── endpointing/       # post-wake command endpointing
 │   │   ├── wake/              # local wake engines, wake VAD, models
 │   │   ├── update/            # staging, verification, slots, trial client
 │   │   ├── buttons/
@@ -425,7 +427,6 @@ echo-satellite/
 │   ├── gateway/
 │   │   ├── devices/
 │   │   ├── turns/
-│   │   ├── endpointing/       # post-wake command endpointing only
 │   │   ├── conversations/
 │   │   ├── updates/           # desired versions + rollout state machine
 │   │   └── config/
@@ -621,6 +622,21 @@ TXT:
 ```
 
 TXT records contain discovery metadata only. No credentials or secrets are advertised.
+
+The gateway publishes independently on every up, multicast-capable,
+non-loopback interface that has a usable assigned address. Each interface's
+A/AAAA records contain only addresses assigned to that interface, so a WLAN
+response never claims that a WSL, VM, VPN, or container-only address is
+reachable on the WLAN. Explicitly configured advertisement addresses restrict
+publication to the interfaces that own them. Registration fails if no validated
+interface/address pair exists; it must not publish a local-only or addressless
+record.
+
+An `echod` browse is explicitly confined to the Dot's infrastructure `wlan0`
+interface; host tools retain normal all-interface browsing. When a compatible
+response contains addresses from several interfaces, the browser retains them
+but prefers an address sharing the browse interface's subnet. This selection is
+only endpoint routing; WSS/TLS and device authentication remain mandatory.
 
 Satellite resolution order:
 
@@ -1135,7 +1151,7 @@ Initial candidates:
 
 English and Ukrainian must both be supported. Auto language detection is the default, with optional language hints.
 
-If the selected STT provider needs whole utterances, the gateway buffers the active turn until command endpointing completes. Streaming STT can be added later without changing the local wake architecture.
+If the selected STT provider needs whole utterances, the gateway buffers the already endpointed active turn. Streaming STT can be added later without changing the local wake architecture.
 
 ### Python speech worker
 
@@ -1344,11 +1360,9 @@ For v0.1:
 ```text
 wake VAD:             device only
 wake inference:       device only
-command endpointing:  gateway, after turn.start
+command endpointing:  device, after turn.start
 STT:                  gateway-side provider
 ```
-
-Later, command endpointing may also move to the device if latency/bandwidth testing justifies it.
 
 ### Action button
 
@@ -1605,11 +1619,13 @@ Initial model:
 - Echo stores only device credentials, release verification public key and local assets/configuration;
 - management API requires authentication before non-local deployment.
 
+Milestone 2 uses a shared bearer token solely for development. TLS verification remains enabled by default; `tls_skip_verify` is a visible development-only escape hatch, not a production configuration. Per-device credentials and mTLS remain required follow-up work before production use.
+
 The update subsystem is security-sensitive: permission to deploy an agent is effectively permission to run privileged code on a rooted Dot. Update/deployment endpoints must therefore require strong administrator authorization and should have an audit trail.
 
 Local wake detection and local wake VAD provide a privacy benefit: while idle, microphone audio needed for activation decisions stays on the device rather than being continuously sent to the gateway.
 
-Future improvement: per-device client certificates / mTLS.
+Future improvement: per-device credentials and client certificates / mTLS.
 
 A browser-exposed root shell is not part of v1; ADB is sufficient for development and recovery.
 
@@ -1838,7 +1854,10 @@ build signed/dev release bundle
 
 This becomes the preferred device iteration loop because it exercises the same mechanism used in real deployments.
 
-mDNS must be tested from the actual Docker/WSL deployment because multicast visibility can differ by network mode. Explicit host/port remains the fallback.
+mDNS acceptance is performed with a native gateway on the physical LAN. Docker
+Compose deliberately disables mDNS and is smoke-tested only through an explicit
+WSS URL; it cannot establish multicast reachability. Explicit host/port remains
+the fallback.
 
 ---
 
@@ -1857,7 +1876,9 @@ persistent data volume
 
 The gateway should also run as a native Go binary.
 
-Deployment documentation must explain how mDNS advertisement reaches the physical LAN. Static gateway configuration remains the universal fallback.
+Deployment documentation must distinguish the Compose explicit-WSS smoke test
+from native-gateway mDNS acceptance on the physical LAN. Static gateway
+configuration remains the universal fallback.
 
 Future target: Raspberry Pi / ARM64 host without architectural changes.
 
@@ -1917,7 +1938,7 @@ Success criterion: the Dot repeatedly detects a selected wake model locally, wit
 - binary turn-audio framing;
 - `dotsim` integration tests.
 
-### Milestone 3 — Safe supervisor + A/B agent OTA
+### Milestone 3 — Safe supervisor + A/B agent OTA and command-audio conditioning
 
 Implement this **before Hermes integration** so subsequent device development can use the production update path.
 
@@ -1935,8 +1956,18 @@ Implement this **before Hermes integration** so subsequent device development ca
 - persistent supervisor recovery log;
 - manual rollback;
 - simulator update/rollback tests.
+- characterize all seven physical microphone channels on the qualified Dot;
+- retain the single capture path while comparing channel 0, an unsteered mix,
+  and a steerable delay-and-sum beamformer;
+- add bounded capture gain and output leveling with clipping, gain, and
+  speech/noise metrics rather than a blind fixed boost;
+- requalify local wake and command endpointing with the selected preprocessing,
+  including continuous quiet speech, deliberate silence, and the 60-second
+  hard timeout.
 
-Success criterion: deliberately broken agent builds recover to the previous slot without ADB.
+Success criteria: deliberately broken agent builds recover to the previous slot
+without ADB; and the qualified command-audio path preserves continuous quiet
+speech until the 60-second cap while still endpointing deliberate silence.
 
 ### Milestone 4 — Gateway Update Manager
 
@@ -1958,8 +1989,7 @@ Success criterion: a gateway can safely update several devices sequentially and 
 
 ```text
 Echo local wake / simulator trigger
-  -> turn audio
-  -> gateway command endpointing
+  -> device-endpointed turn audio
   -> STT
   -> transcript
 ```
@@ -2014,7 +2044,7 @@ local VAD + wake
 - stronger device authentication/mTLS if useful;
 - Raspberry Pi/ARM64 validation;
 - multi-Dot arbitration;
-- optional local command endpointing / barge-in improvements.
+- optional barge-in improvements.
 
 ---
 
@@ -2037,7 +2067,7 @@ local VAD + wake
 15. Deliberately deploy a broken binary and prove automatic rollback without ADB.
 16. Add staged fleet rollout and stop-on-rollback behaviour.
 17. On accepted local wake, stream command PCM to gateway and write it to WAV.
-18. Implement gateway command endpointing.
+18. Implement device-local command endpointing.
 19. Implement gateway-to-Echo speaker playback and semantic LED state.
 20. Add STT/TTS interfaces and local Whisper integration.
 21. Add mock assistant end-to-end loop.
@@ -2084,6 +2114,14 @@ This sequence avoids debugging wake inference, update recovery, audio transport,
 - **Pre-roll:** 600 ms is the measured shortest value that retains the first
   command word without retaining the wake phrase. Evidence:
   [`docs/device-diagnostics.md`](device-diagnostics.md).
+- **Command endpointing:** on the qualified Dot/room, the independently
+  configured level-VAD speech threshold is 0.05. The original 0.50 and an
+  intermediate 0.20 setting falsely endpointed continuous quiet counting;
+  0.05 retained the 10-count test and then endpointed after a measured 1.563 s
+  final quiet region with the configured 1,500 ms trailing-silence limit.
+  This is a gateway profile calibration, not a wake-VAD setting or a change to
+  device-local endpointing ownership. Evidence: Task 11 in
+  [`docs/plans/in-progress/2026-08-27-milestone-2-discovery-protocol-simulator.md`](plans/in-progress/2026-08-27-milestone-2-discovery-protocol-simulator.md).
 - What is the cost of one versus multiple active local wake models?
 - **Beamforming:** beamforming initially bypassed; the `Preprocessor` seam reserves it for
   later hardware qualification. Evidence:
@@ -2127,7 +2165,7 @@ Resolve these with focused diagnostics, intentionally broken update builds and r
 | Control frames | JSON |
 | Audio frames | binary PCM during active turns |
 | Gateway | Go |
-| Command endpointing | gateway-side initially, separate from wake VAD |
+| Command endpointing | device-local, separate from wake VAD |
 | Agent update architecture | **application-level A/B slots under `/data`** |
 | Agent supervisor | small stable external startup/recovery component |
 | Update orchestration | gateway Update Manager |
@@ -2179,7 +2217,6 @@ Voice Gateway endpoint
     v
 Voice Gateway
     |
-    +-- command endpointing
     +-- STT Provider       -> Whisper / Hermes / other
     +-- Assistant Backend -> Hermes / OpenClaw / other
     +-- TTS Provider       -> Hermes / local / other

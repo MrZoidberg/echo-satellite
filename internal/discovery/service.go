@@ -6,9 +6,8 @@
 // discovery metadata only and never credentials, and a discovered gateway is
 // still required to pass TLS and device authentication before it is trusted.
 //
-// This package deliberately contains no multicast code. The Advertiser and
-// Browser interfaces are the seam a real mDNS implementation plugs into in
-// Milestone 2, which keeps the resolution order testable without a network.
+// The Advertiser and Browser interfaces keep resolution testable without a
+// multicast network. Their concrete DNS-SD implementation lives in mdns.
 package discovery
 
 import (
@@ -19,6 +18,7 @@ import (
 	"net/netip"
 	"net/url"
 	"strconv"
+	"strings"
 )
 
 // DNS-SD identifiers for the satellite protocol.
@@ -49,16 +49,26 @@ type Instance struct {
 	TXT      TXTRecord
 }
 
+// Endpoint is a resolved connection target. URL may use the A/AAAA address
+// supplied by DNS-SD while TLSServerName retains the advertised DNS identity
+// for certificate verification.
+type Endpoint struct {
+	URL           string
+	TLSServerName string
+	Instance      *Instance
+}
+
 // ErrNoEndpoint is returned when an instance carries neither a host name nor an
 // address, so no endpoint URL can be built from it.
 var ErrNoEndpoint = errors.New("discovery: instance has no host or address")
 
-// EndpointURL builds the device WebSocket URL for the instance. The host name
-// is preferred over a resolved address so a gateway keeps working when its IP
-// address changes.
+// EndpointURL builds the device WebSocket URL for the instance. A DNS-SD
+// response's address is authoritative for a .local host: using it directly
+// avoids requiring the operating system resolver to perform a second mDNS
+// lookup after discovery has already supplied the A/AAAA record.
 func (i Instance) EndpointURL() (string, error) {
 	host := i.Host
-	if host == "" && len(i.Addrs) > 0 {
+	if len(i.Addrs) > 0 && (host == "" || strings.HasSuffix(strings.TrimSuffix(host, "."), ".local")) {
 		host = i.Addrs[0].String()
 	}
 	if host == "" {
@@ -84,6 +94,20 @@ func (i Instance) EndpointURL() (string, error) {
 	return u.String(), nil
 }
 
+// Endpoint builds a connection target while preserving a DNS-SD host name for
+// TLS verification when dialing the response's address directly.
+func (i Instance) Endpoint() (Endpoint, error) {
+	raw, err := i.EndpointURL()
+	if err != nil {
+		return Endpoint{}, err
+	}
+	endpoint := Endpoint{URL: raw, Instance: &i}
+	if len(i.Addrs) > 0 && strings.HasSuffix(strings.TrimSuffix(i.Host, "."), ".local") {
+		endpoint.TLSServerName = strings.TrimSuffix(i.Host, ".")
+	}
+	return endpoint, nil
+}
+
 // Compatible reports whether the instance speaks a protocol version this build
 // can talk to.
 func (i Instance) Compatible(protocolVersion int) bool {
@@ -92,16 +116,13 @@ func (i Instance) Compatible(protocolVersion int) bool {
 
 // Advertiser publishes a gateway instance on the local network.
 //
-// The real mDNS implementation lands in Milestone 2; this interface exists now
-// so the gateway composition root and its tests are written against the seam
-// rather than against a concrete library.
+// The interface keeps composition roots and their tests independent from the
+// selected DNS-SD library.
 type Advertiser interface {
 	Advertise(ctx context.Context, inst Instance) error
 }
 
 // Browser finds gateway instances on the local network.
-//
-// The real mDNS implementation lands in Milestone 2.
 type Browser interface {
 	Browse(ctx context.Context) ([]Instance, error)
 }
@@ -111,8 +132,17 @@ func (i Instance) Validate() error {
 	if i.ServerID == "" {
 		return fmt.Errorf("discovery: instance %q: %w", i.Host, ErrMissingServerID)
 	}
+	if i.Port < 0 || i.Port > 65535 {
+		return fmt.Errorf("discovery: instance %q has invalid port %d", i.Host, i.Port)
+	}
 	if _, err := i.EndpointURL(); err != nil {
 		return err
 	}
-	return i.TXT.Validate()
+	if err := i.TXT.Validate(); err != nil {
+		return err
+	}
+	if i.ServerID != i.TXT.ServerID {
+		return fmt.Errorf("discovery: instance server_id %q does not match TXT server_id %q", i.ServerID, i.TXT.ServerID)
+	}
+	return nil
 }

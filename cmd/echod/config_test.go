@@ -22,6 +22,24 @@ func TestParseArgs_Defaults(t *testing.T) {
 	assert.Equal(t, discovery.ModeMDNS, o.Discovery)
 	assert.Empty(t, o.GatewayURL)
 	assert.False(t, o.Dbg)
+	assert.Equal(t, 5000, o.DiscoveryTimeout)
+	assert.Equal(t, "/data/local/etc/echo-satellite/paired-gateway.json", o.PairingState)
+	assert.Equal(t, "/data/local/etc/echo-satellite/config.json", o.ConfigState)
+}
+
+func TestParseArgs_GatewayStateOptionsFollowFlagEnvironmentIniPrecedence(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "echod.ini")
+	require.NoError(t, os.WriteFile(path, []byte("gateway-token-file = ini-token\ntls-skip-verify = false\npairing-state = ini-pairing\nconfig-state = ini-config\ndiscovery-timeout-ms = 1000\n"), 0o600))
+	t.Setenv("ECHOD_GATEWAY_TOKEN_FILE", "env-token")
+	t.Setenv("ECHOD_DISCOVERY_TIMEOUT_MS", "2000")
+
+	o, err := parseArgs([]string{"--config=" + path, "--gateway-token-file=flag-token", "--tls-skip-verify", "--pairing-state=flag-pairing", "--config-state=flag-config", "--discovery-timeout-ms=3000"})
+	require.NoError(t, err)
+	assert.Equal(t, "flag-token", o.GatewayTokenFile)
+	assert.True(t, o.TLSSkipVerify)
+	assert.Equal(t, "flag-pairing", o.PairingState)
+	assert.Equal(t, "flag-config", o.ConfigState)
+	assert.Equal(t, 3000, o.DiscoveryTimeout)
 }
 
 func TestParseArgs_WakeOnlyDefaultsMatchWakeConfigDefaults(t *testing.T) {
@@ -91,6 +109,7 @@ func TestParseArgs_RejectsInvalidWakeDurationsAndChannels(t *testing.T) {
 		{"--vad-lookback-ms=10001"},
 		{"--stats-interval=0s"},
 		{"--log-max-bytes=0"},
+		{"--discovery-timeout-ms=0"},
 		{"--mic-channels=7"},
 		{"--mic-channels=1,1"},
 	} {

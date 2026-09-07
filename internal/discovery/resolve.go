@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"sort"
 	"strings"
 )
 
@@ -55,12 +56,12 @@ func NewResolver(browser Browser, protocolVersion int) *Resolver {
 }
 
 // Resolve returns the endpoint URL to connect to. lastPaired may be nil.
-func (r *Resolver) Resolve(ctx context.Context, cfg Config, lastPaired *Instance) (string, error) {
+func (r *Resolver) Resolve(ctx context.Context, cfg Config, lastPaired *Instance) (Endpoint, error) {
 	if cfg.URL != "" {
 		if err := validateEndpointURL(cfg.URL); err != nil {
-			return "", err
+			return Endpoint{}, err
 		}
-		return cfg.URL, nil
+		return Endpoint{URL: cfg.URL}, nil
 	}
 
 	if endpoint, ok := r.fromPaired(cfg, lastPaired); ok {
@@ -68,68 +69,72 @@ func (r *Resolver) Resolve(ctx context.Context, cfg Config, lastPaired *Instance
 	}
 
 	if cfg.Discovery == ModeDisabled {
-		return "", fmt.Errorf("%w: discovery disabled and no configured or paired gateway", ErrNoGateway)
+		return Endpoint{}, fmt.Errorf("%w: discovery disabled and no configured or paired gateway", ErrNoGateway)
 	}
 	if r.browser == nil {
-		return "", fmt.Errorf("%w: no browser configured", ErrNoGateway)
+		return Endpoint{}, fmt.Errorf("%w: no browser configured", ErrNoGateway)
 	}
 
 	instances, err := r.browser.Browse(ctx)
 	if err != nil {
-		return "", fmt.Errorf("discovery: browse %s: %w", ServiceType, err)
+		return Endpoint{}, fmt.Errorf("discovery: browse %s: %w", ServiceType, err)
 	}
 
 	inst, ok := r.pick(instances, cfg.PreferredServerID)
 	if !ok {
-		return "", fmt.Errorf("%w: browsed %d instance(s), none compatible with protocol %d",
+		return Endpoint{}, fmt.Errorf("%w: browsed %d instance(s), none compatible with protocol %d",
 			ErrNoGateway, len(instances), r.protocol)
 	}
 
-	endpoint, err := inst.EndpointURL()
-	if err != nil {
-		return "", err
-	}
-	return endpoint, nil
+	return inst.Endpoint()
 }
 
 // fromPaired returns the endpoint of the previously paired gateway when it is
 // still usable. A preferred server_id that names a different gateway wins over
 // the pairing.
-func (r *Resolver) fromPaired(cfg Config, lastPaired *Instance) (string, bool) {
+func (r *Resolver) fromPaired(cfg Config, lastPaired *Instance) (Endpoint, bool) {
 	if lastPaired == nil {
-		return "", false
+		return Endpoint{}, false
 	}
 	if cfg.PreferredServerID != "" && lastPaired.ServerID != cfg.PreferredServerID {
-		return "", false
+		return Endpoint{}, false
 	}
 	if !lastPaired.Compatible(r.protocol) {
-		return "", false
+		return Endpoint{}, false
 	}
-	endpoint, err := lastPaired.EndpointURL()
+	endpoint, err := lastPaired.Endpoint()
 	if err != nil {
-		return "", false
+		return Endpoint{}, false
 	}
 	return endpoint, true
 }
 
-// pick chooses among browsed instances: the preferred server_id first, then the
-// first protocol-compatible instance in browse order.
+// pick chooses among browsed instances: the preferred server_id first, then a
+// deterministic protocol-compatible candidate.
 func (r *Resolver) pick(instances []Instance, preferredServerID string) (Instance, bool) {
-	var fallback Instance
-	haveFallback := false
-
+	candidates := make([]Instance, 0, len(instances))
 	for _, inst := range instances {
 		if !inst.Compatible(r.protocol) || inst.ServerID == "" {
 			continue
 		}
-		if preferredServerID != "" && inst.ServerID == preferredServerID {
+		candidates = append(candidates, inst)
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		return instanceOrderKey(candidates[i]) < instanceOrderKey(candidates[j])
+	})
+	for _, inst := range candidates {
+		if preferredServerID == "" || inst.ServerID == preferredServerID {
 			return inst, true
 		}
-		if !haveFallback {
-			fallback, haveFallback = inst, true
-		}
 	}
-	return fallback, haveFallback
+	if len(candidates) == 0 {
+		return Instance{}, false
+	}
+	return candidates[0], true
+}
+
+func instanceOrderKey(inst Instance) string {
+	return inst.ServerID + "\x00" + inst.Host + "\x00" + fmt.Sprintf("%05d", inst.Port)
 }
 
 func validateEndpointURL(raw string) error {

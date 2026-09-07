@@ -1,0 +1,38 @@
+{
+  "description": "Trusted repository-local agent-loop automation.",
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "(^|\\.)exec$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv run --no-project --script \"$(git rev-parse --show-toplevel)/.codex/hooks/agent_loop.py\"",
+            "timeout": 30,
+            "statusMessage": "Formatting touched Go files"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [{"type": "command", "command": "uv run --no-project --script \"$(git rev-parse --show-toplevel)/.codex/hooks/agent_loop.py\"", "timeout": 15, "statusMessage": "Loading repository context"}]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [{"type": "command", "command": "uv run --no-project --script \"$(git rev-parse --show-toplevel)/.codex/hooks/agent_loop.py\"", "timeout": 15, "statusMessage": "Resolving plan task context"}]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [{"type": "command", "command": "uv run --no-project --script \"$(git rev-parse --show-toplevel)/.codex/hooks/agent_loop.py\"", "timeout": 120, "statusMessage": "Checking touched Go packages"}]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [{"type": "command", "command": "uv run --no-project --script \"$(git rev-parse --show-toplevel)/.codex/hooks/agent_loop.py\"", "timeout": 3, "statusMessage": "Cleaning hook journals"}]
+      }
+    ]
+  }
+}

@@ -36,6 +36,11 @@ func TestInstance_EndpointURL(t *testing.T) {
 			want: "wss://gw.local.:8770/device",
 		},
 		{
+			name: "uses discovered address for local host",
+			inst: Instance{Host: "gw.local.", Addrs: []netip.Addr{netip.MustParseAddr("192.168.10.20")}, TXT: TXTRecord{TLS: true}},
+			want: "wss://192.168.10.20:8770/device",
+		},
+		{
 			name: "falls back to address",
 			inst: Instance{Addrs: []netip.Addr{netip.MustParseAddr("192.168.10.20")}, TXT: TXTRecord{TLS: true}},
 			want: "wss://192.168.10.20:8770/device",

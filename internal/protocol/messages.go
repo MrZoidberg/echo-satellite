@@ -1,5 +1,10 @@
 package protocol
 
+import (
+	"errors"
+	"fmt"
+)
+
 // MessageType identifies a control frame. The full set mirrors the message
 // families in docs/DESIGN.md 8.6; types without a payload struct in this
 // package are reserved and gain one when their milestone lands.
@@ -9,12 +14,13 @@ type MessageType string
 const (
 	// session and status
 
-	TypeHello   MessageType = "hello"
-	TypeWelcome MessageType = "welcome"
-	TypeConfig  MessageType = "config"
-	TypeState   MessageType = "state"
-	TypeHealth  MessageType = "health"
-	TypeLog     MessageType = "log"
+	TypeHello        MessageType = "hello"
+	TypeWelcome      MessageType = "welcome"
+	TypeConfig       MessageType = "config"
+	TypeConfigResult MessageType = "config.result"
+	TypeState        MessageType = "state"
+	TypeHealth       MessageType = "health"
+	TypeLog          MessageType = "log"
 
 	// voice turns; turn.start is always produced by the device
 
@@ -61,7 +67,7 @@ const (
 
 // allMessageTypes is the authoritative set used by Known and AllMessageTypes.
 var allMessageTypes = []MessageType{
-	TypeHello, TypeWelcome, TypeConfig, TypeState, TypeHealth, TypeLog,
+	TypeHello, TypeWelcome, TypeConfig, TypeConfigResult, TypeState, TypeHealth, TypeLog,
 	TypeTurnStart, TypeTurnCancel,
 	TypeWakeModels, TypeWakeStatus,
 	TypeAudioStart, TypeAudioStop, TypePlayStart, TypePlayStop,
@@ -166,6 +172,7 @@ type Hello struct {
 	Capabilities      Capabilities `json:"capabilities"`
 	WakeConfig        WakeConfig   `json:"wake_config"`
 	UpdateState       UpdatePhase  `json:"update_state"`
+	ConfigVersion     uint64       `json:"config_version"`
 }
 
 // WakeConfig summarizes the device-local wake stack. It is reported for
@@ -181,11 +188,20 @@ type WakeConfig struct {
 
 // Welcome is the gateway's reply to hello.
 type Welcome struct {
-	ServerID string `json:"server_id"`
-	Protocol int    `json:"protocol"`
-	// Config carries gateway-managed device configuration. Its schema is owned
-	// by the gateway config package and is opaque to the protocol layer.
-	Config map[string]any `json:"config,omitempty"`
+	ServerID string       `json:"server_id"`
+	Protocol int          `json:"protocol"`
+	Config   DeviceConfig `json:"config"`
+}
+
+// Validate checks the server reply's complete desired configuration.
+func (w Welcome) Validate() error {
+	if w.ServerID == "" {
+		return errors.New("protocol: welcome server ID is required")
+	}
+	if w.Protocol != ProtocolVersion {
+		return fmt.Errorf("protocol: unsupported welcome protocol %d", w.Protocol)
+	}
+	return w.Config.Validate()
 }
 
 // TurnStart opens a voice turn. It is always sent by the device, after the
@@ -207,7 +223,15 @@ type AudioStart struct {
 
 // AudioStop closes the command audio window.
 type AudioStop struct {
-	Reason string `json:"reason,omitempty"`
+	Reason AudioStopReason `json:"reason"`
+}
+
+// Validate checks the reason for an input audio window closing.
+func (s AudioStop) Validate() error {
+	if !s.Reason.Valid() {
+		return fmt.Errorf("protocol: invalid audio stop reason %q", s.Reason)
+	}
+	return nil
 }
 
 // PlayStart opens the binary PCM window for gateway-to-device playback.

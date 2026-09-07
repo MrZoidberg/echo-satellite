@@ -19,9 +19,19 @@ type opts struct {
 	Wake    wakeCommand    `command:"wake" description:"manage local wake models"`
 	Bench   benchCommand   `command:"bench" description:"benchmark on-device mel, embedding, classifier and VAD inference"`
 	Status  statusCommand  `command:"status" description:"report device health and wake diagnostics"`
+	WiFi    wifiCommand    `command:"wifi" description:"configure device Wi-Fi through Android supplicant"`
 }
 
 type versionCommand struct{}
+
+type wifiCommand struct {
+	Set wifiSetCommand `command:"set" description:"configure an open or WPA2-PSK Wi-Fi network"`
+}
+
+type wifiSetCommand struct {
+	SSID       string `long:"ssid" required:"true" description:"Wi-Fi network name"`
+	Passphrase string `long:"passphrase" description:"WPA2 passphrase; omit for an open network"`
+}
 
 type releaseCommand struct {
 	Verify verifyCommand `command:"verify" description:"verify a release bundle: manifest, artifact digest and signature"`

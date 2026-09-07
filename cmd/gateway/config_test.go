@@ -20,7 +20,7 @@ func TestParseArgs_Defaults(t *testing.T) {
 }
 
 func TestAdvertisement(t *testing.T) {
-	o, err := parseArgs([]string{"--server-id=home-gateway", "--hostname=echo-gateway.local.", "--tls"})
+	o, err := parseArgs([]string{"--server-id=home-gateway", "--hostname=echo-gateway.local."})
 	require.NoError(t, err)
 
 	inst, err := o.advertisement()

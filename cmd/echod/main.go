@@ -23,13 +23,13 @@ import (
 	"github.com/MrZoidberg/echo-satellite/internal/device/audio"
 	"github.com/MrZoidberg/echo-satellite/internal/device/audio/alsa"
 	"github.com/MrZoidberg/echo-satellite/internal/device/buttons"
+	"github.com/MrZoidberg/echo-satellite/internal/device/endpointing"
 	"github.com/MrZoidberg/echo-satellite/internal/device/led"
 	"github.com/MrZoidberg/echo-satellite/internal/device/system"
 	"github.com/MrZoidberg/echo-satellite/internal/device/wake"
 	"github.com/MrZoidberg/echo-satellite/internal/device/wake/oww"
 	"github.com/MrZoidberg/echo-satellite/internal/device/wake/tflite"
 	"github.com/MrZoidberg/echo-satellite/internal/device/wake/vadlevel"
-	"github.com/MrZoidberg/echo-satellite/internal/discovery"
 	"github.com/MrZoidberg/echo-satellite/internal/protocol"
 )
 
@@ -74,16 +74,7 @@ func run(o opts) error {
 		return runWakeOnly(ctx, o)
 	}
 
-	slog.Info("echod starting", "mode", "milestone-0", "revision", revision, "device_id", o.DeviceID, "protocol", protocol.ProtocolVersion)
-	slog.Info("announced capabilities", "capabilities", announcedCapabilities())
-	logGatewayTarget(ctx, o)
-
-	slog.Warn("no device subsystem is implemented yet",
-		"detail", "microphone, local wake stack and gateway transport land in milestones 1 and 2")
-
-	<-ctx.Done()
-	slog.Info("echod stopped")
-	return nil
+	return runConnected(ctx, o)
 }
 
 type subscriptionFrames struct{ subscription *audio.Subscription }
@@ -208,7 +199,7 @@ func runWakeOnly(parent context.Context, o opts) (returnErr error) {
 			return logWakeStats(workerCtx, o.StatsInterval, identity.DeviceID, model.ID, stats, subscription, capturer)
 		},
 	}
-	buttonWorkers, err := startButtonWatchers(ctx, animator)
+	buttonWorkers, err := startButtonWatchers(ctx, animator, nil)
 	if err != nil {
 		return err
 	}
@@ -397,7 +388,7 @@ func startWakeLED(root string) (*led.Animator, func() error, error) {
 	return animator, clearLED, nil
 }
 
-func startButtonWatchers(ctx context.Context, animator *led.Animator) ([]wakeWorker, error) {
+func startButtonWatchers(ctx context.Context, animator *led.Animator, onActionTap func() error) ([]wakeWorker, error) {
 	devices, err := buttons.FindControlDevices(buttons.DefaultInputDir, buttons.DefaultSysClassDir)
 	if errors.Is(err, buttons.ErrNoInputDevice) {
 		slog.Debug("button devices unavailable")
@@ -425,13 +416,7 @@ func startButtonWatchers(ctx context.Context, animator *led.Animator) ([]wakeWor
 				return
 			case press := <-presses:
 				slog.Info("button press", "button", press.Key.String(), "action", press.Action, "held", press.Held)
-				if press.Key == buttons.KeyAction && press.Action == buttons.ActionTap {
-					slog.Info("action button would start a turn", "milestone", 2)
-					if animator != nil {
-						animator.Set(protocol.StateListening)
-						time.AfterFunc(300*time.Millisecond, func() { animator.Set(protocol.StateIdle) })
-					}
-				}
+				handleActionTap(press, animator, onActionTap)
 			}
 		}
 	}()
@@ -445,11 +430,30 @@ func startButtonWatchers(ctx context.Context, animator *led.Animator) ([]wakeWor
 	return workers, nil
 }
 
+func handleActionTap(press buttons.Press, animator *led.Animator, onActionTap func() error) {
+	if press.Key != buttons.KeyAction || press.Action != buttons.ActionTap {
+		return
+	}
+	if onActionTap != nil {
+		if err := onActionTap(); err != nil && !errors.Is(err, endpointing.ErrActiveTurn) {
+			slog.Warn("start action-button turn", "error", err)
+		}
+	}
+	if animator == nil {
+		return
+	}
+	animator.Set(protocol.StateListening)
+	if onActionTap == nil {
+		time.AfterFunc(300*time.Millisecond, func() { animator.Set(protocol.StateIdle) })
+	}
+}
+
 // announcedCapabilities is what this build would send in hello. Wake detection
 // is always local, so every build announces it.
 func announcedCapabilities() protocol.Capabilities {
 	return protocol.NewCapabilities(
 		protocol.CapWakeLocal,
+		protocol.CapCommandEndpointingLocal,
 		protocol.CapAudioCapture,
 		protocol.CapAudioPlayback,
 		protocol.CapButton,
@@ -457,25 +461,6 @@ func announcedCapabilities() protocol.Capabilities {
 		protocol.CapMute,
 		protocol.CapUpdateAB,
 	)
-}
-
-// logGatewayTarget reports which gateway this configuration resolves to. No
-// browser is wired yet, so only an explicit url or a paired gateway resolves;
-// mDNS browsing lands in Milestone 2.
-func logGatewayTarget(ctx context.Context, o opts) {
-	cfg := o.discoveryConfig()
-	slog.Info("gateway configuration",
-		"discovery", cfg.Discovery, "url", cfg.URL, "preferred_server_id", cfg.PreferredServerID)
-
-	endpoint, err := discovery.NewResolver(nil, protocol.ProtocolVersion).Resolve(ctx, cfg, nil)
-	switch {
-	case errors.Is(err, discovery.ErrNoGateway):
-		slog.Info("no gateway endpoint resolved", "detail", "mdns browsing lands in milestone 2")
-	case err != nil:
-		slog.Error("gateway configuration is unusable", "error", err)
-	default:
-		slog.Info("gateway endpoint resolved", "endpoint", logValue(endpoint))
-	}
 }
 
 // logValue prevents values received from configuration or discovery from

@@ -1,0 +1,16 @@
+.git
+.bin
+.m2
+.assets
+data
+deploy/secrets
+.gateway-secrets
+.env
+*.pem
+*.key
+*.crt
+coverage*.out
+profile.cov
+*.test
+__pycache__
+*.py[cod]

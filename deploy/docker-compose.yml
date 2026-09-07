@@ -1,0 +1,41 @@
+services:
+  gateway:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: echo-satellite-gateway:local
+    init: true
+    user: "${GATEWAY_UID:-65532}:${GATEWAY_GID:-65532}"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 10s
+    ports:
+      - "127.0.0.1:8770:8770"
+    command:
+      - --listen=:8770
+      - --server-id=${GATEWAY_SERVER_ID:-echo-gateway}
+      - --tls-cert=/run/echo-satellite/tls-cert.pem
+      - --tls-key=/run/echo-satellite/tls-key.pem
+      - --device-token-file=/run/echo-satellite/device-token
+      - --device-config=/run/echo-satellite/devices.toml
+      - --no-mdns
+    volumes:
+      - type: bind
+        source: ${GATEWAY_TLS_CERT_PATH:?set GATEWAY_TLS_CERT_PATH to a PEM certificate}
+        target: /run/echo-satellite/tls-cert.pem
+        read_only: true
+      - type: bind
+        source: ${GATEWAY_TLS_KEY_PATH:?set GATEWAY_TLS_KEY_PATH to a PEM private key}
+        target: /run/echo-satellite/tls-key.pem
+        read_only: true
+      - type: bind
+        source: ${GATEWAY_DEVICE_TOKEN_PATH:?set GATEWAY_DEVICE_TOKEN_PATH to a bearer-token file}
+        target: /run/echo-satellite/device-token
+        read_only: true
+      - type: bind
+        source: ${GATEWAY_DEVICE_CONFIG_PATH:?set GATEWAY_DEVICE_CONFIG_PATH to a TOML profile}
+        target: /run/echo-satellite/devices.toml
+        read_only: true

@@ -1,0 +1,15 @@
+services:
+  gateway:
+    command:
+      - --listen=:8770
+      - --server-id=${GATEWAY_SERVER_ID:-echo-gateway}
+      - --tls-cert=/run/echo-satellite/tls-cert.pem
+      - --tls-key=/run/echo-satellite/tls-key.pem
+      - --device-token-file=/run/echo-satellite/device-token
+      - --device-config=/run/echo-satellite/devices.toml
+      - --diagnostic-wav-dir=/var/lib/echo-satellite/wav
+      - --no-mdns
+    volumes:
+      - type: bind
+        source: ${GATEWAY_DIAGNOSTIC_WAV_DIR:?set GATEWAY_DIAGNOSTIC_WAV_DIR to an existing writable directory}
+        target: /var/lib/echo-satellite/wav

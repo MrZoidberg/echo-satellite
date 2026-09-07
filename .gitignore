@@ -27,12 +27,20 @@ go.work.sum
 # env file
 .env
 
+# Local Docker gateway credentials and diagnostic output
+.gateway-secrets/
+.m2/
+
 # Editor/IDE
 # .idea/
 # .vscode/
 
 # Build output
 .bin/
+
+# Python hook test bytecode
+__pycache__/
+*.py[cod]
 
 # Coverage artifacts
 coverage*.out
@@ -45,3 +53,7 @@ coverage*.out
 !testdata/wake/synthetic/
 !testdata/wake/synthetic/*.tflite
 !testdata/wake/synthetic/*.onnx
+
+.assets/
+.dotsim/
+data/

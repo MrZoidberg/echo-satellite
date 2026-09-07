@@ -478,6 +478,12 @@ Production code must resolve the controller base and add MTK pin 87, as
 EchoLocal does; `444` is only the measured line on this unit. Task 23 owns the
 full mute-button behavior and persistence decision.
 
+When invoking this procedure through ADB, quote the complete sysfs sequence as
+the remote `su -c` argument, exactly as above. A command shaped like
+`adb shell su -c 'echo 0 > ...'` allows ADB's unprivileged shell to process the
+redirection first; its `Permission denied` result is a quoting error, not
+evidence that the GPIO method is unavailable.
+
 ```sh
 "$ADB" -s "$DEVICE_SERIAL" shell \
   "su -c '/data/local/tmp/echoctl mic record --channels all --seconds 5 \
@@ -591,6 +597,9 @@ requires both `stop ledcontroller` and writing `0` to `boot_animation`. Stopping
 the service is reversible with `start ledcontroller` or a reboot. With it
 stopped, `echoctl led test --clear` writes an all-zero frame that remains dark
 after the process exits.
+
+Like GPIO writes, these sysfs redirections must be inside the remote `su -c`
+quoted script; see the microphone procedure above for the canonical ADB form.
 
 `led_current` is an attenuation index, not a PWM value: `0` is full current and
 `3` is quarter current. A human confirmed that the same solid-red frame was

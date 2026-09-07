@@ -40,7 +40,12 @@ type opts struct {
 	DeviceID          string           `long:"device-id" env:"ECHOD_DEVICE_ID" description:"device identity announced in hello"`
 	Discovery         string           `long:"discovery" env:"ECHOD_DISCOVERY" default:"mdns" choice:"mdns" choice:"disabled" description:"gateway discovery mode"`
 	GatewayURL        string           `long:"gateway-url" env:"ECHOD_GATEWAY_URL" description:"explicit gateway url; overrides discovery"`
+	GatewayTokenFile  string           `long:"gateway-token-file" env:"ECHOD_GATEWAY_TOKEN_FILE" description:"file containing the gateway bearer token"`
+	TLSSkipVerify     bool             `long:"tls-skip-verify" env:"ECHOD_TLS_SKIP_VERIFY" description:"disable TLS certificate verification; development only"`
 	PreferredServerID string           `long:"preferred-server-id" env:"ECHOD_PREFERRED_SERVER_ID" description:"gateway server_id to prefer"`
+	PairingState      string           `long:"pairing-state" env:"ECHOD_PAIRING_STATE" default:"/data/local/etc/echo-satellite/paired-gateway.json" description:"persisted authenticated gateway state"`
+	ConfigState       string           `long:"config-state" env:"ECHOD_CONFIG_STATE" default:"/data/local/etc/echo-satellite/config.json" description:"persisted gateway configuration state"`
+	DiscoveryTimeout  int              `long:"discovery-timeout-ms" env:"ECHOD_DISCOVERY_TIMEOUT_MS" default:"5000" description:"maximum mDNS resolution time in milliseconds"`
 	WakeOnly          bool             `long:"wake-only" env:"ECHOD_WAKE_ONLY" description:"run the device-local wake pipeline without gateway traffic"`
 	TestStartAudio    string           `long:"test-start-audio" env:"ECHOD_TEST_START_AUDIO" default:"/data/local/etc/echo-satellite/starting_test.wav" description:"16 kHz mono WAV played before live wake-only diagnostics"`
 	WakeModel         string           `long:"wake-model" env:"ECHOD_WAKE_MODEL" default:"okay_nabu" description:"installed wake model id"`
@@ -139,6 +144,9 @@ func validateOpts(o opts) (opts, error) {
 	}
 	if o.LogMaxBytes <= 0 {
 		return opts{}, errors.New("log max bytes must be positive")
+	}
+	if o.DiscoveryTimeout <= 0 {
+		return opts{}, errors.New("discovery timeout must be positive")
 	}
 	return o, nil
 }
