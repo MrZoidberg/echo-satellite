@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"reflect"
+	"strconv"
 
 	"github.com/jessevdk/go-flags"
 
@@ -32,8 +34,11 @@ type opts struct {
 	DiscoveryTimeout  int     `long:"discovery-timeout-ms" env:"DOTSIM_DISCOVERY_TIMEOUT_MS" default:"5000" description:"maximum mDNS resolution time in milliseconds"`
 	Once              bool    `long:"once" env:"DOTSIM_ONCE" description:"exit after the first successfully transmitted fixture turn"`
 
-	Dbg     bool `long:"dbg" env:"DEBUG" description:"debug logging"`
-	Version bool `long:"version" short:"V" description:"show version and exit"`
+	LogFile     string `long:"log-file" env:"DOTSIM_LOG_FILE" description:"bounded rotating operational log file"`
+	LogMaxBytes int64  `long:"log-max-bytes" env:"DOTSIM_LOG_MAX_BYTES" default:"10485760" description:"total byte cap across rotating logs"`
+	LogFormat   string `long:"log-format" env:"DOTSIM_LOG_FORMAT" default:"text" choice:"text" choice:"json" description:"operational log encoding"`
+	Dbg         bool   `long:"dbg" env:"DEBUG" description:"debug logging"`
+	Version     bool   `long:"version" short:"V" description:"show version and exit"`
 }
 
 // turnStart is the turn this configuration would open. Building it here keeps
@@ -79,6 +84,9 @@ func (o opts) validate() error {
 	if o.DiscoveryTimeout <= 0 {
 		return errors.New("--discovery-timeout-ms must be positive")
 	}
+	if o.LogFile != "" && o.LogMaxBytes < 3 {
+		return errors.New("--log-max-bytes must be at least 3")
+	}
 	return nil
 }
 
@@ -110,11 +118,52 @@ func parseInto(args []string, iniFile *string) (opts, error) {
 		if err := flags.NewIniParser(p).ParseFile(*iniFile); err != nil {
 			return opts{}, fmt.Errorf("parse config %q: %w", *iniFile, err)
 		}
+		if err := applyEnvironment(&o); err != nil {
+			return opts{}, err
+		}
 	}
 	if _, err := p.ParseArgs(args); err != nil {
 		return opts{}, err //nolint:wrapcheck // callers inspect the go-flags error type directly
 	}
 	return o, nil
+}
+
+func applyEnvironment(o *opts) error {
+	value := reflect.ValueOf(o).Elem()
+	typeOfOpts := value.Type()
+	for index := range value.NumField() {
+		name := typeOfOpts.Field(index).Tag.Get("env")
+		raw, found := os.LookupEnv(name)
+		if name == "" || !found {
+			continue
+		}
+		field := value.Field(index)
+		switch field.Kind() {
+		case reflect.String:
+			field.SetString(raw)
+		case reflect.Bool:
+			parsed, err := strconv.ParseBool(raw)
+			if err != nil {
+				return fmt.Errorf("parse environment %s: %w", name, err)
+			}
+			field.SetBool(parsed)
+		case reflect.Float64:
+			parsed, err := strconv.ParseFloat(raw, 64)
+			if err != nil {
+				return fmt.Errorf("parse environment %s: %w", name, err)
+			}
+			field.SetFloat(parsed)
+		case reflect.Int, reflect.Int64:
+			parsed, err := strconv.ParseInt(raw, 10, field.Type().Bits())
+			if err != nil {
+				return fmt.Errorf("parse environment %s: %w", name, err)
+			}
+			field.SetInt(parsed)
+		default:
+			return fmt.Errorf("parse environment %s: unsupported option type %s", name, field.Type())
+		}
+	}
+	return nil
 }
 
 // isHelpRequest reports whether the parse error is go-flags printing help.

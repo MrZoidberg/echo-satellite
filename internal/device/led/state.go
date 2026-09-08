@@ -8,7 +8,7 @@ var (
 	colorThinking  = RGB{B: 180}
 	colorSpeaking  = RGB{B: 120}
 	colorMuted     = RGB{R: 180}
-	colorOffline   = RGB{R: 18, B: 30}
+	colorOffline   = RGB{R: 120}
 	colorError     = RGB{R: 180, G: 55}
 	colorUpdating  = RGB{R: 100, G: 100, B: 100}
 	colorTrial     = RGB{R: 180, G: 70}

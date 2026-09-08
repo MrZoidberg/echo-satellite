@@ -41,6 +41,19 @@ func TestLogValue_RemovesRecordSeparators(t *testing.T) {
 	assert.Equal(t, "gateway.example:8443", logValue("gateway.example\r\n:8443"))
 }
 
+func TestRun_StartupPreparationErrorIsWrappedOnce(t *testing.T) {
+	startupErr := errors.New("prepare device startup: stop ledcontroller")
+	original := prepareDeviceStartup
+	prepareDeviceStartup = func(opts) (func() error, error) {
+		return nil, startupErr
+	}
+	t.Cleanup(func() { prepareDeviceStartup = original })
+
+	err := run(opts{})
+	require.ErrorIs(t, err, startupErr)
+	assert.EqualError(t, err, startupErr.Error())
+}
+
 type orchestrationSource struct {
 	closed chan struct{}
 	count  int

@@ -10,16 +10,20 @@ import (
 // device diagnostics arrive with their milestones; only the commands whose
 // subsystem exists are exposed.
 type opts struct {
-	Version versionCommand `command:"version" description:"show version"`
-	Release releaseCommand `command:"release" description:"inspect and verify release artifacts"`
-	Mic     micCommand     `command:"mic" description:"diagnose microphone capture"`
-	Speaker speakerCommand `command:"speaker" description:"diagnose speaker playback"`
-	LED     ledCommand     `command:"led" description:"diagnose the LED ring"`
-	Buttons buttonsCommand `command:"buttons" description:"diagnose device buttons"`
-	Wake    wakeCommand    `command:"wake" description:"manage local wake models"`
-	Bench   benchCommand   `command:"bench" description:"benchmark on-device mel, embedding, classifier and VAD inference"`
-	Status  statusCommand  `command:"status" description:"report device health and wake diagnostics"`
-	WiFi    wifiCommand    `command:"wifi" description:"configure device Wi-Fi through Android supplicant"`
+	LogFile     string         `long:"log-file" env:"ECTL_LOG_FILE" description:"bounded rotating operational log file"`
+	LogMaxBytes int64          `long:"log-max-bytes" env:"ECTL_LOG_MAX_BYTES" default:"10485760" description:"total byte cap across rotating logs"`
+	LogFormat   string         `long:"log-format" env:"ECTL_LOG_FORMAT" default:"text" choice:"text" choice:"json" description:"operational log encoding"`
+	Dbg         bool           `long:"dbg" env:"DEBUG" description:"debug logging"`
+	Version     versionCommand `command:"version" description:"show version"`
+	Release     releaseCommand `command:"release" description:"inspect and verify release artifacts"`
+	Mic         micCommand     `command:"mic" description:"diagnose microphone capture"`
+	Speaker     speakerCommand `command:"speaker" description:"diagnose speaker playback"`
+	LED         ledCommand     `command:"led" description:"diagnose the LED ring"`
+	Buttons     buttonsCommand `command:"buttons" description:"diagnose device buttons"`
+	Wake        wakeCommand    `command:"wake" description:"manage local wake models"`
+	Bench       benchCommand   `command:"bench" description:"benchmark on-device mel, embedding, classifier and VAD inference"`
+	Status      statusCommand  `command:"status" description:"report device health and wake diagnostics"`
+	WiFi        wifiCommand    `command:"wifi" description:"configure device Wi-Fi through Android supplicant"`
 }
 
 type versionCommand struct{}
@@ -174,13 +178,23 @@ func parseArgs(args []string) (opts, string, error) {
 		return opts{}, "", err //nolint:wrapcheck // callers inspect the go-flags error type directly
 	}
 	if p.Active == nil {
-		return o, "", nil
+		return validateOpts(o)
 	}
 	name := p.Active.Name
 	if p.Active.Active != nil {
 		name += " " + p.Active.Active.Name
 	}
-	return o, name, nil
+	return validateOpts(o, name)
+}
+
+func validateOpts(o opts, name ...string) (opts, string, error) {
+	if o.LogFile != "" && o.LogMaxBytes < 3 {
+		return opts{}, "", errors.New("log max bytes must be at least 3")
+	}
+	if len(name) == 0 {
+		return o, "", nil
+	}
+	return o, name[0], nil
 }
 
 // isHelpRequest reports whether the parse error is go-flags printing help.

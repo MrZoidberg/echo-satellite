@@ -30,6 +30,7 @@ import (
 	"github.com/MrZoidberg/echo-satellite/internal/device/wake/oww"
 	"github.com/MrZoidberg/echo-satellite/internal/device/wake/tflite"
 	"github.com/MrZoidberg/echo-satellite/internal/device/wake/vadlevel"
+	"github.com/MrZoidberg/echo-satellite/internal/logging"
 	"github.com/MrZoidberg/echo-satellite/internal/protocol"
 )
 
@@ -51,30 +52,54 @@ func main() {
 		return
 	}
 
-	setupLog(o.Dbg)
-	if err := run(o); err != nil {
-		slog.Error("echod failed", "error", err)
+	closeLog, err := logging.Configure(logging.Options{Format: o.LogFormat, File: o.LogFile, MaxBytes: o.LogMaxBytes, Debug: o.Dbg})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "echod: %v\n", err)
+		os.Exit(1)
+	}
+	runErr := run(o)
+	closeErr := closeLog()
+	if runErr != nil || closeErr != nil {
+		slog.Error("echod failed", "error", errors.Join(runErr, closeErr))
 		os.Exit(1)
 	}
 }
 
-func setupLog(dbg bool) {
-	level := slog.LevelInfo
-	if dbg {
-		level = slog.LevelDebug
-	}
-	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})))
-}
-
-func run(o opts) error {
+func run(o opts) (returnErr error) {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	cleanup, err := prepareDeviceStartup(o)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		returnErr = errors.Join(returnErr, cleanup())
+	}()
 
 	if o.WakeOnly {
 		return runWakeOnly(ctx, o)
 	}
 
 	return runConnected(ctx, o)
+}
+
+var prepareDeviceStartup = func(o opts) (func() error, error) {
+	if o.MicFromFile != "" {
+		return func() error { return nil }, nil
+	}
+	device := led.New(o.LEDRoot)
+	preparer := system.StartupPreparer{
+		Services: system.CommandServices{}, LED: device, GPIORoot: o.GPIORoot,
+		// Visual animation starts in led.Service before capture; preparation owns
+		// only FireOS/sysfs readiness.
+		Animation: system.StartupAnimationFunc(func() error { return nil }),
+	}
+	cleanup, err := preparer.Prepare()
+	if err != nil {
+		return nil, fmt.Errorf("prepare device startup: %w", err)
+	}
+	slog.Debug("prepared device startup", "gpio", 444, "services", "ledcontroller,mdnsd", "boot_animation", false)
+	return cleanup, nil
 }
 
 type subscriptionFrames struct{ subscription *audio.Subscription }
@@ -95,12 +120,6 @@ func (s *closeOncePCMSource) Close() error {
 }
 
 func runWakeOnly(parent context.Context, o opts) (returnErr error) {
-	closeLog, err := configureWakeLog(o)
-	if err != nil {
-		return err
-	}
-	defer func() { returnErr = errors.Join(returnErr, closeLog()) }()
-
 	identity, err := system.Resolve(system.SerialReader{}, o.DeviceID, system.DeviceIDFile)
 	if err != nil {
 		return fmt.Errorf("resolve identity: %w", err)
@@ -179,7 +198,7 @@ func runWakeOnly(parent context.Context, o opts) (returnErr error) {
 		Ring: ring, Stats: stats, Config: cfg,
 	}
 
-	var animator *led.Animator
+	var animator *led.Service
 	if o.MicFromFile != "" {
 		var clearLED func() error
 		var ledErr error
@@ -235,22 +254,6 @@ func runWakeWorkers(parent context.Context, source io.Closer, workers []wakeWork
 		firstErr = errors.Join(firstErr, <-results)
 	}
 	return errors.Join(firstErr, closeErr)
-}
-
-func configureWakeLog(o opts) (func() error, error) {
-	if o.LogFile == "" {
-		return func() error { return nil }, nil
-	}
-	writer, err := system.NewRotatingWriter(o.LogFile, o.LogMaxBytes, 3)
-	if err != nil {
-		return nil, fmt.Errorf("open wake log: %w", err)
-	}
-	level := slog.LevelInfo
-	if o.Dbg {
-		level = slog.LevelDebug
-	}
-	slog.SetDefault(slog.New(slog.NewTextHandler(writer, &slog.HandlerOptions{Level: level})))
-	return writer.Close, nil
 }
 
 func loadWakeSharedModels(store wake.Store) (oww.SharedModels, error) {
@@ -316,7 +319,7 @@ func (s pcmSource) Close() error {
 	return nil
 }
 
-func makeWakeEventChannel(ctx context.Context, deviceID string, animator *led.Animator) chan wake.Event {
+func makeWakeEventChannel(ctx context.Context, deviceID string, animator *led.Service) chan wake.Event {
 	events := make(chan wake.Event)
 	go func() {
 		for {
@@ -365,7 +368,7 @@ func logWakeStats(ctx context.Context, interval time.Duration, deviceID, modelID
 	}
 }
 
-func startWakeLED(root string) (*led.Animator, func() error, error) {
+func startWakeLED(root string) (*led.Service, func() error, error) {
 	if _, err := os.Stat(filepath.Join(root, "frame")); errors.Is(err, os.ErrNotExist) {
 		if root != led.DefaultRoot {
 			return nil, nil, fmt.Errorf("probe LED controller: configured frame %q: %w", filepath.Join(root, "frame"), err)
@@ -376,11 +379,9 @@ func startWakeLED(root string) (*led.Animator, func() error, error) {
 		return nil, nil, fmt.Errorf("probe LED controller: %w", err)
 	}
 	device := led.New(root)
-	ticker := time.NewTicker(50 * time.Millisecond)
-	animator := led.NewAnimator(device, ticker.C)
+	animator := led.NewService(device)
 	clearLED := func() error {
-		ticker.Stop()
-		if err := device.Clear(); err != nil {
+		if err := animator.Close(); err != nil {
 			return fmt.Errorf("clear LED on shutdown: %w", err)
 		}
 		return nil
@@ -388,7 +389,7 @@ func startWakeLED(root string) (*led.Animator, func() error, error) {
 	return animator, clearLED, nil
 }
 
-func startButtonWatchers(ctx context.Context, animator *led.Animator, onActionTap func() error) ([]wakeWorker, error) {
+func startButtonWatchers(ctx context.Context, animator *led.Service, onActionTap func() error) ([]wakeWorker, error) {
 	devices, err := buttons.FindControlDevices(buttons.DefaultInputDir, buttons.DefaultSysClassDir)
 	if errors.Is(err, buttons.ErrNoInputDevice) {
 		slog.Debug("button devices unavailable")
@@ -430,7 +431,7 @@ func startButtonWatchers(ctx context.Context, animator *led.Animator, onActionTa
 	return workers, nil
 }
 
-func handleActionTap(press buttons.Press, animator *led.Animator, onActionTap func() error) {
+func handleActionTap(press buttons.Press, animator *led.Service, onActionTap func() error) {
 	if press.Key != buttons.KeyAction || press.Action != buttons.ActionTap {
 		return
 	}

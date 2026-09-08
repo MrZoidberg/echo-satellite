@@ -24,6 +24,7 @@ import (
 	gatewayconfig "github.com/MrZoidberg/echo-satellite/internal/gateway/config"
 	"github.com/MrZoidberg/echo-satellite/internal/gateway/devices"
 	"github.com/MrZoidberg/echo-satellite/internal/gateway/turns"
+	"github.com/MrZoidberg/echo-satellite/internal/logging"
 	"github.com/MrZoidberg/echo-satellite/internal/protocol"
 )
 
@@ -45,9 +46,15 @@ func main() {
 		return
 	}
 
-	setupLog(o.Dbg)
-	if err := run(o); err != nil {
-		slog.Error("gateway failed", "error", err)
+	closeLog, err := logging.Configure(logging.Options{Format: o.LogFormat, File: o.LogFile, MaxBytes: o.LogMaxBytes, Debug: o.Dbg})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "gateway: %v\n", err)
+		os.Exit(1)
+	}
+	runErr := run(o)
+	closeErr := closeLog()
+	if runErr != nil || closeErr != nil {
+		slog.Error("gateway failed", "error", errors.Join(runErr, closeErr))
 		os.Exit(1)
 	}
 }
@@ -88,14 +95,6 @@ func reloadProfile(store *gatewayconfig.Store, path string, deviceIDs []string) 
 		return nil, fmt.Errorf("reload device configuration: %w", err)
 	}
 	return configs, nil
-}
-
-func setupLog(dbg bool) {
-	level := slog.LevelInfo
-	if dbg {
-		level = slog.LevelDebug
-	}
-	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: level})))
 }
 
 func run(o opts) error {
