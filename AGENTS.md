@@ -4,7 +4,7 @@ Universal instructions for AI coding agents working in this repository. They app
 
 ## Repository state
 
-Milestone 1 has landed its device hardware and local-wake vertical slice: pure-Go ALSA capture/playback, LEDs, buttons, local VAD and openWakeWord, model installation, and Dot diagnostics. Gateway transport, mDNS, the supervisor/A/B updater, persistence, and assistant integration remain later milestones. Follow the layout, naming, and stack choices in `docs/DESIGN.md` §6 and §27 rather than inventing alternatives.
+Milestone 1 has landed its device hardware and local-wake vertical slice: pure-Go ALSA capture/playback, LEDs, buttons, local VAD and openWakeWord, model installation, and Dot diagnostics. Gateway transport, mDNS, single-agent deployment, persistence, and assistant integration remain later milestones. Follow the layout, naming, and stack choices in `docs/DESIGN.md` §6 and §27 rather than inventing alternatives.
 
 ## Build and test commands
 
@@ -174,16 +174,30 @@ They have separate configuration and thresholds. There is deliberately no gatewa
 
 The Echo knows nothing about Hermes, LLM APIs, conversation storage, or speech providers. Anything assistant-specific belongs behind the `AssistantBackend` interface; anything Hermes-specific stays inside the Hermes adapter.
 
-### Update boundary — the gateway owns desired state, the device owns recovery
+### Update boundary — the gateway owns desired state, the device owns safe installation
 
-Agent updates are **application-level A/B slots** (`echod_a` / `echod_b` under `/data`, selected by a stable symlink) — *not* Android partition A/B and never FireOS OTA. A normal agent update must never write the bootloader, boot image, recovery, or system partition.
+Agent updates replace the **single application binary** at
+`/data/local/bin/echod`; they are never FireOS OTA. A normal agent update must
+never write the bootloader, boot image, recovery, or system partition.
 
 Invariants that must not be violated by any update-path change:
 
-- A small **stable supervisor lives outside both A/B slots** and is the thing that decides whether a new boot succeeded. It must be able to roll back with the gateway unreachable.
-- **Never destroy the rollback path before the replacement is proven**: download to a `.part` staging file, verify size + SHA-256 + signature, fsync, atomically promote into the *inactive* slot, and only then flip the symlink. The running slot is never overwritten.
-- **A new slot runs on trial, not committed on process start.** Trial health requires config loaded, critical hardware initialized, gateway resolved, TLS/auth succeeded, and the `hello`/`welcome` handshake completed. A trial deadline or repeated fast exits trigger automatic rollback to the previous slot.
-- The supervisor is recovery infrastructure: keep it small, change it rarely, and do not ship it through the normal agent rollout path (see §10.9).
+- The gateway chooses and records the desired agent version. The Dot does not
+  independently discover releases.
+- Before changing the installed executable, download to a same-directory
+  `.part` file, verify compatibility, exact size, SHA-256 and the production
+  signature, then chmod, fsync and atomically rename it over `echod`. Fsync the
+  containing directory where the filesystem supports it.
+- Every failure before the rename leaves the installed executable untouched.
+  Once rename succeeds, the replacement is committed and no previous agent
+  binary is preserved.
+- A minimal Magisk `service.d` launcher may start the agent, restart the
+  controlled-update exit immediately and back off unexpected repeated exits.
+  It does not assess health, select versions, modify installed files or recover
+  a bad release.
+- Gateway rollback means deploying a previous signed compatible release while
+  the client remains connected. If a committed agent cannot start or reconnect,
+  recovery requires ADB and `echoctl update install`.
 
 Feature behavior is negotiated by **capability announcement** in `hello`, never by `version >= X` checks. Version minimums appear only in release manifests as installation-safety constraints.
 
@@ -193,7 +207,7 @@ The gateway advertises `_echo-satellite._tcp.local.`; TXT records carry discover
 
 ### Hardware-independent development
 
-`dotsim` speaks the same protocol as `echod` with files instead of hardware, and must also simulate update states, trial timeouts, crashes, rollbacks, and reconnects so fleet rollout logic is testable without breaking a real Dot. Gateway work should be testable without an Echo; wake/VAD correctness is tested separately against audio fixtures.
+`dotsim` speaks the same protocol as `echod` with files instead of hardware, and must also simulate update staging, verification, atomic replacement, controlled restart, crashes, reconnects, failure to reconnect, connected-device downgrades, and ADB-recovery outcomes so fleet rollout logic is testable without breaking a real Dot. Gateway work should be testable without an Echo; wake/VAD correctness is tested separately against audio fixtures.
 
 ## Security-sensitive areas
 

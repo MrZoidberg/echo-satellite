@@ -9,6 +9,25 @@ and **must be updated in the same change as any wire change there**.
 `docs/DESIGN.md` §8 remains authoritative for why the protocol looks like this.
 This document is authoritative for what is actually on the wire.
 
+### Single-agent architecture transition
+
+The approved deployment architecture is the single-agent boundary in
+`docs/DESIGN.md` §§3.7–3.10 and §10: the gateway owns desired agent version,
+while the device owns pre-install verification and atomic replacement of
+`/data/local/bin/echod`. A failure before replacement leaves the installed agent
+untouched. After replacement there is no preserved fallback; a client that
+cannot reconnect requires ADB recovery, while gateway rollback for a connected
+client means deploying a previous signed compatible release.
+
+The obsolete update elements in §§3–6 below are a **legacy wire snapshot,
+superseded as architecture and non-normative for new update implementation**.
+They remain only because Task 3 of the active Milestone 3 plan changes
+`internal/protocol` and these wire details together. Specifically, the old
+multi-copy capability, `supervisor_version`, pre-commit phase/state and
+device-local recovery message are obsolete. The offer, progress, staged,
+restarting, confirmed and failed concepts remain part of the single-agent
+design; Task 3 will complete their exact payloads and phase rules.
+
 ## 1. Transport and framing
 
 - One long-lived **outbound** secure WebSocket per device (`wss`). The device
@@ -91,11 +110,11 @@ fixed, and its payload lands with the milestone that needs it).
 | `update.accept` | D→G | reserved | device accepts an offer |
 | `update.reject` | D→G | reserved | device declines an offer, with a reason |
 | `update.progress` | D→G | defined | current update phase and progress |
-| `update.staged` | D→G | reserved | verified and promoted into the inactive slot |
-| `update.restarting` | D→G | reserved | about to restart into the new slot |
-| `update.trial` | D→G | reserved | running on trial, not yet committed |
-| `update.confirmed` | D→G | reserved | trial passed, slot committed |
-| `update.rolled_back` | D→G | reserved | trial failed, previous slot restored |
+| `update.staged` | D→G | reserved | replacement verified and ready to commit |
+| `update.restarting` | D→G | reserved | replacement committed; controlled restart requested |
+| `update.trial` | D→G | reserved | legacy/superseded pre-commit status |
+| `update.confirmed` | D→G | reserved | installed version/build confirmed after reconnect |
+| `update.rolled_back` | D→G | reserved | legacy/superseded device-local recovery status |
 | `update.failed` | D→G | defined | terminal update failure, with a code |
 | `button` | D→G | reserved | action button press |
 | `mute` | both | reserved | microphone mute state |
@@ -130,8 +149,10 @@ fixed, and its payload lands with the milestone that needs it).
 `wake_config` is reported for observability. The gateway cannot change the local
 wake stack by replying with a different summary, and it never scores wake audio.
 
-`update_state` lets the gateway learn immediately that this device is running a
-trial slot, before anything else happens on the connection.
+The example's `supervisor_version`, old update capability and `update_state`
+value are legacy/superseded wire elements retained until Task 3 changes the Go
+types. They do not describe the approved deployment architecture or imply any
+launcher-version contract.
 
 ### `welcome` (G→D)
 
@@ -197,7 +218,7 @@ values; implementations sanitize credentials before forwarding them.
 States, in display order: `idle`, `listening`, `thinking`, `speaking`, `muted`,
 `offline`, `error`, `updating`, `update_trial`. `muted` distinguishes the local
 privacy state from a fault, `offline` indicates loss of gateway connectivity,
-and `update_trial` identifies an uncommitted A/B slot trial.
+and the final legacy state identifies the superseded pre-commit update model.
 
 ### `update.offer` (G→D)
 
@@ -227,8 +248,10 @@ connection as control messages.
 { "code": "digest_mismatch", "message": "sha256 did not match manifest" }
 ```
 
-A failed update does not mean an unhealthy device: the device keeps running its
-previous slot.
+Under the superseded wire snapshot, this payload represented a failure before
+the old activation step. In the approved architecture, a pre-replacement
+failure leaves the installed agent untouched, while a post-replacement failure
+may require ADB recovery.
 
 ### `error` (both)
 
@@ -238,19 +261,23 @@ previous slot.
 
 ## 5. Update phases
 
-`update.progress.phase` and `hello.update_state` use exactly these values
-(`docs/DESIGN.md` §10.7):
+Until Task 3, `update.progress.phase` and `hello.update_state` use this current
+wire list, which contains both retained single-agent phases and obsolete legacy
+phases:
 
 ```
 idle · available · queued · downloading · verifying · staged
 restarting · trial · confirmed · failed · rolled_back · cancelled
 ```
 
-`confirmed`, `failed`, `rolled_back` and `cancelled` are terminal: nothing
-follows without a new offer.
+In this legacy wire snapshot, `confirmed`, `failed`, `rolled_back` and
+`cancelled` are terminal: nothing follows without a new offer. The approved
+single-agent state machine retains `confirmed`, `failed` and `cancelled`, but
+Task 3 removes the obsolete pre-commit and device-local recovery phases.
 
-The device owns this state machine. The gateway observes it and never drives a
-device past a phase the device has reported.
+The device owns progression through its reported installation phases. The
+gateway observes those reports, owns desired version and rollout policy, and
+never treats a requested phase as proof that the device reached it.
 
 ## 6. Capabilities
 
@@ -264,14 +291,16 @@ whether a feature may be used with a device:
 | `audio.capture` | can stream command audio during a turn |
 | `audio.playback` | can play gateway-supplied audio |
 | `command.endpointing.local` | ends active-turn audio on the device |
-| `update.ab` | supports application-level A/B agent updates |
+| `update.ab` | legacy/superseded multi-copy agent update capability |
 | `led` | can display semantic LED states |
 | `button` | can report action-button presses |
 | `mute` | exposes a microphone mute control |
 
 Deciding behavior by comparing agent versions is forbidden. Version minimums
-exist only in release manifests (`protocol_min`, `protocol_max`,
-`supervisor_min`) as installation-safety constraints, never as feature gates.
+exist only in release manifests as installation-safety constraints, never as
+feature gates. The legacy `supervisor_min` manifest constraint remains in the
+current release schema only until Task 3 removes it; it is not a launcher
+compatibility requirement.
 
 ## 7. Boundary guarantees
 
@@ -285,18 +314,23 @@ These are properties of the protocol itself, not of any one implementation:
   command endpointing (also device-local, ends an active command) are separate
   concerns with separate configuration. Only wake VAD appears in
   `hello.wake_config`; full desired settings are in `welcome.config`/`config`.
+- The gateway owns desired agent version. The device must verify manifest
+  compatibility, offer equality, exact size, SHA-256 and production signature
+  before atomically replacing the installed agent.
+- The protocol does not imply local recovery after replacement. A connected
+  client can be offered an older release; a client that cannot reconnect
+  requires ADB recovery.
 
 ## 8. Connection flow
 
 ```
 device boots
-  -> supervisor selects the active agent slot
+  -> Magisk launcher starts /data/local/bin/echod
   -> echod initializes mic + local wake VAD + wake engine
   -> resolve gateway: explicit url, then paired server_id, then mDNS browse
   -> connect and authenticate over wss
   -> hello
   <- welcome
-  -> if on trial and local health checks passed: report confirmed
   -> idle; the local wake stack keeps listening
 
 wake accepted locally
@@ -306,4 +340,19 @@ wake accepted locally
   <- state(thinking)
   <- play.start, binary PCM, play.stop
   -> back to idle
+```
+
+Architectural update flow (Task 3 will define its exact message schemas):
+
+```text
+gateway offers desired signed release
+  -> device fetches and verifies manifest, signature and artifact
+  -> device stages /data/local/bin/echod.part
+  -> device atomically replaces /data/local/bin/echod
+  -> controlled exit; Magisk launcher restarts echod
+  -> new echod reconnects and reports version/build
+
+if replacement cannot reconnect
+  -> gateway records failure and stops rollout according to policy
+  -> operator restores a known-good signed release with ADB
 ```

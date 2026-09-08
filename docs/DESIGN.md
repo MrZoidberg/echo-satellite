@@ -8,9 +8,21 @@ The Echo Dot provides the hardware-facing capabilities — microphone capture, *
 
 Hermes is the first assistant backend, not part of the device protocol. The same satellite should be able to work later with OpenClaw, a Raspberry Pi-hosted assistant, another local agent, or a cloud service without rewriting the device agent.
 
-The project also treats deployed Echo devices as a small managed fleet. After the initial rooted-device bootstrap, normal agent releases must be remotely deployable from the gateway with safe application-level A/B slots and automatic rollback. Ordinary Echo Satellite updates must not require reflashing FireOS, boot partitions or Magisk.
+The project also treats deployed Echo devices as a small managed fleet. After the
+initial rooted-device bootstrap, the gateway chooses the desired agent release
+and the device safely verifies, stages and atomically replaces its single
+installed agent. Ordinary Echo Satellite updates must not require reflashing
+FireOS, boot, recovery or system partitions. A bad committed replacement has no
+device-local rollback path: if the new client cannot reconnect, recovery
+requires ADB.
 
 This document defines the initial architecture and implementation direction. Details that depend on real Echo Dot hardware should be validated experimentally rather than treated as assumptions.
+
+The single-agent deployment decision supersedes the multi-copy recovery
+contracts recorded in earlier finished plans. Those historical plans are kept
+unchanged as execution records; their slot, pre-commit health, local recovery
+component and device-local fallback requirements were superseded before the
+deployment implementation began and are not current design requirements.
 
 ---
 
@@ -33,8 +45,10 @@ This document defines the initial architecture and implementation direction. Det
 - Provide a simple web management UI.
 - Provide a host-side CLI for installation, configuration and diagnostics.
 - Support **gateway-managed agent updates** after initial provisioning.
-- Use **application-level A/B slots** so a failed agent release can be rolled back without ADB.
-- Automatically roll back an agent that crashes or fails to become healthy after activation.
+- Safely verify, stage and atomically replace the single installed agent under
+  `/data`.
+- Make recovery limits explicit: a connected client can receive an older
+  release, while an agent that cannot reconnect requires ADB recovery.
 - Support manual and automated/staged fleet rollout policies.
 - Make Windows + WSL2 development fast and practical.
 - Make most gateway work testable without physical Echo hardware.
@@ -51,7 +65,8 @@ This document defines the initial architecture and implementation direction. Det
 - Perfect far-field tuning before the basic end-to-end voice loop works.
 - Building a general home-automation protocol.
 - Updating FireOS/system/boot partitions during ordinary Echo Satellite agent updates.
-- Automatically updating the low-level recovery/supervisor mechanism before the agent OTA path is proven safe.
+- Building an automatic device-local rollback mechanism or preserved agent
+  fallback.
 
 ---
 
@@ -110,8 +125,9 @@ There are two different uses of voice activity detection in the system:
 1. **Wake VAD — device-local, always-on.** It helps decide whether a wake-word score is credible speech and should be allowed to trigger.
 2. **Command endpointing — after a wake/button trigger.** It decides when the user's spoken command has ended so STT can proceed.
 
-For v0.1, command endpointing runs on the device after a local wake/button trigger.
-Only the completed active-turn audio window is sent upstream.
+For v0.1, command endpointing runs on the device after a local wake/button
+trigger. Active-turn audio streams upstream while the window is open, and the
+device closes that window when endpointing decides the command is complete.
 
 The two functions have separate configuration and thresholds.
 
@@ -172,67 +188,69 @@ Each device announces what it supports. Example:
     "wake.local.openwakeword",
     "wake.local.microwakeword",
     "wake.local.vad",
-    "update.ab.v1"
+    "update.single.v1"
   ]
 }
 ```
 
 Normal product behaviour is negotiated by capability, not by checks such as `version >= X`.
 
-Release manifests may still declare minimum protocol or supervisor compatibility because those are **installation safety constraints**, not runtime feature negotiation.
+Release manifests may still declare minimum protocol compatibility because it
+is an **installation safety constraint**, not runtime feature negotiation.
 
 ### 3.7 Agent updates are application-level, not FireOS OTA
 
-Echo Satellite A/B slots refer to two copies of the **Echo Satellite agent binary** under `/data`, not Android A/B partitions and not Amazon's FireOS OTA mechanism.
+Echo Satellite replaces one **Echo Satellite agent binary** under `/data`. This
+is not Android partition updating and not Amazon's FireOS OTA mechanism.
 
-A normal agent update must never require writing the Echo's bootloader, boot image, recovery or system firmware.
+A normal agent update must never write the Echo's bootloader, boot image,
+recovery or system partition.
 
-### 3.8 The updater must survive the binary it is updating
+### 3.8 The gateway owns desired version; the device owns safe installation
 
-The component that decides whether a new agent boot succeeded cannot live only inside that same replaceable agent binary.
+The gateway selects and records the desired agent version. The device does not
+poll external release sources or choose its own release.
 
-A small stable supervisor/bootstrap hook must live outside the A/B agent slots and be capable of:
+Before replacing the installed binary, the device must:
 
-- starting the selected slot;
-- observing trial state;
-- detecting startup/health failure;
-- restoring the previous slot;
-- keeping a small persistent recovery log.
+- fetch the signed manifest, signature and artifact from authenticated URLs;
+- validate manifest compatibility and require offer metadata to match it;
+- verify sufficient free space, exact size, SHA-256 and production signature;
+- write and fsync a same-directory `.part` staging file;
+- atomically rename that verified file over the installed `echod`;
+- fsync the containing directory where supported;
+- request a controlled restart.
 
-The supervisor should be intentionally small and change rarely.
+Any failure before the atomic rename leaves the currently installed executable
+untouched. After that rename succeeds, the replacement is committed: there is
+no preserved fallback binary or automatic device-local recovery.
 
-### 3.9 Never destroy the rollback path before the replacement is proven
+### 3.9 Recovery is deliberately operator-assisted
 
-When updating the inactive slot:
+When the agent remains connected, gateway rollback means deploying a previous
+signed compatible release through the same installation flow. It does not mean
+switching to a preserved local copy, and downgrade deployment must not be
+blocked merely because its semantic version is lower.
 
-- keep the existing inactive binary untouched while downloading;
-- write the replacement to a separate `.part`/staging path;
-- verify the full artifact;
-- atomically promote the staged file into the inactive slot;
-- only then activate the slot.
+If a committed agent cannot start or reconnect, the gateway cannot repair it.
+An operator must use ADB and `echoctl update install` to install a known-good
+signed release. The initial bootstrap and operational documentation must keep
+that recovery route available and tested.
 
-A failed transfer must leave both the current running agent and the previous rollback candidate usable.
+### 3.10 The launcher is not recovery infrastructure
 
-### 3.10 New binaries run on trial before being committed
-
-A successful process start is not sufficient proof of a good deployment.
-
-After activating a new slot, it remains **on trial** until it demonstrates critical health such as:
-
-- process remains alive;
-- required local hardware initialization succeeds;
-- configuration loads;
-- gateway discovery/static configuration succeeds;
-- secure gateway connection succeeds;
-- protocol `hello`/`welcome` handshake succeeds.
-
-Only then should the trial be committed. If the trial times out or repeatedly crashes, the supervisor restores the previous slot.
+A minimal Magisk `service.d` launcher starts the single installed `echod`,
+restarts a controlled update exit immediately, and applies bounded exponential
+backoff to unexpected repeated exits. It does not inspect update health, choose
+versions, alter installed files, or perform rollback.
 
 ### 3.11 Hardware-independent development where possible
 
 The protocol and gateway should be testable against a simulated device (`dotsim`) that feeds WAV files instead of microphone hardware and writes playback audio to disk instead of a speaker.
 
-The simulator must also emulate update states, reconnects and rollbacks so the gateway's rollout logic can be tested without intentionally breaking a real Echo.
+The simulator must also emulate verified staging, replacement, restart,
+reconnect, failure and offline-after-replacement outcomes so the gateway's
+rollout logic can be tested without intentionally breaking a real Echo.
 
 ### 3.12 Zero-configuration local discovery, explicit configuration when needed
 
@@ -263,9 +281,7 @@ Primary implementation reference for:
 - host-side installer UX;
 - ADB-based development workflow;
 - safe download/staging of agent binaries;
-- size + SHA-256 verification;
-- trial/commit semantics;
-- boot-hook rollback concepts.
+- size + SHA-256 verification.
 
 EchoLocal already provides a useful Go-native local wake stack and supports both openWakeWord and microWakeWord model kinds. Echo Satellite should reuse/adapt those low-level pieces rather than inventing a separate wake inference stack.
 
@@ -274,7 +290,9 @@ VAD gate. Echo Satellite therefore ships an additional adapted local level-VAD
 component; §26 records why a pure-Go Silero runtime is blocked and why this is
 not Silero-equivalent.
 
-EchoLocal's updater is also a useful reference for a key safety rule: download completely, verify size/hash, retain the old binary, and treat the new binary as on trial until it has run long enough to be trusted. Echo Satellite should extend that idea with gateway-handshake health rather than using uptime alone.
+EchoLocal's updater remains a useful reference for downloading completely and
+verifying size/hash before installation. Its retained-binary and boot-hook
+recovery model is not part of Echo Satellite's approved single-agent design.
 
 ### openWakeWord
 
@@ -306,20 +324,17 @@ Useful reference for:
 - capability negotiation;
 - management dashboard patterns;
 - operational lessons from real Echo hardware;
-- **application-level A/B agent slots**;
-- controller-managed fleet OTA;
-- inactive-slot transfer and verification;
-- atomic active-slot symlink switching;
-- automatic rollback after repeated fast starts;
-- manual instant rollback to the preserved slot;
+- controller-managed fleet deployment;
+- transfer and verification before replacement;
 - release discovery and controller-side artifact caching;
 - keeping provisioning-time payloads in sync after deployment.
 
-EchoMuse's controller-side wake architecture is not the target architecture for Echo Satellite, but its A/B OTA architecture is directly relevant.
+EchoMuse's controller-side wake architecture and its multi-copy OTA recovery
+model are not the target architectures for Echo Satellite. The useful update
+lessons are gateway ownership of releases, pre-install verification and
+operational reconciliation.
 
-A key lesson from EchoMuse is that A/B here means two application binaries such as `server_a` and `server_b`, selected through a stable symlink. It does **not** mean Android/FireOS partition A/B.
-
-Another important operational lesson is that anything placed on the Dot only during provisioning will eventually drift unless it has a reconciliation/update path. Echo Satellite should therefore treat the agent binary, wake assets, configuration and supervisor/bootstrap assets as separately versioned desired state.
+Another important operational lesson is that anything placed on the Dot only during provisioning will eventually drift unless it has a reconciliation/update path. Echo Satellite should therefore treat the agent binary, wake assets, configuration and launcher assets as separately versioned desired state.
 
 ---
 
@@ -337,11 +352,10 @@ Another important operational lesson is that anything placed on the Dot only dur
 +------------------------------+  WSS  +--------------------------------+
 | Echo Dot Gen 2               |<----->|         Voice Gateway          |
 |                              |       |                                |
-| stable supervisor            |       | mDNS advertisement             |
-|   +-> echod -> echod_a       |       | device manager                 |
-|   |           echod_b        |       | turn/conversation managers     |
-|   |                          |       | endpointed-turn receiver         |
-|   +-> trial/rollback state   |       | STT/TTS + assistant routing    |
+| Magisk launcher -> echod     |       | mDNS advertisement             |
+| single binary under /data    |       | device manager                 |
+| verified atomic replacement |       | turn/conversation managers     |
+|                              |       | endpointed-turn receiver       |
 |------------------------------|       | Update Manager                 |
 | mDNS discovery               |       | Release Source(s)              |
 | mic capture                  |       | Artifact Cache                 |
@@ -385,18 +399,19 @@ release source / local uploaded build
   -> Gateway Update Manager
   -> cache + verify release artifact
   -> select eligible device(s)
-  -> device stages artifact into inactive A/B slot
-  -> verify size + SHA-256 + signature
-  -> atomic slot activation
-  -> clean restart
-  -> new agent enters trial
-  -> local init + secure gateway handshake
-  -> explicit healthy/commit
+  -> device verifies manifest, compatibility and free space
+  -> download artifact to echod.part
+  -> verify exact size + SHA-256 + signature
+  -> fsync and atomically replace echod
+  -> persist installed-release metadata
+  -> controlled exit; Magisk launcher restarts echod
+  -> new agent reconnects and reports its version/build
 
-failure before commit
-  -> stable supervisor restores previous slot
-  -> device reconnects on known-good version
-  -> gateway records rolled_back
+failure before atomic replacement
+  -> installed echod remains unchanged
+
+bad committed replacement that cannot reconnect
+  -> operator restores a known-good signed release with ADB
 ```
 
 ---
@@ -416,7 +431,7 @@ echo-satellite/
 │   │   ├── audio/
 │   │   ├── endpointing/       # post-wake command endpointing
 │   │   ├── wake/              # local wake engines, wake VAD, models
-│   │   ├── update/            # staging, verification, slots, trial client
+│   │   ├── update/            # staging, verification, atomic installation
 │   │   ├── buttons/
 │   │   ├── led/
 │   │   ├── mixer/
@@ -443,7 +458,7 @@ echo-satellite/
 │   └── store/
 │
 ├── device_payloads/
-│   └── supervisor/            # stable external supervisor/bootstrap hook
+│   └── launcher/              # minimal Magisk service.d launcher
 │
 ├── services/
 │   └── speech-worker/         # optional Python ML worker
@@ -456,19 +471,21 @@ echo-satellite/
 ├── testdata/
 │   ├── audio/
 │   ├── wake/
-│   └── updates/               # manifests + failure/rollback fixtures
+│   └── updates/               # manifests + deployment failure fixtures
 └── README.md
 ```
 
-Keeping the first versions in one repository simplifies coordinated protocol, supervisor and agent changes.
+Keeping the first versions in one repository simplifies coordinated protocol,
+launcher and agent changes.
 
 ---
 
-## 7. Device Agent (`echod`) and Stable Supervisor
+## 7. Device Agent (`echod`) and Launcher
 
 ### 7.1 `echod` responsibilities
 
-`echod` runs as a supervised service on the rooted Echo Dot.
+`echod` runs as a service on the rooted Echo Dot, started by a minimal Magisk
+launcher.
 
 It should:
 
@@ -487,9 +504,10 @@ It should:
 - apply volume/config changes;
 - render semantic LED states;
 - report health and logs;
-- stage and verify agent updates when instructed by the gateway;
-- request a controlled restart after activating a new slot;
-- explicitly mark an on-trial release healthy only after critical initialization and gateway handshake.
+- stage, verify and atomically install agent updates when instructed by the
+  gateway;
+- persist installed-release metadata;
+- request a controlled restart after committing a replacement.
 
 ### 7.2 Audio strategy
 
@@ -506,68 +524,42 @@ ALSA mic
 
 For openWakeWord-compatible models, retain the reference 16 kHz PCM expectations where practical.
 
-### 7.3 Agent slots
+### 7.3 Installed agent layout
 
 Proposed application layout:
 
 ```text
 /data/local/bin/
-  echod -> echod_a          # stable symlink / launcher target
-  echod_a                   # one full agent binary
-  echod_b                   # other full agent binary
+  echod                     # single installed agent
+  echod.part                # temporary same-directory staging path
 
 /data/local/etc/echo-satellite/
-  update-state.json         # pending/trial metadata
-  supervisor.log            # small bounded recovery log
+  installed-release.json    # installed version/build/digest metadata
   config.*
   credentials/
   wake-models/
 ```
 
-The exact path can change after hardware validation, but the semantics should remain the same.
+The exact path can change only if hardware validation requires it; the
+single-installed-binary and same-directory atomic-replacement semantics remain.
+The `.part` file is never a runnable fallback and is removed or replaced on the
+next safe installation attempt.
 
-The symlink target identifies the active slot. The other slot is the rollback/update slot.
+### 7.4 Minimal Magisk launcher
 
-### 7.4 Stable supervisor
+A small `service.d` shell script lives outside the agent binary. It should:
 
-A minimal root-capable supervisor/startup hook must live outside `echod_a` and `echod_b`.
-
-It should:
-
-- resolve the active slot;
-- verify that the selected target exists and is executable before launching it;
+- verify that `/data/local/bin/echod` exists and is executable before launch;
 - start `echod`;
-- distinguish ordinary operational exits from an update trial failure;
-- count repeated fast exits during trial;
-- enforce a trial deadline;
-- revert the active symlink when trial failure criteria are reached;
-- restart the known-good slot;
-- keep a bounded persistent recovery log under `/data`;
-- never depend on the gateway being reachable in order to roll back.
+- restart the documented controlled-update exit immediately;
+- apply bounded exponential backoff to unexpected repeated exits;
+- log only enough bounded information to diagnose launch/restart failures.
 
-This supervisor is recovery infrastructure. It should be kept small enough to reason about and test independently.
+It must not inspect deployment health, select a release, rewrite the installed
+binary or perform rollback. Launcher reliability and restart behaviour must be
+qualified on the rooted Dot (§26).
 
-### 7.5 Trial health
-
-A newly activated slot is not committed merely because it stayed alive for N seconds.
-
-An update should be considered healthy only after the new agent can demonstrate at least:
-
-```text
-process running
-local configuration loaded
-critical hardware initialized sufficiently for normal operation
-gateway discovered/resolved or explicit endpoint loaded
-TLS/authentication succeeded
-protocol hello/welcome completed
-reported expected running version/build identity
-```
-
-The agent can then write/emit a local `trial_healthy` marker/event. The supervisor removes pending trial state only after this condition.
-
-A timeout protects against a binary that stays alive but can no longer join the control plane.
-
-### 7.6 Device state
+### 7.5 Device state
 
 ```text
 idle
@@ -578,7 +570,6 @@ muted
 offline
 error
 updating
-update_trial
 ```
 
 Wake tone/LED feedback should happen immediately on the device after local detection instead of waiting for gateway latency.
@@ -685,14 +676,13 @@ gateway:
 
 ```text
 Device boots
-  -> supervisor selects active agent slot
+  -> Magisk launcher starts the installed echod
   -> echod initializes mic + local wake VAD + wake engine
   -> load explicit/previous gateway configuration
   -> if necessary discover gateway over mDNS
   -> connect/authenticate over WSS
   -> hello(device id, version, capabilities, wake config, update state)
   <- welcome/config
-  -> if on trial and critical checks passed: commit/mark healthy
   -> idle; local wake stack continues
 ```
 
@@ -730,9 +720,7 @@ update.accept / update.reject
 update.progress
 update.staged
 update.restarting
-update.trial
 update.confirmed
-update.rolled_back
 update.failed
 
 button
@@ -768,9 +756,9 @@ Maintains:
 - connected devices;
 - capabilities;
 - running agent version/build;
-- active/inactive slot metadata;
-- update capability/supervisor version;
-- pending trial/update status;
+- installed-release metadata;
+- single-agent update capability;
+- current update status;
 - installed/active wake-model metadata;
 - local wake-VAD configuration/status;
 - current voice state;
@@ -792,11 +780,12 @@ IDLE
 
 The gateway never transitions `IDLE -> LISTENING` because of wake inference of its own; it does so only after `turn.start` from a device or simulator.
 
-### 9.4 Command Endpointing
+### 9.4 Command-audio receiver
 
-Consumes only active-turn audio and decides when the spoken command is complete.
-
-The implementation may use a VAD model, silence timing, streaming STT information or a combination. It is distinct from local wake VAD.
+Receives active-turn audio while the device-controlled window is open and
+validates its protocol framing for downstream STT. The gateway does not decide
+when the spoken command is complete or close the input window. Command
+endpointing runs on the device and remains distinct from wake VAD.
 
 ### 9.5 Speech Router
 
@@ -821,27 +810,28 @@ Responsibilities:
 - verify artifact metadata/signatures before offering a release;
 - compare running versus desired releases;
 - enforce update channel/policy;
-- ensure target device capabilities and supervisor compatibility;
+- ensure target device capability and release compatibility;
 - create deployment records;
 - issue update offers;
-- monitor progress, reconnect, trial, confirmation and rollback;
+- monitor progress, restart, reconnect, confirmation and failure;
 - limit update concurrency;
 - support canary/staged deployments;
-- stop or pause rollout on failures/rollbacks;
-- expose manual rollback;
+- stop or pause rollout on failures or clients that do not reconnect;
+- deploy a previous signed compatible release as gateway rollback when the
+  client remains reachable;
 - keep release notes and deployment outcomes available in the UI.
 
 The Dot should not independently poll GitHub for releases. The gateway is the fleet control plane and performs external release discovery once for the whole deployment.
 
 ---
 
-## 10. Agent A/B Update Architecture
+## 10. Single-Agent Update Architecture
 
 ### 10.1 Scope
 
-**A/B deployment applies only to the Echo Satellite agent and closely related application assets.**
-
-It is not an Android A/B partition design and is not a replacement for the original rooting/unbrick process.
+**Deployment replaces only the Echo Satellite agent under `/data`.** It is not
+an Android partition update and is not a replacement for the original
+rooting/unbrick process.
 
 Once a device is bootstrapped, ordinary releases should operate entirely from writable application state under `/data` whenever possible.
 
@@ -858,97 +848,79 @@ Conceptual server message:
     "build_id": "git-abc123",
     "size": 12849320,
     "sha256": "...",
-    "signature": "...",
     "protocol_min": 1,
     "protocol_max": 1,
-    "supervisor_min": 1,
     "architecture": "linux-arm64"
   },
-  "artifact_url": "https://gateway/.../artifacts/01J...?token=..."
+  "artifact_url": "https://gateway/.../artifacts/01J...?token=...",
+  "manifest_url": "https://gateway/.../manifests/01J...?token=...",
+  "signature_url": "https://gateway/.../manifests/01J...sig?token=..."
 }
 ```
 
-The artifact URL should be short-lived and scoped to the deployment/device.
+All three URLs should be short-lived and scoped to the deployment/device. The
+offer's version, build ID, size and SHA-256 must exactly match the verified
+manifest; unsigned offer metadata is not authoritative.
 
 ### 10.3 Device-side staging flow
 
 ```text
 receive update.offer
   -> verify update capability and local eligibility
-  -> determine active slot A/B
-  -> choose inactive slot
+  -> fetch manifest + detached signature
+  -> verify signature and manifest compatibility
+  -> require offer metadata to match the manifest
   -> verify sufficient free space
-  -> download to inactive.part
+  -> download to /data/local/bin/echod.part
   -> stream-compute SHA-256
   -> verify expected size
-  -> verify release signature
-  -> fsync staged file
-  -> atomically replace inactive slot
-  -> fsync relevant directory/state where practical
-  -> persist pending deployment metadata
-  -> atomically flip active symlink
-  -> request graceful restart
+  -> chmod and fsync staged executable
+  -> atomically rename echod.part over echod
+  -> fsync containing directory where supported
+  -> persist installed-release metadata
+  -> report restarting
+  -> exit with the controlled update code
+  -> Magisk launcher starts the installed echod
 ```
 
-At no point should the currently running slot be overwritten.
+Before the atomic rename, every rejection or interruption leaves the installed
+`echod` pathname untouched. The running process may continue from its unlinked
+inode after rename until controlled exit, but the old executable is not retained
+as a recovery copy.
 
-The previous inactive slot should remain untouched until the complete new artifact has been verified. A broken/interrupted transfer therefore cannot erase the only fallback copy.
+### 10.4 Commit and reconnect
 
-### 10.4 Trial and commit
+The atomic rename commits the new agent. After restart, the new process reports
+its installed version/build in `hello`; the gateway uses that reconnect as the
+deployment confirmation signal. A successful pre-install verification does not
+guarantee that the committed process will start or reconnect.
 
-After restart:
+If it does not reconnect, the gateway marks the attempt failed/offline, stops
+the rollout according to policy and surfaces that ADB recovery is required. It
+does not claim that the device restored itself.
+
+### 10.5 Recovery and rollback
+
+There is no device-local fallback executable after commit and no automated
+recovery from a bad replacement.
 
 ```text
-supervisor launches newly active slot
-  -> trial marker is present
-  -> echod initializes
-  -> echod connects/authenticates to gateway
-  -> hello identifies expected build/version
-  -> gateway replies successfully
-  -> echod records local trial health
-  -> update.confirmed emitted
-  -> supervisor commits slot by clearing trial state
+connected agent
+  -> gateway offers a previous signed compatible release
+  -> device performs the normal verified replacement flow
+
+agent cannot start or reconnect
+  -> operator connects with ADB
+  -> echoctl update install <known-good-release>
+  -> launcher starts the restored echod
+  -> operator verifies reconnect and reported version/build
 ```
 
-Trial health should be a local decision that incorporates gateway handshake. The gateway's acknowledgement is useful evidence, but rollback must still work if the gateway disappears.
+Gateway rollback is therefore a new audited deployment whose target is an older
+release, not a local switch. Version comparison must allow an authenticated,
+verified downgrade.
 
-### 10.5 Automatic rollback
-
-Rollback conditions should include:
-
-- repeated fast process exits during trial;
-- process cannot be started/executed;
-- trial deadline expires without healthy marker;
-- optionally, explicit local fatal initialization result before the deadline.
-
-On rollback:
-
-```text
-supervisor
-  -> verify fallback slot exists/executable
-  -> atomically flip active symlink to previous slot
-  -> persist rollback reason
-  -> launch/restart previous agent
-
-previous agent reconnects
-  -> reports rolled-back deployment/version/reason
-  -> gateway marks deployment rolled_back
-```
-
-The supervisor must never flip to a missing/non-executable fallback slot.
-
-### 10.6 Manual rollback
-
-If the previous slot is still present and valid, an administrator should be able to request an immediate rollback without retransferring a binary.
-
-```text
-gateway -> update.rollback request
-Dot/supervisor -> switch to previous slot -> restart -> reconnect
-```
-
-The manual operation should still record a deployment/audit event.
-
-### 10.7 Update state machine
+### 10.6 Update state machine
 
 Suggested gateway-visible state:
 
@@ -960,44 +932,35 @@ downloading
 verifying
 staged
 restarting
-trial
 confirmed
 failed
-rolled_back
 cancelled
 ```
 
 A device should report the current phase and progress when meaningful.
 
-### 10.8 Updating ancillary device payloads
+### 10.7 Updating ancillary device payloads
 
-Not every device-side file belongs in the agent A/B slot.
+Not every device-side file belongs to the agent installation.
 
 Treat deployed state explicitly:
 
 ```text
-agent binary           -> A/B OTA
+agent binary           -> verified single-agent replacement
 wake/VAD models        -> authenticated asset synchronization
 normal device config   -> config synchronization
 credentials            -> explicit secure rotation/provisioning
-supervisor/bootstrap   -> rare separately versioned recovery update
+Magisk launcher        -> bootstrap/explicit maintenance only
 ```
 
 Every payload installed during bootstrap must either be immutable by design or have a reconciliation path for already-deployed devices.
 
-### 10.9 Supervisor updates
+### 10.8 Launcher maintenance
 
-The stable supervisor is more dangerous to update than `echod` because it is the recovery mechanism.
-
-For v0.1:
-
-- install it during bootstrap;
-- expose/report a supervisor version;
-- keep it backward-compatible with agent slots where practical;
-- do not automatically update it as part of normal agent rollout;
-- require an explicit admin operation for supervisor changes until a separately safe recovery strategy is proven.
-
-The agent may report that a release requires a newer supervisor; the gateway should then mark that release ineligible instead of attempting it.
+The launcher is installed during bootstrap and is not delivered through the
+agent update path. Changes require an explicit operator maintenance action and
+real-device qualification. The launcher has no version compatibility field in
+the agent release manifest.
 
 ---
 
@@ -1025,7 +988,6 @@ Conceptual manifest:
   "sha256": "...",
   "protocol_min": 1,
   "protocol_max": 1,
-  "supervisor_min": 1,
   "released_at": "2026-08-18T00:00:00Z"
 }
 ```
@@ -1055,7 +1017,9 @@ The gateway should download an immutable release artifact once and reuse it acro
 
 Cache entries should be trusted only when their recorded digest still matches the bytes on disk. An incomplete/corrupt cache must be treated as a cache miss, not as a valid release.
 
-Keep at least the currently rolling release and a recent rollback release in the cache. Cache eviction is an optimization and must not change device rollback safety because each Dot preserves its own previous slot.
+Keep at least the currently rolling release and a recent known-good release in
+the cache. That older release enables a connected-device downgrade or an ADB
+recovery install; cache eviction must not be presented as device-local safety.
 
 ---
 
@@ -1091,7 +1055,7 @@ Even a small household fleet benefits from sequential deployment:
 ```text
 new release
   -> canary device
-  -> wait for confirmed healthy state
+  -> wait for confirmed reconnect on the expected version/build
   -> next device(s)
   -> remaining fleet
 ```
@@ -1100,11 +1064,11 @@ Initial default:
 
 ```text
 max_concurrent_updates = 1
-stop_on_rollback = true
 stop_on_failure = true
 ```
 
-If the canary rolls back or fails, the gateway should stop the remaining automatic rollout and surface the reason.
+If the canary fails or does not reconnect within policy, the gateway should stop
+the remaining automatic rollout and surface the reason and recovery route.
 
 ### 12.4 Eligibility
 
@@ -1112,9 +1076,8 @@ Before deploying, check:
 
 - device online and approved;
 - not currently in a voice turn/update;
-- `update.ab.v1` capability present;
+- `update.single.v1` capability present;
 - architecture matches;
-- supervisor meets release minimum;
 - protocol compatibility is plausible for the new agent/gateway pair;
 - enough device free space if known;
 - desired version differs from running version;
@@ -1267,8 +1230,7 @@ name
 active_conversation_id
 version
 build_id
-active_slot
-supervisor_version
+installed_release_digest
 last_seen
 config
 ```
@@ -1422,7 +1384,7 @@ qualification are documented in [`docs/wake-model-training.md`](wake-model-train
 
 Wake/VAD models are device assets, not agent releases.
 
-Initially, `echoctl` may install/update them. The gateway should later synchronize selected/required signed or otherwise trusted assets independently of the agent A/B binary.
+Initially, `echoctl` may install/update them. The gateway should later synchronize selected/required signed or otherwise trusted assets independently of the agent binary.
 
 Model binaries must not be fetched from arbitrary unauthenticated locations by the Dot.
 
@@ -1457,9 +1419,8 @@ Raw continuous microphone audio must not be uploaded merely for wake scoring.
 
 - online/offline state;
 - agent version/build and capabilities;
-- active A/B slot;
-- supervisor version;
-- update/trial state;
+- installed-release digest;
+- current update state;
 - discovered/paired gateway state;
 - current voice state;
 - volume/mute;
@@ -1513,14 +1474,12 @@ The UI must not offer gateway-side wake or wake-VAD modes.
 - release channel;
 - manual/auto policy;
 - per-device current and desired version;
-- active/inactive slot information;
-- supervisor compatibility;
 - queued/current deployment progress;
-- trial/confirmed/failed/rolled-back state;
-- last failure/rollback reason;
+- restarting/confirmed/failed state;
+- last failure and whether ADB recovery is required;
 - deploy selected release to one device;
 - staged fleet deploy;
-- explicit rollback;
+- deploy a previous release to a connected device;
 - `allow_unsigned_dev_builds` warning when enabled.
 
 A React/Vite SPA can be embedded in the production Go gateway binary.
@@ -1557,7 +1516,7 @@ echoctl buttons test
 
 echoctl update status [device]
 echoctl update deploy <version> [device]
-echoctl update rollback [device]
+echoctl update install <release>     # local/ADB recovery
 echoctl update channel <stable|beta|dev> [device]
 ```
 
@@ -1581,20 +1540,18 @@ find ADB device
   -> verify expected hardware/root
   -> inspect existing installation
   -> back up changed state
-  -> install stable supervisor/bootstrap hook
-  -> install first echod into slot A
-  -> initialize slot B with a valid fallback or known-good copy
-  -> create active symlink -> A
+  -> install minimal Magisk service.d launcher
+  -> install first echod at /data/local/bin/echod
   -> install default wake/VAD assets
   -> push config/credentials
   -> handle conflicting Alexa services as required
-  -> start supervisor/echod
+  -> start launcher/echod
   -> discover/configure gateway
   -> verify gateway connectivity
   -> microphone test
   -> local wake + VAD test
   -> speaker test
-  -> verify A/B/update status
+  -> verify installed version/build and update status
 ```
 
 Rooting/flashing remains separate from normal application installation.
@@ -1621,7 +1578,7 @@ Initial model:
 
 Milestone 2 uses a shared bearer token solely for development. TLS verification remains enabled by default; `tls_skip_verify` is a visible development-only escape hatch, not a production configuration. Per-device credentials and mTLS remain required follow-up work before production use.
 
-The update subsystem is security-sensitive: permission to deploy an agent is effectively permission to run privileged code on a rooted Dot. Update/deployment endpoints must therefore require strong administrator authorization and should have an audit trail.
+The update subsystem is security-sensitive: permission to deploy an agent is effectively permission to run privileged code on a rooted Dot. Update/deployment endpoints must therefore require strong administrator authorization and an audit trail.
 
 Local wake detection and local wake VAD provide a privacy benefit: while idle, microphone audio needed for activation decisions stays on the device rather than being continuously sent to the gateway.
 
@@ -1677,14 +1634,11 @@ deployment_id
 device_id
 from_version
 to_version
-from_slot
-to_slot
 state
 progress
 started_at
-trial_started_at
 confirmed_at
-rollback_reason
+recovery_required
 last_error
 ```
 
@@ -1726,22 +1680,20 @@ device_id
 deployment_id
 running_version
 running_build_id
-active_slot
-inactive_slot
-supervisor_version
 phase
 bytes_downloaded
 artifact_size
 verification_result
+atomic_replace_completed
 restart_requested
-trial_started
-trial_health_conditions
 confirmed
-rollback_reason
+reconnected_version
+recovery_required
 failure_stage
 ```
 
-The stable supervisor should keep a **small bounded persistent log under `/data`** containing only recovery decisions and trial/rollback events. It should not duplicate verbose agent logs or be allowed to fill device storage.
+The agent and launcher should keep bounded deployment/restart logs under `/data`.
+They must not duplicate verbose logs or be allowed to fill device storage.
 
 Raw microphone audio is not stored by default.
 
@@ -1776,12 +1728,13 @@ Capabilities to simulate:
 - reconnects;
 - network failures;
 - partial/older capability sets;
-- A/B update capability;
+- single-agent update capability;
 - update download progress;
 - successful restart into new version;
-- trial timeout;
+- verification failure before replacement;
 - repeated crash/fast-exit behaviour;
-- automatic rollback and reconnect on previous version.
+- failure to reconnect after committed replacement;
+- connected-device downgrade deployment and ADB recovery outcomes.
 
 Gateway integration tests should be able to drive a fake fleet such as:
 
@@ -1789,8 +1742,9 @@ Gateway integration tests should be able to drive a fake fleet such as:
 3 devices
   -> deploy release
   -> device 1 confirms
-  -> device 2 rolls back
-  -> verify device 3 is not updated when stop_on_rollback=true
+  -> device 2 fails to reconnect
+  -> verify device 3 is not updated when stop_on_failure=true
+  -> record that device 2 requires ADB recovery
 ```
 
 The simulator does not need to run a real wake model for ordinary gateway tests. Local wake/VAD correctness is tested separately with device/unit/audio-fixture tests.
@@ -1842,14 +1796,15 @@ build echod
   -> run mic/wake/VAD fixture tests
 ```
 
-Once A/B OTA is working, normal iteration on agent builds should also support:
+Once single-agent deployment is working, normal iteration on agent builds should
+also support:
 
 ```text
 build signed/dev release bundle
   -> upload to local gateway
-  -> deploy to test Dot inactive slot
-  -> observe restart/trial
-  -> automatic rollback if bad
+  -> deploy to the test Dot
+  -> observe atomic replacement, restart and reconnect
+  -> use ADB recovery if a bad committed build cannot reconnect
 ```
 
 This becomes the preferred device iteration loop because it exercises the same mechanism used in real deployments.
@@ -1888,12 +1843,12 @@ Satellite deployment is a different lifecycle problem from gateway deployment:
 
 ```text
 one-time rooted bootstrap via ADB
-  -> install supervisor + initial A/B agent layout + credentials
+  -> install launcher + single agent + credentials
 
 normal operation
   -> gateway-managed configuration/assets
-  -> gateway-managed A/B agent updates
-  -> no routine ADB requirement
+  -> gateway-managed single-agent updates
+  -> ADB required only when a committed client cannot reconnect
 ```
 
 The documentation should keep these two lifecycle paths separate.
@@ -1938,24 +1893,22 @@ Success criterion: the Dot repeatedly detects a selected wake model locally, wit
 - binary turn-audio framing;
 - `dotsim` integration tests.
 
-### Milestone 3 — Safe supervisor + A/B agent OTA and command-audio conditioning
+### Milestone 3 — Single-agent deployment and command-audio conditioning
 
 Implement this **before Hermes integration** so subsequent device development can use the production update path.
 
-- define A/B slot layout under `/data`;
-- implement stable external supervisor/bootstrap hook;
-- implement staging into inactive slot;
+- qualify and implement the minimal Magisk launcher;
+- define the single installed-agent layout under `/data`;
+- implement same-directory `.part` staging;
 - size + SHA-256 verification;
 - release signature verification;
-- atomic promotion + symlink flip;
-- graceful restart;
-- trial marker/state;
-- explicit health after gateway handshake;
-- trial timeout;
-- automatic rollback;
-- persistent supervisor recovery log;
-- manual rollback;
-- simulator update/rollback tests.
+- manifest/offer compatibility verification;
+- atomic executable replacement and directory persistence where supported;
+- controlled exit and launcher restart;
+- installed version/build reporting after reconnect;
+- connected-device downgrade deployment;
+- ADB recovery installation and runbook;
+- simulator replacement/reconnect/failure tests.
 - characterize all seven physical microphone channels on the qualified Dot;
 - retain the single capture path while comparing channel 0, an unsteered mix,
   and a steerable delay-and-sum beamformer;
@@ -1965,9 +1918,11 @@ Implement this **before Hermes integration** so subsequent device development ca
   including continuous quiet speech, deliberate silence, and the 60-second
   hard timeout.
 
-Success criteria: deliberately broken agent builds recover to the previous slot
-without ADB; and the qualified command-audio path preserves continuous quiet
-speech until the 60-second cap while still endpointing deliberate silence.
+Success criteria: a valid build replaces the installed agent and reconnects; a
+pre-commit failure leaves the installed agent untouched; a deliberately broken
+committed build is recoverable through the documented ADB path; and the
+qualified command-audio path preserves continuous quiet speech until the
+60-second cap while still endpointing deliberate silence.
 
 ### Milestone 4 — Gateway Update Manager
 
@@ -1980,10 +1935,12 @@ speech until the 60-second cap while still endpointing deliberate silence.
 - desired-version model;
 - one-device manual deploy;
 - staged fleet deploy with concurrency 1;
-- stop-on-failure/rollback;
+- stop-on-failure or missing reconnect;
 - update status API.
 
-Success criterion: a gateway can safely update several devices sequentially and stop a rollout after a simulated/real rollback.
+Success criterion: a gateway can update several devices sequentially, stop a
+rollout after a simulated/real failure or missing reconnect, and deploy an
+older release to a connected client.
 
 ### Milestone 5 — Local-wake speech loop
 
@@ -2033,14 +1990,14 @@ local VAD + wake
 - assistant configuration;
 - conversation management;
 - releases/deployments/update policy;
-- rollout/rollback status.
+- rollout/recovery status.
 
 ### Milestone 10 — Productization
 
 - robust bootstrap/install;
 - wake/VAD asset reconciliation;
 - automated stable-channel policy after sufficient validation;
-- supervisor upgrade strategy;
+- launcher maintenance strategy;
 - stronger device authentication/mTLS if useful;
 - Raspberry Pi/ARM64 validation;
 - multi-Dot arbitration;
@@ -2059,13 +2016,16 @@ local VAD + wake
 7. Define `_echo-satellite._tcp.local.` discovery record and implement gateway advertisement.
 8. Implement minimal gateway WSS server and satellite discovery/connection.
 9. Define `turn.start` + binary audio framing.
-10. Implement the stable supervisor and application A/B slot layout.
-11. Implement verified staging and local trial/rollback logic.
+10. Qualify the Magisk launcher, `/data` atomic replacement, controlled restart,
+    free-space margin and ADB recovery path on the Dot.
+11. Implement verified same-directory staging, atomic replacement, installed
+    metadata and controlled restart.
 12. Define signed release manifest format and local dev-build override.
 13. Add update protocol states and `dotsim` update simulations.
 14. Implement gateway release cache + one-device deploy.
-15. Deliberately deploy a broken binary and prove automatic rollback without ADB.
-16. Add staged fleet rollout and stop-on-rollback behaviour.
+15. Deliberately deploy a broken binary and prove the documented ADB recovery.
+16. Add staged fleet rollout, stop-on-failure behaviour and connected-device
+    downgrade deployment.
 17. On accepted local wake, stream command PCM to gateway and write it to WAV.
 18. Implement device-local command endpointing.
 19. Implement gateway-to-Echo speaker playback and semantic LED state.
@@ -2073,7 +2033,9 @@ local VAD + wake
 21. Add mock assistant end-to-end loop.
 22. Add Hermes after hardware, local wake/VAD, transport and safe agent OTA are proven.
 
-This sequence avoids debugging wake inference, update recovery, audio transport, STT and Hermes simultaneously, while delivering a safe remote iteration path early.
+This sequence avoids debugging wake inference, deployment, audio transport, STT
+and Hermes simultaneously, while delivering a verified remote iteration path
+with an explicit ADB recovery boundary early.
 
 ---
 
@@ -2133,17 +2095,24 @@ This sequence avoids debugging wake inference, update recovery, audio transport,
   1,024-frame periods and four periods. Canonical audio remains 16 kHz mono;
   resampling and channel duplication occur on-device immediately before the
   PCM sink. Evidence: [`docs/device-diagnostics.md`](device-diagnostics.md).
-- Which supervisor/startup integration is safest on the existing Magisk-rooted FireOS installation?
-- Can agent binaries and both slots live entirely under `/data` without modifying `/system` during normal updates?
-- What exact trial timeout and fast-exit limits are reliable on Echo Dot Gen 2 boot/startup timing?
-- Which local health checks are required before committing a new slot?
-- What filesystem primitives on this FireOS build give reliable atomic symlink/file replacement and persistence semantics?
-- What free-space floor should be required before staging a release?
+- Does a minimal Magisk `service.d` launcher reliably start the agent after boot,
+  restart the controlled-update exit immediately and back off repeated crashes?
+- Does same-directory atomic replacement of `/data/local/bin/echod` provide the
+  required rename and persistence semantics on this FireOS filesystem?
+- Which controlled exit code and launcher observation reliably distinguish an
+  update restart from an unexpected exit?
+- What free-space floor and margin safely cover the staged artifact, metadata
+  and filesystem overhead?
+- Can the documented `echoctl update install` procedure reliably restore a
+  known-good signed agent over ADB after the installed agent cannot start or
+  reconnect?
 - Which mDNS implementation works reliably on FireOS without unnecessary native dependencies?
 - Whether Docker/WSL mDNS advertisement is visible on the physical LAN in the preferred deployment.
 - Whether Hermes should provide STT/TTS initially or only assistant reasoning.
 
-Resolve these with focused diagnostics, intentionally broken update builds and recordings rather than hidden complexity inside the daemon.
+Resolve these with focused diagnostics, intentionally broken update builds,
+ADB recovery drills and recordings rather than hidden complexity inside the
+daemon.
 
 ---
 
@@ -2166,14 +2135,14 @@ Resolve these with focused diagnostics, intentionally broken update builds and r
 | Audio frames | binary PCM during active turns |
 | Gateway | Go |
 | Command endpointing | device-local, separate from wake VAD |
-| Agent update architecture | **application-level A/B slots under `/data`** |
-| Agent supervisor | small stable external startup/recovery component |
+| Agent update architecture | **single agent under `/data`, verified same-directory atomic replacement** |
+| Agent launcher | minimal Magisk `service.d` launcher; no health or recovery decisions |
 | Update orchestration | gateway Update Manager |
 | Artifact delivery | authenticated HTTPS from gateway |
 | Artifact integrity | size + SHA-256 |
 | Production artifact trust | signed release manifest, preferably Ed25519 |
-| Rollback | automatic on trial failure + explicit manual rollback |
-| Rollout | staged; concurrency 1 initially; stop on failure/rollback |
+| Rollback | deploy a previous release while connected; ADB recovery otherwise |
+| Rollout | staged; concurrency 1 initially; stop on failure/missing reconnect |
 | Release sources | GitHub Releases + local uploaded builds |
 | Persistence | SQLite |
 | Management UI | React + Vite, embedded in Go |
@@ -2184,7 +2153,7 @@ Resolve these with focused diagnostics, intentionally broken update builds and r
 | Assistant | Hermes adapter + mock adapter |
 | Local dev | Windows + WSL2 |
 | Device bootstrap/recovery | Windows ADB called from WSL |
-| Normal device iteration | gateway A/B OTA once implemented |
+| Normal device iteration | gateway single-agent deployment once implemented |
 | Integration testing | `dotsim` + WAV/wake/VAD/update fixtures |
 | Gateway deployment | Docker Compose |
 
@@ -2240,17 +2209,16 @@ paired Echo Dot
     |
     | download + verify artifact
     v
-inactive echod slot
+verified echod.part
     |
-    | atomic activation
-    v
-stable supervisor
-    |
-    | trial -> healthy -> commit
-    |       or
-    | trial failure -> previous slot rollback
+    | atomic rename over installed echod
     v
 running echod
 ```
 
-The key update rule is that **the gateway manages desired software state, while the Dot independently preserves a known-good local recovery path**. A bad release or unreachable gateway must not require ADB to restore the previously working agent.
+The key update rule is that **the gateway owns desired agent version, while the
+Dot owns safe pre-install verification and atomic replacement**. Failure before
+the rename leaves the installed agent untouched. After a bad committed agent,
+gateway rollback means deploying a previous release only while the client is
+reachable; if it cannot reconnect, recovery requires ADB. Normal deployment
+must never write FireOS, bootloader, boot-image, recovery or system partitions.

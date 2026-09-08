@@ -1,10 +1,10 @@
 # Milestone 3 — Single-agent deployment and command-audio conditioning
 
-**Status:** future
-**Owner or active agent:** unassigned
+**Status:** in-progress
+**Owner or active agent:** unassigned (Task 1 completed by Codex)
 **Created:** 2026-09-08
 **Updated:** 2026-09-08
-**Started:** not started
+**Started:** 2026-09-08
 **Completed:** not completed
 
 ## Objective
@@ -188,7 +188,7 @@ through a stable profile name.
 
 ### Task 1: Replace the A/B design with the single-agent boundary
 
-**Status:** not started
+**Status:** completed 2026-09-08
 
 **Purpose:** Make repository sources of truth match the newly approved recovery
 model before code is changed.
@@ -864,7 +864,45 @@ completion evidence names which checks ran on real hardware.
   recovery otherwise.
 - 2026-09-08: Recovery-first sequencing and the full command-audio conditioning
   scope were retained.
+- 2026-09-08: Task 1 started. Claimed by Codex; no active-plan scope conflict
+  was present. The repository Git metadata was read-only, so `git mv` could not
+  create its index lock; the tracked plan was moved to `in-progress/` with a
+  filesystem move instead.
+- 2026-09-08: Task 1 replaced the live multi-copy recovery architecture in
+  `docs/DESIGN.md` and `AGENTS.md`, added the single-agent transition and
+  architectural flow to `docs/protocol.md`, and left obsolete wire identifiers
+  explicitly labeled as a superseded snapshot for Task 3.
+- 2026-09-08: Fresh-context review findings were triaged as **fix**: corrected a
+  pre-existing gateway/device endpointing contradiction, narrowed legacy
+  protocol labeling to obsolete elements, distinguished supervisor fields from
+  the launcher, recorded historical-plan supersession, and made the deployment
+  audit trail mandatory. Follow-up review confirmed those fixes and identified
+  two wording ambiguities; both were also fixed. No findings were declined or
+  postponed.
+- 2026-09-08: Task 1 completed after the exact terminology check, a broader
+  obsolete-term sweep, `git diff --check`, the required pre-review checks, and
+  final `make verify` all passed. No hardware was required or used.
 
 ## Completion evidence
 
-No completion evidence yet. The plan remains `future` until execution begins.
+- Task 1 exact `rg -n "A/B|inactive slot|trial health|automatic rollback|supervisor_min|update\\.ab" AGENTS.md docs/DESIGN.md docs/protocol.md` — passed
+  2026-09-08; its three matches are only `update.ab` and `supervisor_min` in
+  `docs/protocol.md`'s explicitly labeled legacy/superseded wire snapshot,
+  retained until Task 3 changes the Go wire types and documentation together.
+- Supplemental case-insensitive scan for slot names/fields, pre-commit phases,
+  device-local recovery phases, supervisor fields and capability variants —
+  passed 2026-09-08; all matches are confined to that same labeled legacy wire
+  snapshot.
+- `make fmt-check` — passed 2026-09-08.
+- `make lint` — passed 2026-09-08 with 0 issues.
+- `make test` — passed 2026-09-08 with race detection and 70.3% total coverage.
+- `git diff --check` — passed 2026-09-08.
+- `make verify` — passed 2026-09-08; formatting, lint, fresh race tests and all
+  four host builds succeeded.
+- Fresh-context review and targeted re-review — completed 2026-09-08; all five
+  original findings and both follow-up wording findings were fixed, with none
+  declined or postponed.
+- Hardware verification — not applicable to Task 1; no hardware was used.
+
+Remaining plan tasks require later implementation and hardware sessions, so the
+plan remains `in-progress`.
