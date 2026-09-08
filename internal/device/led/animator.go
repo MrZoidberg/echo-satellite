@@ -56,12 +56,15 @@ func (a *Animator) Run(ctx context.Context) error {
 		state := a.state
 		off := a.off
 		if a.changed {
-			a.from = a.last
 			a.target = Frame{}
-			if !off {
+			if off {
+				a.steps = 0
+			} else {
+				a.from = a.last
 				a.target = Render(state, 0)
+				a.steps = transitionFrames
 			}
-			a.steps, a.stateTick, a.changed = transitionFrames, 0, false
+			a.stateTick, a.changed = 0, false
 		}
 		frame := a.target
 		if a.steps > 0 {

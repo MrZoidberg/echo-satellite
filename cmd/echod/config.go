@@ -144,7 +144,7 @@ func validateOpts(o opts) (opts, error) {
 	if o.StatsInterval <= 0 {
 		return opts{}, errors.New("stats interval must be positive")
 	}
-	if o.LogMaxBytes < 3 {
+	if o.LogFile != "" && o.LogMaxBytes < 3 {
 		return opts{}, errors.New("log max bytes must be at least 3")
 	}
 	if o.DiscoveryTimeout <= 0 {

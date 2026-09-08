@@ -70,7 +70,7 @@ func run(o opts) (returnErr error) {
 	defer stop()
 	cleanup, err := prepareDeviceStartup(o)
 	if err != nil {
-		return fmt.Errorf("prepare device startup: %w", err)
+		return err
 	}
 	defer func() {
 		returnErr = errors.Join(returnErr, cleanup())

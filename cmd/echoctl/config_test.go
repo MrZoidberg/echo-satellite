@@ -158,6 +158,14 @@ func TestParseArgs_Commands(t *testing.T) {
 	})
 }
 
+func TestParseArgs_LogCapacityIsRequiredOnlyForFileLogs(t *testing.T) {
+	_, _, err := parseArgs([]string{"--log-max-bytes=0", "version"})
+	require.NoError(t, err)
+
+	_, _, err = parseArgs([]string{"--log-file=echoctl.log", "--log-max-bytes=2", "version"})
+	require.Error(t, err)
+}
+
 func TestVerifyRelease_ValidBundle(t *testing.T) {
 	var out bytes.Buffer
 	err := verifyRelease(&out, verifyCommand{

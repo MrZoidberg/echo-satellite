@@ -33,6 +33,14 @@ func TestConfigure_RejectsInvalidOptions(t *testing.T) {
 	t.Parallel()
 	_, err := Configure(Options{Format: "xml", MaxBytes: 1})
 	require.Error(t, err)
-	_, err = Configure(Options{Format: FormatText, MaxBytes: 0})
+	_, err = Configure(Options{Format: FormatText, File: "command.log", MaxBytes: 2})
 	require.Error(t, err)
+}
+
+func TestConfigure_AllowsStderrOnlyWithDefaultCapacity(t *testing.T) {
+	t.Parallel()
+
+	closeLog, err := Configure(Options{Format: FormatText})
+	require.NoError(t, err)
+	require.NoError(t, closeLog())
 }

@@ -108,7 +108,6 @@ func TestParseArgs_RejectsInvalidWakeDurationsAndChannels(t *testing.T) {
 		{"--vad-lookback-ms=-1"},
 		{"--vad-lookback-ms=10001"},
 		{"--stats-interval=0s"},
-		{"--log-max-bytes=0"},
 		{"--discovery-timeout-ms=0"},
 		{"--mic-channels=7"},
 		{"--mic-channels=1,1"},
@@ -116,6 +115,14 @@ func TestParseArgs_RejectsInvalidWakeDurationsAndChannels(t *testing.T) {
 		_, err := parseArgs(args)
 		require.Error(t, err, args)
 	}
+}
+
+func TestParseArgs_LogCapacityIsRequiredOnlyForFileLogs(t *testing.T) {
+	_, err := parseArgs([]string{"--log-max-bytes=0"})
+	require.NoError(t, err)
+
+	_, err = parseArgs([]string{"--log-file=echod.log", "--log-max-bytes=2"})
+	require.Error(t, err)
 }
 
 func TestParseArgs_Flags(t *testing.T) {

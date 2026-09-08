@@ -135,6 +135,34 @@ Expected: `echod` records preparation actions, disables the firmware boot animat
 
 **Verification:** Host LED/controller tests plus a qualified-Dot stopped-gateway and reconnect observation.
 
+#### Task 3 review remediation: PR #6 correctness findings
+
+**Status:** completed 2026-09-08
+
+**Purpose:** Resolve each open automated-review finding without broadening the operational logging or device-startup scope.
+
+**Dependencies:** Tasks 1–2.
+
+**Hardware required:** no.
+
+**Files or components:** `internal/device/led/animator.go`, `internal/device/led/animator_test.go`, `internal/logging/logging.go`, `internal/logging/logging_test.go`, `cmd/echod/main.go`, and `cmd/echod/main_test.go`.
+
+**Concrete changes:** Make `Animator.Off` write an all-zero frame on its next tick instead of fading; require the three-byte rotating-log capacity only when a file sink is selected, from every command parser through the shared logger; and preserve a single `prepare device startup` error context at the composition boundary. Add deterministic regression tests for all three rules.
+
+**Expected outcome:** The PR feedback is addressed with behavior matching the documented LED and logging contracts and without duplicate error prefixes.
+
+**Verification:**
+
+```sh
+go test -race ./internal/device/led ./internal/logging ./cmd/echod
+make fmt-check
+make lint
+make test
+make verify
+```
+
+Expected: all commands exit 0.
+
 ## Cross-task risks
 
 - Excessive protocol logs could expose private data or flood storage; use explicit metadata allowlists, bounded fields, and the rotation cap.
@@ -153,6 +181,7 @@ Expected: `echod` records preparation actions, disables the firmware boot animat
 - [x] `echod` performs and tests ordered LED/service/mute preparation and cleanup.
 - [x] A qualified Dot confirms the startup behavior and the observed contract is documented.
 - [x] Fresh-context review is triaged and `make verify` passes.
+- [x] PR #6 review findings are dispositioned with regression coverage and final checks.
 
 ## Progress log
 
@@ -161,6 +190,9 @@ Expected: `echod` records preparation actions, disables the firmware boot animat
 - 2026-09-07: Fresh-context review triage: fixed log-sink close-on-error-exit, `dotsim` URL credential redaction, joined normal-shutdown cleanup errors, gateway/dotsim environment-over-INI precedence, and parser validation for the three rotating generations. Postponed: a composition-root ordering test for startup preparation and a multi-frame startup animation; the current host primitive verifies ordered actions, but the qualified-Dot run must establish the actual visual behavior. The `--mic-from-file` startup-preparation exemption remains intentional for host fixture execution and is a follow-up to replace with an explicit fixture-only composition mode.
 - 2026-09-07: Qualified Dot `G090LF0964060EHP` diagnostic passed. GPIO 444 was exported because it was initially absent, set to `0`, and remained `0` through shutdown; `echod` stopped `ledcontroller` and `mdnsd`, set `boot_animation=0`, and rendered frame `000006` around the ring. It browsed `wlan0`, discovered Windows gateway `CORUSANT.local` at `192.168.110.127:8770`, and completed `hello`/`welcome`/`config.result` with the `.m2/device-token` and development TLS bypass. The temporary token and logs were removed; both FireOS services were explicitly restarted afterward. Signal shutdown currently reports a canceled gateway session (exit 1) even though cleanup completed.
 - 2026-09-08: Final fresh-context review fixed gateway safe protocol type/size logs and consistent `echoctl` rotation-cap parsing. It also confirmed LED-service ownership, transition behavior, and GPIO cleanup. A qualified-Dot final check observed blue comet at one second, all-off after the four-second boot period plus successful `hello`/`welcome`/`config.result`, GPIO 444 preserved at `0`, and explicit `ledcontroller`/`mdnsd` recovery. The stopped-gateway and reconnect visual checks were also performed during implementation.
+- 2026-09-08: Reopened for PR #6 automated-review remediation. Task 3 addresses the three unresolved findings with host-only regression coverage; no hardware behavior changes beyond the documented immediate `Off` clear are required.
+- 2026-09-08: Fresh-context review found conditional-capacity validation was incomplete in `echod`, `gateway`, and `echoctl`, and that the LED regression test did not synchronize a pre-`Off` non-zero frame. Task 3 now covers those parser layers and uses deterministic tick sequencing.
+- 2026-09-08: Task 3 completed. The three original PR findings were fixed. Fresh-context review initially found the parser and LED-test gaps; both were fixed and the reviewer found no remaining implementation defects. No findings were declined or postponed.
 
 ## Completion evidence
 
@@ -172,4 +204,10 @@ Expected: `echod` records preparation actions, disables the firmware boot animat
 - Qualified-Dot diagnostic — passed 2026-09-07; service, GPIO, LED-frame, discovery, and handshake observations are recorded in `docs/device-diagnostics.md`.
 - `make verify` — passed 2026-09-08 (format, lint, race suite, host builds, and portability builds).
 - Fresh-context final review — all findings triaged and fixed 2026-09-08.
+- `go test -race -count=20 ./internal/device/led` — passed 2026-09-08; immediate clear and rendering-resume regression test remained stable across repeated schedules.
+- `go test -race ./internal/device/led ./internal/logging ./cmd/echod ./cmd/gateway ./cmd/echoctl` — passed 2026-09-08.
+- `make fmt-check` and `make lint` — passed 2026-09-08.
+- `make test` — passed 2026-09-08 (race suite; 70.3% total coverage).
+- `make verify` — passed 2026-09-08 (format, lint, race suite, host builds, and portability builds).
+- Fresh-context Task 3 review — completed and all findings fixed 2026-09-08; no follow-up items remain.
 - No unresolved limitations remain for this plan.

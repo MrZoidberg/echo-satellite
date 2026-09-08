@@ -19,6 +19,14 @@ func TestParseArgs_Defaults(t *testing.T) {
 	assert.False(t, o.AllowUnsignedDevBuilds, "the dev escape hatch is off unless asked for")
 }
 
+func TestParseArgs_LogCapacityIsRequiredOnlyForFileLogs(t *testing.T) {
+	_, err := parseArgs([]string{"--log-max-bytes=0"})
+	require.NoError(t, err)
+
+	_, err = parseArgs([]string{"--log-file=gateway.log", "--log-max-bytes=2"})
+	require.Error(t, err)
+}
+
 func TestAdvertisement(t *testing.T) {
 	o, err := parseArgs([]string{"--server-id=home-gateway", "--hostname=echo-gateway.local."})
 	require.NoError(t, err)

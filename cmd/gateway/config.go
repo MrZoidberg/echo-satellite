@@ -103,8 +103,8 @@ func parseArgs(args []string) (opts, error) {
 }
 
 func validateOpts(o opts) (opts, error) {
-	if o.LogMaxBytes < 3 {
-		return opts{}, errors.New("log max bytes must be at least 3")
+	if o.LogFile != "" && o.LogMaxBytes < 3 {
+		return opts{}, fmt.Errorf("log max bytes must be at least %d", 3)
 	}
 	return o, nil
 }

@@ -4,7 +4,6 @@
 package logging
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -34,12 +33,12 @@ func Configure(opts Options) (func() error, error) {
 	if opts.Format == "" {
 		opts.Format = FormatText
 	}
-	if opts.MaxBytes <= 0 {
-		return nil, errors.New("configure logging: max bytes must be positive")
-	}
 	var writer io.Writer = os.Stderr
 	closeLog := func() error { return nil }
 	if opts.File != "" {
+		if opts.MaxBytes < 3 {
+			return nil, fmt.Errorf("configure logging: max bytes must be at least %d", 3)
+		}
 		rotating, err := system.NewRotatingWriter(opts.File, opts.MaxBytes, 3)
 		if err != nil {
 			return nil, fmt.Errorf("open log file: %w", err)
