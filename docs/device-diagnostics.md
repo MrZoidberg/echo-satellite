@@ -5,6 +5,44 @@ Dot Gen 2 used during Milestone 1. Commands that access audio devices run
 through Magisk because the normal ADB shell is UID 2000 and the PCM nodes are
 owned by `system:audio`.
 
+## `echod` startup ownership
+
+`echod` now owns the preparation that was previously manual: it snapshots the
+existing GPIO 444 microphone-cut value, stops `ledcontroller` and `mdnsd`,
+disables `boot_animation`, clears the ring, and renders the initial project
+frame before microphone capture or gateway workers begin. On setup failure and
+normal shutdown it clears the project frame and restores exactly the captured
+GPIO value. It deliberately does **not** restart FireOS services on exit,
+because doing so would race project LED ownership.
+
+If recovery is required, stop `echod`, then explicitly run `start
+ledcontroller` and `start mdnsd` only if they were running beforehand, or
+reboot.
+
+### 2026-09-07 qualified startup and Windows gateway check
+
+On rooted Dot `G090LF0964060EHP`, GPIO 444 was initially unexported. Exporting
+it, selecting output mode, and writing `0` enabled microphone capture. During
+`echod` startup, `ledcontroller` and `mdnsd` both reported `stopped`,
+`boot_animation` was `0`, and the LED sysfs frame was the blue idle value
+`000006` for every segment. After a signal-driven shutdown GPIO remained `0`.
+
+The device browsed on `wlan0`, discovered the Windows gateway `CORUSANT.local`
+at `192.168.110.127:8770`, and completed the `hello`, `welcome`, and
+`config.result` exchange using the development certificate bypass. The
+diagnostic token and logs were removed from `/data/local/tmp`; recovery
+explicitly restarted both FireOS services, which then reported `running`.
+
+### 2026-09-08 final LED service check
+
+The final ARM64 build rendered a nonzero blue comet frame one second after
+start, while `ledcontroller` was stopped. After the four-second minimum boot
+period and successful `hello`/`welcome`/`config.result` exchange with the
+Windows gateway, the frame was all zeros. Signal shutdown preserved GPIO 444
+at `0`; explicit recovery restored both `ledcontroller` and `mdnsd` to
+`running`. Earlier stopped-gateway and reconnect observations confirmed the
+red offline and black connected states with smooth transitions.
+
 ## Task 25 closeout status
 
 The primary and additional-speaker `okay_nabu` qualifications and all Task 25

@@ -6,11 +6,14 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"strings"
 
+	"github.com/MrZoidberg/echo-satellite/internal/logging"
 	"github.com/MrZoidberg/echo-satellite/internal/release"
 )
 
@@ -27,8 +30,16 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := dispatch(os.Stdout, command, o); err != nil {
+	closeLog, err := logging.Configure(logging.Options{Format: o.LogFormat, File: o.LogFile, MaxBytes: o.LogMaxBytes, Debug: o.Dbg})
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "echoctl: %v\n", err)
+		os.Exit(1)
+	}
+	slog.Debug("echoctl command", "command", command)
+	runErr := dispatch(os.Stdout, command, o)
+	closeErr := closeLog()
+	if runErr != nil || closeErr != nil {
+		fmt.Fprintf(os.Stderr, "echoctl: %v\n", errors.Join(runErr, closeErr))
 		os.Exit(1)
 	}
 }

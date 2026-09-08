@@ -115,6 +115,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.closeProtocol(conn, "invalid hello")
 		return
 	}
+	s.logger.Debug("received protocol message", "type", env.Type, "bytes", len(data))
 
 	session := &session{server: s, conn: conn, metadata: Metadata{DeviceID: hello.DeviceID, LastSeen: s.now(), Capabilities: append(protocol.Capabilities(nil), hello.Capabilities...), WakeConfig: hello.WakeConfig}, done: make(chan struct{})}
 	config := s.config(hello.DeviceID)
@@ -137,6 +138,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if type_ == websocket.MessageBinary {
+			s.logger.Debug("received protocol message", "type", "audio.pcm", "bytes", len(data))
 			if !session.binary(data) {
 				s.closeProtocol(conn, "invalid PCM frame")
 				return
@@ -268,6 +270,7 @@ func (s *session) write(ctx context.Context, kind protocol.MessageType, id strin
 	if err := s.conn.Write(ctx, websocket.MessageText, data); err != nil {
 		return fmt.Errorf("write control frame: %w", err)
 	}
+	s.server.logger.Debug("sent protocol message", "type", kind, "bytes", len(data))
 	return nil
 }
 
@@ -296,6 +299,7 @@ func (s *session) control(ctx context.Context, data []byte) bool {
 		s.server.closeProtocol(s.conn, "invalid control frame")
 		return false
 	}
+	s.server.logger.Debug("received protocol message", "type", env.Type, "bytes", len(data))
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.metadata.LastSeen = s.server.now()

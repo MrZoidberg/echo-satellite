@@ -59,10 +59,12 @@ type opts struct {
 	MicChannels       string           `long:"mic-channels" env:"ECHOD_MIC_CHANNELS" default:"0" description:"comma-separated physical microphone channel indices"`
 	MicFromFile       string           `long:"mic-from-file" env:"ECHOD_MIC_FROM_FILE" description:"replay paced WAV or raw Dot microphone PCM instead of ALSA"`
 	LEDRoot           string           `long:"led-root" env:"ECHOD_LED_ROOT" default:"/sys/bus/i2c/devices/0-003f" description:"LED controller sysfs root"`
+	GPIORoot          string           `long:"gpio-root" env:"ECHOD_GPIO_ROOT" default:"/sys/class/gpio" description:"GPIO sysfs root used to preserve the microphone cut state"`
 	StatsInterval     time.Duration    `long:"stats-interval" env:"ECHOD_STATS_INTERVAL" default:"30s" description:"periodic wake statistics interval"`
 	AlwaysScoreWake   configurableBool `long:"always-score-wake" env:"ECHOD_ALWAYS_SCORE_WAKE" default:"true" optional:"true" optional-value:"true" description:"score wake on every step instead of pre-gating on instantaneous VAD"`
 	LogFile           string           `long:"log-file" env:"ECHOD_LOG_FILE" description:"bounded rotating structured log file"`
 	LogMaxBytes       int64            `long:"log-max-bytes" env:"ECHOD_LOG_MAX_BYTES" default:"10485760" description:"total byte cap across rotating logs"`
+	LogFormat         string           `long:"log-format" env:"ECHOD_LOG_FORMAT" default:"text" choice:"text" choice:"json" description:"operational log encoding"`
 	Dbg               bool             `long:"dbg" env:"DEBUG" description:"debug logging" no-ini:"true"`
 	Version           bool             `long:"version" short:"V" description:"show version and exit" no-ini:"true"`
 }
@@ -142,8 +144,8 @@ func validateOpts(o opts) (opts, error) {
 	if o.StatsInterval <= 0 {
 		return opts{}, errors.New("stats interval must be positive")
 	}
-	if o.LogMaxBytes <= 0 {
-		return opts{}, errors.New("log max bytes must be positive")
+	if o.LogMaxBytes < 3 {
+		return opts{}, errors.New("log max bytes must be at least 3")
 	}
 	if o.DiscoveryTimeout <= 0 {
 		return opts{}, errors.New("discovery timeout must be positive")

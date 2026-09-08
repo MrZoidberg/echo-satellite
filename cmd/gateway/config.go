@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"reflect"
 	"strconv"
 	"strings"
 
@@ -30,8 +31,11 @@ type opts struct {
 
 	AllowUnsignedDevBuilds bool `long:"allow-unsigned-dev-builds" env:"GATEWAY_ALLOW_UNSIGNED_DEV_BUILDS" description:"accept releases with no signature; development only"`
 
-	Dbg     bool `long:"dbg" env:"DEBUG" description:"debug logging" no-ini:"true"`
-	Version bool `long:"version" short:"V" description:"show version and exit" no-ini:"true"`
+	LogFile     string `long:"log-file" env:"GATEWAY_LOG_FILE" description:"bounded rotating operational log file"`
+	LogMaxBytes int64  `long:"log-max-bytes" env:"GATEWAY_LOG_MAX_BYTES" default:"10485760" description:"total byte cap across rotating logs"`
+	LogFormat   string `long:"log-format" env:"GATEWAY_LOG_FORMAT" default:"text" choice:"text" choice:"json" description:"operational log encoding"`
+	Dbg         bool   `long:"dbg" env:"DEBUG" description:"debug logging" no-ini:"true"`
+	Version     bool   `long:"version" short:"V" description:"show version and exit" no-ini:"true"`
 }
 
 // advertisement builds the mDNS instance this gateway would publish. TXT
@@ -85,13 +89,24 @@ func parseArgs(args []string) (opts, error) {
 		return opts{}, err
 	}
 	if probe.Config == "" {
-		return probe, nil
+		return validateOpts(probe)
 	}
 
 	if _, statErr := os.Stat(probe.Config); statErr != nil {
 		return opts{}, fmt.Errorf("read config %q: %w", probe.Config, statErr)
 	}
-	return parseInto(args, &probe.Config)
+	o, err := parseInto(args, &probe.Config)
+	if err != nil {
+		return opts{}, err
+	}
+	return validateOpts(o)
+}
+
+func validateOpts(o opts) (opts, error) {
+	if o.LogMaxBytes < 3 {
+		return opts{}, errors.New("log max bytes must be at least 3")
+	}
+	return o, nil
 }
 
 func parseInto(args []string, iniFile *string) (opts, error) {
@@ -102,11 +117,46 @@ func parseInto(args []string, iniFile *string) (opts, error) {
 		if err := flags.NewIniParser(p).ParseFile(*iniFile); err != nil {
 			return opts{}, fmt.Errorf("parse config %q: %w", *iniFile, err)
 		}
+		if err := applyEnvironment(&o); err != nil {
+			return opts{}, err
+		}
 	}
 	if _, err := p.ParseArgs(args); err != nil {
 		return opts{}, fmt.Errorf("parse arguments: %w", err)
 	}
 	return o, nil
+}
+
+func applyEnvironment(o *opts) error {
+	value := reflect.ValueOf(o).Elem()
+	typeOfOpts := value.Type()
+	for index := range value.NumField() {
+		name := typeOfOpts.Field(index).Tag.Get("env")
+		raw, found := os.LookupEnv(name)
+		if name == "" || !found {
+			continue
+		}
+		field := value.Field(index)
+		switch field.Kind() {
+		case reflect.String:
+			field.SetString(raw)
+		case reflect.Bool:
+			parsed, err := strconv.ParseBool(raw)
+			if err != nil {
+				return fmt.Errorf("parse environment %s: %w", name, err)
+			}
+			field.SetBool(parsed)
+		case reflect.Int, reflect.Int64:
+			parsed, err := strconv.ParseInt(raw, 10, field.Type().Bits())
+			if err != nil {
+				return fmt.Errorf("parse environment %s: %w", name, err)
+			}
+			field.SetInt(parsed)
+		default:
+			return fmt.Errorf("parse environment %s: unsupported option type %s", name, field.Type())
+		}
+	}
+	return nil
 }
 
 // isHelpRequest reports whether the parse error is go-flags printing help.

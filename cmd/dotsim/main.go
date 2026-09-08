@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
 	"path/filepath"
 	"time"
@@ -15,6 +16,7 @@ import (
 	deviceconfig "github.com/MrZoidberg/echo-satellite/internal/device/config"
 	"github.com/MrZoidberg/echo-satellite/internal/discovery"
 	"github.com/MrZoidberg/echo-satellite/internal/discovery/mdns"
+	"github.com/MrZoidberg/echo-satellite/internal/logging"
 	"github.com/MrZoidberg/echo-satellite/internal/protocol"
 )
 
@@ -33,19 +35,17 @@ func main() {
 		fmt.Printf("version: %s\n", revision)
 		return
 	}
-	setupLog(o.Dbg)
-	if err := run(o); err != nil {
-		slog.Error("dotsim failed", "error", err)
+	closeLog, err := logging.Configure(logging.Options{Format: o.LogFormat, File: o.LogFile, MaxBytes: o.LogMaxBytes, Debug: o.Dbg})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "dotsim: %v\n", err)
 		os.Exit(1)
 	}
-}
-
-func setupLog(dbg bool) {
-	level := slog.LevelInfo
-	if dbg {
-		level = slog.LevelDebug
+	runErr := run(o)
+	closeErr := closeLog()
+	if runErr != nil || closeErr != nil {
+		slog.Error("dotsim failed", "error", errors.Join(runErr, closeErr))
+		os.Exit(1)
 	}
-	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: level})))
 }
 
 func run(o opts) error {
@@ -85,12 +85,23 @@ func run(o opts) error {
 	if err != nil {
 		return fmt.Errorf("create gateway client: %w", err)
 	}
-	slog.Info("dotsim configuration", "revision", revision, "device_id", o.DeviceID, "protocol", protocol.ProtocolVersion, "discovery", o.Discover, "gateway_url", o.GatewayURL)
+	slog.Info("dotsim configuration", "revision", revision, "device_id", o.DeviceID, "protocol", protocol.ProtocolVersion, "discovery", o.Discover, "gateway_endpoint", safeGatewayEndpoint(o.GatewayURL))
 	err = session.Run(ctx)
 	if o.Once && errors.Is(err, context.Canceled) {
 		return nil
 	}
 	return fmt.Errorf("run gateway client: %w", err)
+}
+
+func safeGatewayEndpoint(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Host == "" {
+		return "configured"
+	}
+	return parsed.Scheme + "://" + parsed.Host
 }
 
 func wakeSummary(settings deviceconfig.Settings) protocol.WakeConfig {

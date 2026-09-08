@@ -6,7 +6,9 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -34,6 +36,53 @@ type runtimeDetector struct{ score float64 }
 
 func (d *runtimeDetector) Observe([]int16)      {}
 func (d *runtimeDetector) SpeechScore() float64 { return d.score }
+
+type indicatorStub struct {
+	mu    sync.Mutex
+	calls []string
+}
+
+func (s *indicatorStub) Set(state protocol.DeviceState) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls = append(s.calls, string(state))
+}
+func (s *indicatorStub) Off() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls = append(s.calls, "off")
+}
+func (s *indicatorStub) Calls() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.calls...)
+}
+
+func TestConnectionIndicator_BootTimeoutDisconnectAndReconnect(t *testing.T) {
+	original := connectionBootAnimationDuration
+	connectionBootAnimationDuration = time.Millisecond
+	t.Cleanup(func() { connectionBootAnimationDuration = original })
+	indicator := &indicatorStub{}
+	state := newConnectionIndicator(indicator)
+	require.Eventually(t, func() bool { return len(indicator.Calls()) == 2 }, time.Second, time.Millisecond)
+	assert.Equal(t, []string{"thinking", "offline"}, indicator.Calls())
+	state.SetConnected(true)
+	assert.Equal(t, []string{"thinking", "offline", "off"}, indicator.Calls())
+	state.SetConnected(false)
+	assert.Equal(t, []string{"thinking", "offline", "off", "offline"}, indicator.Calls())
+}
+
+func TestConnectionIndicator_HoldsBootAnimationUntilTimeoutWhenConnected(t *testing.T) {
+	original := connectionBootAnimationDuration
+	connectionBootAnimationDuration = 20 * time.Millisecond
+	t.Cleanup(func() { connectionBootAnimationDuration = original })
+	indicator := &indicatorStub{}
+	state := newConnectionIndicator(indicator)
+	state.SetConnected(true)
+	assert.Equal(t, []string{"thinking"}, indicator.Calls())
+	require.Eventually(t, func() bool { return len(indicator.Calls()) == 2 }, time.Second, time.Millisecond)
+	assert.Equal(t, []string{"thinking", "off"}, indicator.Calls())
+}
 
 func TestTurnCoordinator_WakePreRollJoinsNextFanoutFrameWithoutGap(t *testing.T) {
 	controller, err := endpointing.New(protocol.EndpointingConfig{SpeechThreshold: 0.5, SpeechOnsetMS: 160, TrailingSilenceMS: 1500, NoSpeechTimeoutMS: 3000, MaxTurnMS: 60000}, &runtimeDetector{})

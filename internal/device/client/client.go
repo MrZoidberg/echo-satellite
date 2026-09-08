@@ -307,6 +307,7 @@ func (c *Client) handshake(ctx context.Context, conn Connection, endpoint discov
 	if env.Type != protocol.TypeWelcome {
 		return fmt.Errorf("device client: first gateway frame must be welcome, got %q", env.Type)
 	}
+	c.opts.Logger.Debug("received protocol message", "type", env.Type, "bytes", len(payload))
 	var welcome protocol.Welcome
 	if err = env.DecodePayload(&welcome); err != nil {
 		return fmt.Errorf("decode welcome payload: %w", err)
@@ -389,6 +390,11 @@ func (c *Client) writeOutbound(ctx context.Context, conn Connection, item outbou
 	if err := conn.Write(ctx, item.type_, item.data); err != nil {
 		return fmt.Errorf("write outbound frame: %w", err)
 	}
+	if item.type_ == websocket.MessageBinary {
+		c.opts.Logger.Debug("sent protocol message", "type", "audio.pcm", "bytes", len(item.data))
+	} else {
+		c.opts.Logger.Debug("sent protocol message", "type", "control", "bytes", len(item.data))
+	}
 	if item.done != nil {
 		item.done()
 	}
@@ -411,6 +417,7 @@ func (c *Client) reader(ctx context.Context, conn Connection) error {
 		if err != nil {
 			return fmt.Errorf("decode gateway frame: %w", err)
 		}
+		c.opts.Logger.Debug("received protocol message", "type", env.Type, "bytes", len(payload))
 		switch env.Type {
 		case protocol.TypeConfig:
 			var value protocol.DeviceConfig
@@ -569,6 +576,7 @@ func (c *Client) writeControl(ctx context.Context, conn Connection, type_ protoc
 	if err := conn.Write(ctx, websocket.MessageText, data); err != nil {
 		return fmt.Errorf("write control frame: %w", err)
 	}
+	c.opts.Logger.Debug("sent protocol message", "type", type_, "bytes", len(data))
 	return nil
 }
 func (c *Client) disconnect(conn Connection) {

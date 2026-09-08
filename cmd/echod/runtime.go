@@ -28,6 +28,66 @@ type timedResolver struct {
 	timeout  time.Duration
 }
 
+var connectionBootAnimationDuration = 4 * time.Second
+
+// connectionIndicator owns the LED contract around gateway availability:
+// animated blue while booting, red while offline, and off while connected.
+type connectionIndicator struct {
+	animator     indicatorLED
+	mu           sync.Mutex
+	connected    bool
+	hasConnected bool
+	booting      bool
+	timer        *time.Timer
+}
+
+type indicatorLED interface {
+	Set(protocol.DeviceState)
+	Off()
+}
+
+func newConnectionIndicator(animator indicatorLED) *connectionIndicator {
+	indicator := &connectionIndicator{animator: animator, booting: true}
+	animator.Set(protocol.StateThinking)
+	indicator.timer = time.AfterFunc(connectionBootAnimationDuration, func() {
+		indicator.mu.Lock()
+		defer indicator.mu.Unlock()
+		indicator.booting = false
+		if indicator.connected {
+			indicator.animator.Off()
+		} else {
+			indicator.animator.Set(protocol.StateOffline)
+		}
+	})
+	return indicator
+}
+
+func (i *connectionIndicator) SetConnected(connected bool) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	i.connected = connected
+	if connected {
+		i.hasConnected = true
+		if !i.booting {
+			i.animator.Off()
+		}
+		return
+	}
+	if i.hasConnected {
+		i.booting = false
+		if i.timer != nil {
+			i.timer.Stop()
+		}
+		i.animator.Set(protocol.StateOffline)
+	}
+}
+
+func (i *connectionIndicator) IsBooting() bool {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	return i.booting
+}
+
 func (r timedResolver) Resolve(ctx context.Context, cfg discovery.Config, paired *discovery.Instance) (discovery.Endpoint, error) {
 	resolveCtx, cancel := context.WithTimeout(ctx, r.timeout)
 	defer cancel()
@@ -468,6 +528,17 @@ func runConnected(ctx context.Context, o opts) (returnErr error) {
 	if err != nil {
 		return fmt.Errorf("resolve identity: %w", err)
 	}
+	animator, clearLED, err := startWakeLED(o.LEDRoot)
+	if err != nil {
+		return err
+	}
+	defer func() { returnErr = errors.Join(returnErr, clearLED()) }()
+	var indicator *connectionIndicator
+	ledErr := make(chan error, 1)
+	if animator != nil {
+		indicator = newConnectionIndicator(animator)
+		go func() { ledErr <- animator.Run(ctx) }()
+	}
 	bootstrap := deviceconfig.Bootstrap()
 	bootstrap.Wake = o.wakeConfig()
 	if _, tokenErr := client.LoadToken(o.GatewayTokenFile); tokenErr != nil {
@@ -543,22 +614,22 @@ func runConnected(ctx context.Context, o opts) (returnErr error) {
 	}
 	state.swapWake = dynamicEngine.Swap
 	pipeline := wake.Pipeline{Engines: []wake.Engine{dynamicEngine}, VAD: vad, Gate: wake.Gate{Thresholds: wake.Thresholds{Wake: settings.Wake.Threshold, VAD: settings.Wake.VAD.Threshold}, MinInterval: time.Duration(settings.Wake.MinIntervalMS) * time.Millisecond}, Ring: ring, Stats: wake.NewStats(wake.StatsConfig{}), Config: settings.Wake, ConfigSource: func() wake.Config { return state.current().Wake }}
-	animator, clearLED, err := startWakeLED(o.LEDRoot)
-	if err != nil {
-		return err
-	}
-	defer func() { returnErr = errors.Join(returnErr, clearLED()) }()
 	turns.onIdle = func() {
 		state.applyPending()
-		if animator != nil {
-			animator.Set(protocol.StateIdle)
+		if animator != nil && turns.isConnected() && indicator != nil && !indicator.IsBooting() {
+			animator.Off()
 		}
 	}
 	resolver := timedResolver{resolver: discovery.NewResolver(mdns.NewDevice(), protocol.ProtocolVersion), timeout: time.Duration(o.DiscoveryTimeout) * time.Millisecond}
 	session, err := client.New(client.Options{Discovery: o.discoveryConfig(), HelloSource: func() protocol.Hello {
 		current := state.current()
 		return protocol.Hello{DeviceID: identity.DeviceID, AgentVersion: revision, Protocol: protocol.ProtocolVersion, Capabilities: announcedCapabilities(), WakeConfig: wakeSummary(current), ConfigVersion: current.Version}
-	}, Dialer: client.WSSDialer{}, Resolver: resolver, Pairings: discovery.PairingStore{Path: o.PairingState}, Config: state, TurnSource: turns, TokenPath: o.GatewayTokenFile, SkipTLSVerify: o.TLSSkipVerify, Logger: slog.Default(), SessionChanged: turns.SetConnected})
+	}, Dialer: client.WSSDialer{}, Resolver: resolver, Pairings: discovery.PairingStore{Path: o.PairingState}, Config: state, TurnSource: turns, TokenPath: o.GatewayTokenFile, SkipTLSVerify: o.TLSSkipVerify, Logger: slog.Default(), SessionChanged: func(connected bool) {
+		turns.SetConnected(connected)
+		if indicator != nil {
+			indicator.SetConnected(connected)
+		}
+	}})
 	if err != nil {
 		return fmt.Errorf("create gateway client: %w", err)
 	}
@@ -583,12 +654,19 @@ func runConnected(ctx context.Context, o opts) (returnErr error) {
 	}, func(workerCtx context.Context) error { return consumeWakeEvents(workerCtx, events, turns, animator) }, session.Run}
 	workers = append(workers, buttonWorkers...)
 	if animator != nil {
-		workers = append(workers, animator.Run)
+		workers = append(workers, func(workerCtx context.Context) error {
+			select {
+			case ledWorkerErr := <-ledErr:
+				return ledWorkerErr
+			case <-workerCtx.Done():
+				return nil
+			}
+		})
 	}
 	return runWakeWorkers(ctx, raw, workers)
 }
 
-func consumeWakeEvents(ctx context.Context, events <-chan wake.Event, turns *turnCoordinator, animator *led.Animator) error {
+func consumeWakeEvents(ctx context.Context, events <-chan wake.Event, turns *turnCoordinator, animator *led.Service) error {
 	for {
 		select {
 		case <-ctx.Done():

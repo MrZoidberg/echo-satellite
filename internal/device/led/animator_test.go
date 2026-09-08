@@ -28,6 +28,29 @@ func TestAnimator_AdvancesPatternOnEachTick(t *testing.T) {
 	assert.NotEqual(t, first, second)
 }
 
+func TestAnimator_OffClearsAndSetResumesRendering(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	for _, name := range []string{"frame", "led_current", "boot_animation"} {
+		require.NoError(t, os.WriteFile(filepath.Join(root, name), nil, 0o600))
+	}
+	ticks := make(chan time.Time, 2)
+	animator := NewAnimator(New(root), ticks)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- animator.Run(ctx) }()
+	ticks <- time.Now()
+	animator.Off()
+	ticks <- time.Now()
+	require.Eventually(t, func() bool {
+		contents, err := os.ReadFile(filepath.Join(root, "frame")) //nolint:gosec // Test reads a fixed path under its private temporary directory.
+		return err == nil && string(contents) == Frame{}.EncodeHex()+"\n"
+	}, time.Second, time.Millisecond)
+	animator.Set(protocol.StateOffline)
+	cancel()
+	require.NoError(t, <-done)
+}
+
 func waitForFrame(t *testing.T, path, previous string) string {
 	t.Helper()
 	deadline := time.Now().Add(time.Second)

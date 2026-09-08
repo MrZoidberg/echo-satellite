@@ -26,6 +26,15 @@ func TestRender_MutedIsVisuallyDistinctFromError(t *testing.T) {
 	assert.NotEqual(t, Render(protocol.StateError, 0), Render(protocol.StateError, 1), "error must blink")
 }
 
+func TestRender_OfflineIsRed(t *testing.T) {
+	offline := Render(protocol.StateOffline, 0)
+	for _, segment := range offline {
+		assert.Positive(t, segment.R)
+		assert.Zero(t, segment.G)
+		assert.Zero(t, segment.B)
+	}
+}
+
 func TestRender_AnimatedStatesAdvanceAndNegativeTicksAreSafe(t *testing.T) {
 	assert.NotEqual(t, Render(protocol.StateThinking, 0), Render(protocol.StateThinking, 1))
 	assert.NotEqual(t, Render(protocol.StateUpdating, 0), Render(protocol.StateUpdating, 1))
