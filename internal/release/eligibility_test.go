@@ -10,7 +10,7 @@ import (
 )
 
 func dot() Device {
-	return Device{Architecture: "linux-arm64", Protocol: protocol.ProtocolVersion, SupervisorVersion: 1}
+	return Device{Architecture: "linux-arm64", Protocol: protocol.ProtocolVersion}
 }
 
 func TestEligible_Valid(t *testing.T) {
@@ -18,17 +18,6 @@ func TestEligible_Valid(t *testing.T) {
 	require.NoError(t, err)
 
 	require.NoError(t, Eligible(m, dot()))
-}
-
-func TestEligible_SupervisorTooOld(t *testing.T) {
-	m, err := ParseManifest(readFixture(t, "supervisor-too-new", "manifest.json"))
-	require.NoError(t, err)
-
-	err = Eligible(m, dot())
-
-	require.Error(t, err)
-	require.ErrorIs(t, err, ErrSupervisorTooOld)
-	assert.Contains(t, err.Error(), "99")
 }
 
 func TestEligible_ArchitectureMismatch(t *testing.T) {

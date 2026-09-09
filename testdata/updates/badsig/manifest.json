@@ -7,6 +7,5 @@
   "sha256": "37d01c70b075c629cacba941873e3bc9907d6f7203aecd404f573b809f77ae46",
   "protocol_min": 1,
   "protocol_max": 1,
-  "supervisor_min": 1,
   "released_at": "2026-08-18T00:00:00Z"
 }

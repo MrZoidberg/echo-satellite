@@ -39,9 +39,6 @@ func buildFixtures(t *testing.T) map[string]fixtureFiles {
 	badSig, err := Sign(otherPriv, valid)
 	require.NoError(t, err)
 
-	supervisorTooNew := manifestFor(fixtureArtifact, "0.4.0")
-	supervisorTooNew.SupervisorMin = 99
-
 	unknownField := map[string]any{}
 	require.NoError(t, json.Unmarshal(marshalManifest(t, valid), &unknownField))
 	unknownField["rollout_channel"] = "beta"
@@ -73,10 +70,6 @@ func buildFixtures(t *testing.T) map[string]fixtureFiles {
 			"echod":         fixtureArtifact,
 			"manifest.json": marshalManifest(t, valid),
 			"manifest.pub":  pubEncoded,
-		},
-		"supervisor-too-new": {
-			"echod":         fixtureArtifact,
-			"manifest.json": marshalManifest(t, supervisorTooNew),
 		},
 		"unknown-field": {
 			"manifest.json": append(unknownFieldJSON, '\n'),

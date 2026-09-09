@@ -22,8 +22,8 @@ const (
 	CapAudioPlayback Capability = "audio.playback"
 	// CapCommandEndpointingLocal reports that command endpointing runs on-device.
 	CapCommandEndpointingLocal Capability = "command.endpointing.local"
-	// CapUpdateAB reports the device supports application-level A/B agent updates.
-	CapUpdateAB Capability = "update.ab"
+	// CapUpdateSingle reports the device supports single-agent atomic replacement.
+	CapUpdateSingle Capability = "update.single.v1"
 	// CapLED reports the device can display semantic LED states.
 	CapLED Capability = "led"
 	// CapButton reports the device can report action-button presses.

@@ -45,7 +45,7 @@ func TestVerifyManifest_ModifiedManifest(t *testing.T) {
 	sig, err := Sign(priv, m)
 	require.NoError(t, err)
 
-	m.SupervisorMin = 0 // an attacker relaxing an installation-safety constraint
+	m.ProtocolMin = 2 // an attacker changing an installation-safety constraint
 	assert.ErrorIs(t, VerifyManifest(pub, m, sig), ErrSignatureMismatch)
 }
 

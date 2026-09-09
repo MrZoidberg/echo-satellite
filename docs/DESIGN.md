@@ -556,8 +556,17 @@ A small `service.d` shell script lives outside the agent binary. It should:
 - log only enough bounded information to diagnose launch/restart failures.
 
 It must not inspect deployment health, select a release, rewrite the installed
-binary or perform rollback. Launcher reliability and restart behaviour must be
-qualified on the rooted Dot (§26).
+binary or perform rollback. Bootstrap must install it in the service directory
+actually consumed by the installed Magisk version. The qualified Dot runs
+Magisk v17.3, where that persistent directory is
+`/sbin/.core/img/.core/service.d`; its daemon does not consume the modern
+`/data/adb/service.d` path. Bootstrap must recognize this qualified legacy
+layout (and may recognize the modern layout on explicitly supported newer
+Magisk versions), preserve any conflicting hook, and fail closed when it cannot
+identify a supported service directory. Exit code 75 is the controlled-update
+restart signal. Hardware evidence for boot timing, exit propagation, restart,
+backoff and cleanup is recorded in
+[`docs/device-diagnostics.md`](device-diagnostics.md).
 
 ### 7.5 Device state
 
@@ -2095,14 +2104,22 @@ with an explicit ADB recovery boundary early.
   1,024-frame periods and four periods. Canonical audio remains 16 kHz mono;
   resampling and channel duplication occur on-device immediately before the
   PCM sink. Evidence: [`docs/device-diagnostics.md`](device-diagnostics.md).
-- Does a minimal Magisk `service.d` launcher reliably start the agent after boot,
-  restart the controlled-update exit immediately and back off repeated crashes?
-- Does same-directory atomic replacement of `/data/local/bin/echod` provide the
-  required rename and persistence semantics on this FireOS filesystem?
-- Which controlled exit code and launcher observation reliably distinguish an
-  update restart from an unexpected exit?
-- What free-space floor and margin safely cover the staged artifact, metadata
-  and filesystem overhead?
+- **Magisk launcher:** on the qualified Dot, Magisk v17.3 executed a root-owned
+  hook from `/sbin/.core/img/.core/service.d` at 7.19 seconds uptime. It did not
+  execute a hook from the modern `/data/adb/service.d` path. Exit 75 propagated
+  distinctly and triggered an approximately 20 ms immediate restart; ordinary
+  exit 1 honored measured 1, 2, 4, 8, 16, 32 and 60 second delays. Evidence:
+  [`docs/device-diagnostics.md`](device-diagnostics.md).
+- **Atomic agent replacement:** ext4 under `/data` supports staged-file fsync,
+  same-directory atomic rename, containing-directory fsync and reboot
+  persistence. Replacing the pathname left the old process running from its
+  deleted inode until controlled shutdown. Evidence:
+  [`docs/device-diagnostics.md`](device-diagnostics.md).
+- **Update staging margin:** retain artifact size plus
+  `max(16 MiB, 10% of artifact size)`. The 8,126,626-byte measured agent needed
+  24,903,842 bytes against at least 336,482,304 bytes observed available, with
+  more than 63,000 free inodes. Evidence:
+  [`docs/device-diagnostics.md`](device-diagnostics.md).
 - Can the documented `echoctl update install` procedure reliably restore a
   known-good signed agent over ADB after the installed agent cannot start or
   reconnect?

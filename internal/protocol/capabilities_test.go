@@ -9,10 +9,10 @@ import (
 )
 
 func TestNewCapabilities_SortsAndDeduplicates(t *testing.T) {
-	caps := NewCapabilities(CapUpdateAB, CapWakeLocal, CapUpdateAB, CapAudioCapture)
-	assert.Equal(t, Capabilities{CapAudioCapture, CapUpdateAB, CapWakeLocal}, caps)
+	caps := NewCapabilities(CapUpdateSingle, CapWakeLocal, CapUpdateSingle, CapAudioCapture)
+	assert.Equal(t, Capabilities{CapAudioCapture, CapUpdateSingle, CapWakeLocal}, caps)
 
-	same := NewCapabilities(CapWakeLocal, CapAudioCapture, CapUpdateAB)
+	same := NewCapabilities(CapWakeLocal, CapAudioCapture, CapUpdateSingle)
 	first, err := json.Marshal(caps)
 	require.NoError(t, err)
 	second, err := json.Marshal(same)
@@ -33,15 +33,15 @@ func TestCapabilities_Has(t *testing.T) {
 	caps := NewCapabilities(CapWakeLocal, CapAudioCapture, CapLED)
 	assert.True(t, caps.Has(CapWakeLocal))
 	assert.True(t, caps.Has(CapLED))
-	assert.False(t, caps.Has(CapUpdateAB))
+	assert.False(t, caps.Has(CapUpdateSingle))
 	assert.False(t, Capabilities(nil).Has(CapWakeLocal))
 }
 
 func TestCapabilities_JSONRoundTrip(t *testing.T) {
-	caps := NewCapabilities(CapWakeLocal, CapUpdateAB)
+	caps := NewCapabilities(CapWakeLocal, CapUpdateSingle)
 	data, err := json.Marshal(caps)
 	require.NoError(t, err)
-	assert.JSONEq(t, `["update.ab","wake.local"]`, string(data))
+	assert.JSONEq(t, `["update.single.v1","wake.local"]`, string(data))
 
 	var got Capabilities
 	require.NoError(t, json.Unmarshal(data, &got))

@@ -43,6 +43,513 @@ at `0`; explicit recovery restored both `ledcontroller` and `mdnsd` to
 `running`. Earlier stopped-gateway and reconnect observations confirmed the
 red offline and black connected states with smooth transitions.
 
+## 2026-09-08 FireOS launcher and filesystem qualification (Milestone 3 Task 2)
+
+The deployment assumptions were qualified on rooted Dot
+`G090LF0964060EHP` (`AEOBC`/`biscuit`, `arm64-v8a`, SELinux permissive).
+Before testing, the installed known-good agent was pulled to the host and its
+SHA-256 was verified as
+`41ed22dba37da3d583c257991e3b4d69460fc07265010f189594a4d38184f8c6`.
+The installed `/data/local/bin/echod` remained unchanged at that digest for the
+entire session. It reports revision
+`milestone-1-hardware-wake-02dfe04-20260826T124235`; all replacement tests used
+an isolated copy of current revision
+`milestone-3-f41df1e-20260908T113551` under
+`/data/local/tmp/echo-satellite-m3-diagnostic`.
+
+### Reproduction record
+
+The session used `ADB=adb`, `DEVICE_SERIAL=G090LF0964060EHP`, BusyBox
+`/data/adb/magisk/busybox`, and the isolated root named above. Inventory and
+backup used these exact commands:
+
+```sh
+"$ADB" -s "$DEVICE_SERIAL" shell "su -c '
+  cat /proc/mounts
+  /data/adb/magisk/busybox df -k /data
+  /data/adb/magisk/busybox df -i /data
+  /data/adb/magisk/busybox stat -f /data
+  /data/local/bin/echod --version
+  /data/adb/magisk/busybox sha256sum /data/local/bin/echod
+  test -d /sbin/.core/img/.core/service.d
+'"
+"$ADB" -s "$DEVICE_SERIAL" pull /data/local/bin/echod \
+  /tmp/echod-G090LF0964060EHP-known-good
+```
+
+The current agent and isolated state were staged without writing the installed
+pathname:
+
+```sh
+make build-device
+"$ADB" -s "$DEVICE_SERIAL" push .bin/linux_arm64/echod \
+  /data/local/tmp/m3-echod-current
+"$ADB" -s "$DEVICE_SERIAL" shell "su -c '
+  mkdir -p /data/local/tmp/echo-satellite-m3-diagnostic
+  chmod 700 /data/local/tmp/echo-satellite-m3-diagnostic
+  mv /data/local/tmp/m3-echod-current \
+    /data/local/tmp/echo-satellite-m3-diagnostic/echod-under-test
+  chmod 700 /data/local/tmp/echo-satellite-m3-diagnostic/echod-under-test
+  cp /data/local/etc/echo-satellite/config.json \
+    /data/local/tmp/echo-satellite-m3-diagnostic/config.json
+  chmod 600 /data/local/tmp/echo-satellite-m3-diagnostic/config.json
+'"
+```
+
+The executable and atomic replacement body below then ran through a fully
+quoted remote `su -c`. The token value was never printed.
+
+```sh
+BB=/data/adb/magisk/busybox
+ROOT=/data/local/tmp/echo-satellite-m3-diagnostic
+chmod 600 "$ROOT/echod-under-test"
+"$ROOT/echod-under-test" --version >/dev/null 2>&1; echo "nonexec_status=$?"
+chmod 700 "$ROOT/echod-under-test"
+cp "$ROOT/echod-under-test" "$ROOT/echod-under-test.part"
+chmod 700 "$ROOT/echod-under-test.part"
+"$BB" fsync "$ROOT/echod-under-test.part"
+"$ROOT/echod-under-test" --gateway-url wss://192.168.110.127:8770/device \
+  --gateway-token-file /data/local/tmp/echo-satellite-state/device-token \
+  --tls-skip-verify --pairing-state "$ROOT/paired.json" \
+  --config-state "$ROOT/config.json" --dbg >"$ROOT/agent.log" 2>&1 &
+pid=$!
+while ! "$BB" grep -q 'received protocol message.*type=welcome' \
+  "$ROOT/agent.log"; do sleep 0.1; done
+"$BB" stat -c 'mode=%a size=%s inode=%i' \
+  "$ROOT/echod-under-test" "$ROOT/echod-under-test.part"
+"$BB" readlink "/proc/$pid/exe"
+mv "$ROOT/echod-under-test.part" "$ROOT/echod-under-test"
+"$BB" fsync "$ROOT"
+"$BB" stat -c 'mode=%a size=%s inode=%i' "$ROOT/echod-under-test"
+"$BB" readlink "/proc/$pid/exe"
+kill -0 "$pid" && echo old_process_alive_after_rename=yes
+kill -TERM "$pid"
+wait "$pid"; echo "old_process_shutdown_status=$?"
+```
+
+The 20-start timer was a temporary static ARM64 Go harness invoked as follows
+after `make build-device` and staging the current binary. For each trial it
+called `exec.Command` with the shown agent arguments, captured `time.Now()`
+immediately before `cmd.Start`, scanned stderr for both `received protocol
+message` and `type=welcome`, printed elapsed microseconds as milliseconds, sent
+`SIGTERM`, waited for cleanup, and repeated. It imposed a 30-second per-trial
+timeout and failed if `welcome` was absent.
+
+```go
+package main
+
+import (
+    "bufio"
+    "fmt"
+    "os"
+    "os/exec"
+    "strconv"
+    "strings"
+    "syscall"
+    "time"
+)
+
+func main() {
+    trials, err := strconv.Atoi(os.Args[1])
+    if err != nil || trials < 1 {
+        panic("invalid trial count")
+    }
+    for trial := 1; trial <= trials; trial++ {
+        cmd := exec.Command(os.Args[2], os.Args[3:]...)
+        stderr, err := cmd.StderrPipe()
+        if err != nil {
+            panic(err)
+        }
+        started := time.Now()
+        if err = cmd.Start(); err != nil {
+            panic(err)
+        }
+        welcomed := make(chan time.Duration, 1)
+        done := make(chan error, 1)
+        go func() {
+            scanner := bufio.NewScanner(stderr)
+            for scanner.Scan() {
+                line := scanner.Text()
+                if strings.Contains(line, "received protocol message") &&
+                    strings.Contains(line, "type=welcome") {
+                    select {
+                    case welcomed <- time.Since(started):
+                    default:
+                    }
+                }
+            }
+            done <- cmd.Wait()
+        }()
+        select {
+        case elapsed := <-welcomed:
+            fmt.Printf("trial=%02d welcome_ms=%.3f\n", trial,
+                float64(elapsed.Microseconds())/1000)
+            _ = cmd.Process.Signal(syscall.SIGTERM)
+            fmt.Printf("trial=%02d post_welcome_shutdown=%v\n", trial, <-done)
+        case <-time.After(30 * time.Second):
+            _ = cmd.Process.Kill()
+            panic("welcome timeout")
+        }
+    }
+}
+```
+
+```sh
+GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build \
+  -o .bin/m3-startup-timer /tmp/m3-startup-timer.go
+"$ADB" -s "$DEVICE_SERIAL" push .bin/m3-startup-timer \
+  /data/local/tmp/m3-startup-timer
+"$ADB" -s "$DEVICE_SERIAL" shell "su -c '
+  mv /data/local/tmp/m3-startup-timer \
+    /data/local/tmp/echo-satellite-m3-diagnostic/startup-timer
+  chmod 700 /data/local/tmp/echo-satellite-m3-diagnostic/startup-timer
+'"
+"$ADB" -s "$DEVICE_SERIAL" shell "su -c '
+  /data/local/tmp/echo-satellite-m3-diagnostic/startup-timer 20 \
+    /data/local/tmp/echo-satellite-m3-diagnostic/echod-under-test \
+    --gateway-url wss://192.168.110.127:8770/device \
+    --gateway-token-file /data/local/tmp/echo-satellite-state/device-token \
+    --tls-skip-verify \
+    --pairing-state /data/local/tmp/echo-satellite-m3-diagnostic/paired.json \
+    --config-state /data/local/tmp/echo-satellite-m3-diagnostic/config.json \
+    --log-file /data/local/tmp/echo-satellite-m3-diagnostic/echod.log \
+    --log-max-bytes 1048576 --dbg
+'"
+```
+
+For the boot-path A/B test, separate root-owned mode-`0755` scripts were placed
+at `/data/adb/service.d/echo-satellite-m3-modern.sh` and
+`/sbin/.core/img/.core/service.d/echo-satellite-m3-legacy.sh`. Each wrote only
+its path label, `/proc/uptime`, and `id -u` to a distinct file under `$ROOT`.
+The exact hook, restart, backoff, reboot, and cleanup commands follow.
+
+```sh
+# /tmp/m3-modern-marker.sh
+#!/system/bin/sh
+BB=/data/adb/magisk/busybox
+ROOT=/data/local/tmp/echo-satellite-m3-diagnostic
+echo "path=modern uptime=$($BB awk '{print $1}' /proc/uptime) uid=$($BB id -u)" \
+  >"$ROOT/modern-marker"
+
+# /tmp/m3-legacy-marker.sh has the same first three lines, followed by:
+echo "path=legacy uptime=$($BB awk '{print $1}' /proc/uptime) uid=$($BB id -u)" \
+  >"$ROOT/legacy-marker"
+```
+
+```sh
+"$ADB" -s "$DEVICE_SERIAL" push /tmp/m3-modern-marker.sh \
+  /data/local/tmp/m3-modern-marker.sh
+"$ADB" -s "$DEVICE_SERIAL" push /tmp/m3-legacy-marker.sh \
+  /data/local/tmp/m3-legacy-marker.sh
+"$ADB" -s "$DEVICE_SERIAL" shell "su -c '
+BB=/data/adb/magisk/busybox
+mkdir -p /data/adb/service.d
+mv /data/local/tmp/m3-modern-marker.sh \
+  /data/adb/service.d/echo-satellite-m3-modern.sh
+mv /data/local/tmp/m3-legacy-marker.sh \
+  /sbin/.core/img/.core/service.d/echo-satellite-m3-legacy.sh
+chown 0:0 /data/adb/service.d/echo-satellite-m3-modern.sh \
+  /sbin/.core/img/.core/service.d/echo-satellite-m3-legacy.sh
+chmod 755 /data/adb/service.d/echo-satellite-m3-modern.sh \
+  /sbin/.core/img/.core/service.d/echo-satellite-m3-legacy.sh
+/data/adb/magisk/busybox fsync /data/adb/service.d/echo-satellite-m3-modern.sh
+/data/adb/magisk/busybox fsync /data/adb/service.d
+/data/adb/magisk/busybox fsync \
+  /sbin/.core/img/.core/service.d/echo-satellite-m3-legacy.sh
+/data/adb/magisk/busybox fsync /sbin/.core/img/.core/service.d
+'"
+"$ADB" -s "$DEVICE_SERIAL" reboot
+"$ADB" -s "$DEVICE_SERIAL" wait-for-device
+"$ADB" -s "$DEVICE_SERIAL" shell '
+  while [ "$(getprop sys.boot_completed)" != 1 ]; do sleep 1; done
+'
+"$ADB" -s "$DEVICE_SERIAL" shell "su -c '
+  cat /data/local/tmp/echo-satellite-m3-diagnostic/legacy-marker
+  test ! -e /data/local/tmp/echo-satellite-m3-diagnostic/modern-marker
+'"
+```
+
+The earlier legacy-only reboot used the same install sequence with this marker
+body to capture execution timing and environment:
+
+```sh
+#!/system/bin/sh
+BB=/data/adb/magisk/busybox
+ROOT=/data/local/tmp/echo-satellite-m3-diagnostic
+epoch=$($BB date +%s)
+uptime=$($BB awk '{print $1}' /proc/uptime)
+uid=$($BB id -u)
+gid=$($BB id -g)
+agent_version=$($ROOT/echod-under-test --version 2>&1)
+echo "marker_version=1 epoch=$epoch uptime=$uptime uid=$uid gid=$gid \
+shell=/system/bin/sh pwd=$(pwd) path=$PATH agent_version=[$agent_version]" \
+  >"$ROOT/service-d-marker"
+$BB fsync "$ROOT/service-d-marker"
+$BB fsync "$ROOT"
+```
+
+It was installed and verified, together with renamed-file persistence, by:
+
+```sh
+"$ADB" -s "$DEVICE_SERIAL" push /tmp/m3-service-d-marker.sh \
+  /data/local/tmp/m3-service-d-marker.sh
+"$ADB" -s "$DEVICE_SERIAL" shell "su -c '
+  mv /data/local/tmp/m3-service-d-marker.sh \
+    /sbin/.core/img/.core/service.d/echo-satellite-m3-diagnostic.sh
+  chown 0:0 \
+    /sbin/.core/img/.core/service.d/echo-satellite-m3-diagnostic.sh
+  chmod 755 \
+    /sbin/.core/img/.core/service.d/echo-satellite-m3-diagnostic.sh
+  /data/adb/magisk/busybox fsync \
+    /sbin/.core/img/.core/service.d/echo-satellite-m3-diagnostic.sh
+  /data/adb/magisk/busybox fsync /sbin/.core/img/.core/service.d
+'"
+"$ADB" -s "$DEVICE_SERIAL" reboot
+"$ADB" -s "$DEVICE_SERIAL" wait-for-device
+"$ADB" -s "$DEVICE_SERIAL" shell '
+  while [ "$(getprop sys.boot_completed)" != 1 ]; do sleep 1; done
+'
+"$ADB" -s "$DEVICE_SERIAL" shell "su -c '
+  ROOT=/data/local/tmp/echo-satellite-m3-diagnostic
+  BB=/data/adb/magisk/busybox
+  cat \$ROOT/service-d-marker
+  \$ROOT/echod-under-test --version
+  \$BB sha256sum \$ROOT/echod-under-test
+  \$BB stat -c "mode=%a size=%s inode=%i" \$ROOT/echod-under-test
+'"
+```
+
+The last command returned the full marker quoted below, revision
+`milestone-3-f41df1e-20260908T113551`, SHA-256
+`6bf31f0752c5d5f0e02c71f873c3c1217a0e652913ade194ef1078f0f60b62c9`,
+and `mode=700 size=8126626 inode=37698`.
+
+The controlled worker used a counter under `$ROOT`, exited 75 on invocation 1,
+and exited 0 on invocation 2:
+
+```sh
+#!/system/bin/sh
+set -eu
+ROOT=/data/local/tmp/echo-satellite-m3-diagnostic
+count=0
+[ -f "$ROOT/launcher-count" ] && count=$(cat "$ROOT/launcher-count")
+count=$((count + 1))
+echo "$count" >"$ROOT/launcher-count"
+[ "$count" -eq 1 ] && exit 75
+exit 0
+```
+
+Its launcher body was:
+
+```sh
+#!/system/bin/sh
+set -eu
+BB=/data/adb/magisk/busybox
+ROOT=/data/local/tmp/echo-satellite-m3-diagnostic
+while true; do
+  before=$($BB awk '{print $1}' /proc/uptime)
+  set +e
+  "$ROOT/controlled-worker.sh"
+  status=$?
+  set -e
+  after=$($BB awk '{print $1}' /proc/uptime)
+  echo "status=$status before=$before after=$after" >>"$ROOT/events"
+  [ "$status" -eq 75 ] && continue
+  exit "$status"
+done
+```
+
+For the full crash test, `crash-worker.sh` used this body:
+
+```sh
+#!/system/bin/sh
+set -eu
+ROOT=/data/local/tmp/echo-satellite-m3-diagnostic
+count=0
+[ -f "$ROOT/crash-count" ] && count=$(cat "$ROOT/crash-count")
+count=$((count + 1))
+echo "$count" >"$ROOT/crash-count"
+[ "$count" -le 7 ] && exit 1
+exit 0
+```
+
+The launcher below was invoked through remote `su -c`:
+
+```sh
+#!/system/bin/sh
+set -eu
+BB=/data/adb/magisk/busybox
+ROOT=/data/local/tmp/echo-satellite-m3-diagnostic
+delay=1
+while true; do
+  before=$($BB awk '{print $1}' /proc/uptime)
+  set +e
+  "$ROOT/crash-worker.sh"
+  status=$?
+  set -e
+  observed=$($BB awk '{print $1}' /proc/uptime)
+  echo "status=$status before=$before observed=$observed delay=$delay" \
+    >>"$ROOT/crash-events"
+  [ "$status" -eq 0 ] && break
+  sleep "$delay"
+  echo "restart delay=$delay uptime=$($BB awk '{print $1}' /proc/uptime)" \
+    >>"$ROOT/crash-events"
+  if [ "$delay" -lt 60 ]; then
+    delay=$((delay * 2))
+    [ "$delay" -gt 60 ] && delay=60
+  fi
+done
+```
+
+After pushing those four scripts through `/data/local/tmp`, the exact execution
+commands were:
+
+```sh
+"$ADB" -s "$DEVICE_SERIAL" push /tmp/m3-controlled-worker.sh \
+  /data/local/tmp/m3-controlled-worker.sh
+"$ADB" -s "$DEVICE_SERIAL" push /tmp/m3-controlled-launcher.sh \
+  /data/local/tmp/m3-controlled-launcher.sh
+"$ADB" -s "$DEVICE_SERIAL" push /tmp/m3-crash-worker.sh \
+  /data/local/tmp/m3-crash-worker.sh
+"$ADB" -s "$DEVICE_SERIAL" push /tmp/m3-crash-launcher.sh \
+  /data/local/tmp/m3-crash-launcher.sh
+"$ADB" -s "$DEVICE_SERIAL" shell "su -c '
+  mv /data/local/tmp/m3-controlled-worker.sh \
+    /data/local/tmp/echo-satellite-m3-diagnostic/controlled-worker.sh
+  mv /data/local/tmp/m3-controlled-launcher.sh \
+    /data/local/tmp/echo-satellite-m3-diagnostic/controlled-launcher.sh
+  mv /data/local/tmp/m3-crash-worker.sh \
+    /data/local/tmp/echo-satellite-m3-diagnostic/crash-worker.sh
+  mv /data/local/tmp/m3-crash-launcher.sh \
+    /data/local/tmp/echo-satellite-m3-diagnostic/crash-launcher.sh
+  chmod 700 /data/local/tmp/echo-satellite-m3-diagnostic/*.sh
+  /data/local/tmp/echo-satellite-m3-diagnostic/controlled-launcher.sh
+  /data/local/tmp/echo-satellite-m3-diagnostic/crash-launcher.sh
+'"
+```
+
+Cleanup ran this remote body. Hook deletions were fsynced while the directories
+still existed; the originally absent modern directory was then removed.
+
+```sh
+ROOT=/data/local/tmp/echo-satellite-m3-diagnostic
+MODERN=/data/adb/service.d/echo-satellite-m3-modern.sh
+LEGACY=/sbin/.core/img/.core/service.d/echo-satellite-m3-legacy.sh
+ENVHOOK=/sbin/.core/img/.core/service.d/echo-satellite-m3-diagnostic.sh
+rm -f "$MODERN" "$LEGACY" "$ENVHOOK"
+/data/adb/magisk/busybox fsync /data/adb/service.d
+/data/adb/magisk/busybox fsync /sbin/.core/img/.core/service.d
+rmdir /data/adb/service.d
+rm -rf "$ROOT"
+start ledcontroller
+start mdnsd
+test ! -e "$ROOT" && test ! -e "$MODERN" && test ! -e "$LEGACY" && \
+  test ! -e "$ENVHOOK"
+/data/adb/magisk/busybox sha256sum /data/local/bin/echod
+/data/adb/magisk/busybox pidof echod 2>/dev/null || true
+```
+
+### Filesystem, staging space, and atomic replacement
+
+`/data` is ext4 on
+`/dev/block/platform/mtk-msdc.0/by-name/userdata`, mounted
+`rw,seclabel,nosuid,nodev,noatime,discard,noauto_da_alloc,commit=1,data=ordered`
+with 4,096-byte blocks. Initial availability was 340,520 KiB and 63,558
+inodes; after cleanup it was 339,168 KiB and 63,495 inodes. The small difference
+is normal device activity outside the isolated diagnostic. The 8,126,626-byte
+current agent therefore requires 24,903,842 bytes under the rule
+`artifact size + max(16 MiB, 10% of artifact size)`, far below observed
+availability. No hardware evidence requires changing that rule.
+
+An isolated agent copy at mode `0600` failed to execute with shell status 126;
+after `chmod 0700` it ran and printed the expected revision. BusyBox `fsync`
+succeeded for both the staged regular file and its containing directory. A
+same-directory rename moved a prepared inode over the running agent pathname:
+
+| Observation | Before rename | After rename |
+|---|---:|---:|
+| pathname inode | 37,693 | 37,698 |
+| mode | `0700` | `0700` |
+| size | 8,126,626 bytes | 8,126,626 bytes |
+| running process link | normal pathname | pathname plus `(deleted)` |
+
+The authenticated old process remained alive after the rename and exited only
+when sent `SIGTERM`. After reboot, inode 37,698, mode `0700`, size 8,126,626,
+revision, and SHA-256
+`6bf31f0752c5d5f0e02c71f873c3c1217a0e652913ade194ef1078f0f60b62c9`
+were unchanged. This supports same-directory staging, file fsync, atomic rename,
+directory fsync, and persistence on this FireOS `/data` filesystem.
+
+### Magisk boot hook and launcher behavior
+
+This Dot runs Magisk v17.3 (version code 17302). It does **not** consume the
+modern `/data/adb/service.d` directory: that directory was absent initially.
+A controlled A/B reboot placed separate root-owned mode-`0755` hooks in the
+modern and legacy directories; only the legacy marker ran, at 6.91 seconds
+uptime. Magisk 17.3 instead consumes the persistent service directory in its
+mounted image,
+`/sbin/.core/img/.core/service.d`. A root-owned mode-`0755` marker there ran on
+the next boot at 7.19 seconds uptime as UID/GID 0 with working directory `/`,
+shell `/system/bin/sh`, and path
+`/sbin/.core/busybox:/sbin:/vendor/bin:/system/sbin:/system/bin:/system/xbin`.
+It successfully executed the staged ARM64 agent's `--version` command. Bootstrap
+must therefore detect and use this qualified legacy directory on Magisk 17.3;
+it must not create `/data/adb/service.d` and assume that the old daemon reads it.
+
+Exit code 75 is reserved for the controlled update restart. The current agent
+uses 0 for success and 1 for ordinary errors, while signal-derived shell
+statuses are 128 or greater, so 75 is unambiguous on the qualified stack. An
+isolated launcher observed status 75 at uptime 25,027.02 seconds and started
+the replacement worker at 25,027.04 seconds, an approximately 20 ms restart
+with no deliberate delay. A separate unexpected-exit run observed status 1
+and honored the complete bounded schedule:
+
+| Requested delay | Observed restart interval |
+|---:|---:|
+| 1 s | 1.00 s |
+| 2 s | 2.00 s |
+| 4 s | 4.01 s |
+| 8 s | 8.01 s |
+| 16 s | 16.00 s |
+| 32 s | 32.03 s |
+| 60 s | 60.06 s |
+
+The next successful worker start retained the 60-second cap. These checks
+qualify shell exit-status propagation, immediate controlled restart, and the
+planned unexpected-exit backoff on this FireOS build; Task 5 still owns the
+production launcher implementation and host tests.
+
+### Authenticated startup timing
+
+Twenty sequential starts used the current ARM64 agent, the normal ALSA capture
+pipeline, an explicit WSS endpoint, the existing bearer token, and development
+TLS certificate bypass. Timing began immediately before the process launch call
+and ended when the device decoded the authenticated `welcome`. The measurements
+in milliseconds were:
+
+```text
+810.274 649.728 744.369 652.108 638.245
+672.111 646.316 644.723 678.690 644.299
+647.661 667.231 645.460 663.024 649.677
+642.487 658.830 645.191 656.159 630.968
+```
+
+Minimum was 630.968 ms, median 649.703 ms, arithmetic mean 664.378 ms,
+nearest-rank p95 744.369 ms, and maximum 810.274 ms. Each post-welcome
+`SIGTERM` produced status 1 in this current revision because cancellation is
+reported as an error; that existing shutdown behavior is distinct from the
+reserved controlled-update status 75.
+
+### Cleanup
+
+The legacy marker hook, the ineffective modern hook/directory, and all files
+under `/data/local/tmp/echo-satellite-m3-diagnostic` were removed. No `echod`
+process remained, the installed digest still matched the host backup, and
+`ledcontroller` plus `mdnsd` both reported `running`. A final direct launch
+confirmed `/proc/<pid>/exe` resolved to `/data/local/bin/echod` before clean
+shutdown. No FireOS system, boot, recovery, or bootloader partition was
+modified.
+
 ## Task 25 closeout status
 
 The primary and additional-speaker `okay_nabu` qualifications and all Task 25

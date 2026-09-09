@@ -14,9 +14,8 @@ func TestAllMessageTypes_CoversDesignFamilies(t *testing.T) {
 		"turn.start", "turn.cancel",
 		"wake.models", "wake.status",
 		"audio.start", "audio.stop", "play.start", "play.stop",
-		"update.offer", "update.accept", "update.reject", "update.progress",
-		"update.staged", "update.restarting", "update.trial", "update.confirmed",
-		"update.rolled_back", "update.failed",
+		"update.offer", "update.decision", "update.progress", "update.confirmed",
+		"update.cancelled", "update.failed",
 		"button", "mute", "volume",
 		"ping", "pong", "error",
 	}
@@ -55,7 +54,7 @@ func TestTurnTrigger_Valid(t *testing.T) {
 func TestAllDeviceStates_ReturnsDocumentedStatesAndACopy(t *testing.T) {
 	want := []DeviceState{
 		StateIdle, StateListening, StateThinking, StateSpeaking, StateMuted,
-		StateOffline, StateError, StateUpdating, StateUpdateTrial,
+		StateOffline, StateError, StateUpdating,
 	}
 	first := AllDeviceStates()
 	assert.Equal(t, want, first)

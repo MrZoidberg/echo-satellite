@@ -239,5 +239,5 @@ func write(t *testing.T, conn *websocket.Conn, kind protocol.MessageType, id str
 }
 
 func testConfig() protocol.DeviceConfig {
-	return protocol.DeviceConfig{Version: 1, Wake: protocol.WakeSettings{Engine: "wake", Model: "model", Threshold: 0.5, VADEnabled: true, VADThreshold: 0.5, VADLookbackMS: 1, PreRollMS: 1, MinIntervalMS: 1}, Endpointing: protocol.EndpointingConfig{SpeechThreshold: 0.5, SpeechOnsetMS: 1, TrailingSilenceMS: 1, NoSpeechTimeoutMS: 1, MaxTurnMS: 1}, Logs: protocol.LogSettings{ForwardLevel: protocol.LogLevelInfo}}
+	return protocol.DeviceConfig{Version: 1, Wake: protocol.WakeSettings{Engine: "wake", Model: "model", Threshold: 0.5, VADEnabled: true, VADThreshold: 0.5, VADLookbackMS: 1, PreRollMS: 1, MinIntervalMS: 1}, Endpointing: protocol.EndpointingConfig{SpeechThreshold: 0.5, SpeechOnsetMS: 1, TrailingSilenceMS: 1, NoSpeechTimeoutMS: 1, MaxTurnMS: 1}, Audio: protocol.AudioConfig{ConditioningProfile: protocol.ConditioningProfileBypass}, Logs: protocol.LogSettings{ForwardLevel: protocol.LogLevelInfo}}
 }

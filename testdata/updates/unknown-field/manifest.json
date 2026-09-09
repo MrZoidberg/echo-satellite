@@ -8,6 +8,5 @@
   "schema": 1,
   "sha256": "37d01c70b075c629cacba941873e3bc9907d6f7203aecd404f573b809f77ae46",
   "size": 36,
-  "supervisor_min": 1,
   "version": "0.3.0"
 }

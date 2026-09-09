@@ -11,7 +11,6 @@ var (
 	colorOffline   = RGB{R: 120}
 	colorError     = RGB{R: 180, G: 55}
 	colorUpdating  = RGB{R: 100, G: 100, B: 100}
-	colorTrial     = RGB{R: 180, G: 70}
 )
 
 // Render maps a semantic state and animation tick to a complete LED frame.
@@ -48,8 +47,6 @@ func renderKnown(state protocol.DeviceState, tick int) (Frame, bool) {
 		return errorPattern(tick), true
 	case protocol.StateUpdating:
 		return comet(tick, colorUpdating, 4), true
-	case protocol.StateUpdateTrial:
-		return comet(tick, colorTrial, 4), true
 	default:
 		return Frame{}, false
 	}

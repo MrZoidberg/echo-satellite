@@ -14,6 +14,7 @@ type DeviceConfig struct {
 	Version     uint64            `json:"version"`
 	Wake        WakeSettings      `json:"wake"`
 	Endpointing EndpointingConfig `json:"endpointing"`
+	Audio       AudioConfig       `json:"audio"`
 	Logs        LogSettings       `json:"logs"`
 }
 
@@ -37,6 +38,24 @@ type EndpointingConfig struct {
 	TrailingSilenceMS int     `json:"trailing_silence_ms"`
 	NoSpeechTimeoutMS int     `json:"no_speech_timeout_ms"`
 	MaxTurnMS         int     `json:"max_turn_ms"`
+}
+
+// AudioConfig selects a qualified command-audio conditioning profile. Its
+// internals remain device implementation details rather than wire settings.
+type AudioConfig struct {
+	ConditioningProfile ConditioningProfile `json:"conditioning_profile"`
+}
+
+// ConditioningProfile names a fixed, qualified command-audio pipeline.
+type ConditioningProfile string
+
+const (
+	ConditioningProfileBypass  ConditioningProfile = "bypass-v1"
+	ConditioningProfileDotGen2 ConditioningProfile = "dot-gen2-qualified-v1"
+)
+
+func (p ConditioningProfile) Valid() bool {
+	return p == ConditioningProfileBypass || p == ConditioningProfileDotGen2
 }
 
 // LogLevel is the minimum level of device records forwarded to the gateway.
@@ -125,6 +144,9 @@ func (c DeviceConfig) Validate() error {
 	if err := c.Endpointing.Validate(); err != nil {
 		return err
 	}
+	if !c.Audio.ConditioningProfile.Valid() {
+		return fmt.Errorf("protocol: unsupported conditioning profile %q", c.Audio.ConditioningProfile)
+	}
 	if !c.Logs.ForwardLevel.Valid() {
 		return fmt.Errorf("protocol: invalid log forward level %q", c.Logs.ForwardLevel)
 	}
@@ -142,13 +164,16 @@ func (c *DeviceConfig) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return fmt.Errorf("protocol: decode config fields: %w", err)
 	}
-	if err := requireObjectKeys(raw, "config", "version", "wake", "endpointing", "logs"); err != nil {
+	if err := requireObjectKeys(raw, "config", "version", "wake", "endpointing", "audio", "logs"); err != nil {
 		return err
 	}
 	if err := requireNestedObjectKeys(raw["wake"], "wake", "engine", "model", "threshold", "vad_enabled", "vad_threshold", "vad_lookback_ms", "pre_roll_ms", "min_interval_ms", "always_score_wake"); err != nil {
 		return err
 	}
 	if err := requireNestedObjectKeys(raw["endpointing"], "endpointing", "speech_threshold", "speech_onset_ms", "trailing_silence_ms", "no_speech_timeout_ms", "max_turn_ms"); err != nil {
+		return err
+	}
+	if err := requireExactObject(raw["audio"], "audio", "conditioning_profile"); err != nil {
 		return err
 	}
 	if err := requireNestedObjectKeys(raw["logs"], "logs", "forward_level"); err != nil {

@@ -92,6 +92,14 @@ Before execution begins:
 - When implementation invalidates a documented design assumption, update `docs/DESIGN.md` in the same change and note it in the progress log.
 - Keep failed, paused, or blocked plans in `in-progress/` with status `in-progress (paused)` or `in-progress (blocked)`, an honest blocker description, and the remaining work. Do not archive partial execution as finished.
 
+## Verification cadence
+
+Use the task's scoped tests while iterating. Before fresh-context review, run
+the task's exact verification and relevant formatting, lint, and test checks.
+Run repository-wide final verification once before handoff; repeat it only when
+review remediation changes software or build behaviour. Record every command
+actually run, including hardware provenance and cleanup results.
+
 ## Finishing work: `in-progress/` to `finished/`
 
 Before moving a plan, confirm that:

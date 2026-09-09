@@ -39,18 +39,14 @@ const (
 	TypePlayStart  MessageType = "play.start"
 	TypePlayStop   MessageType = "play.stop"
 
-	// application-level A/B agent updates
+	// application-level single-agent updates
 
-	TypeUpdateOffer      MessageType = "update.offer"
-	TypeUpdateAccept     MessageType = "update.accept"
-	TypeUpdateReject     MessageType = "update.reject"
-	TypeUpdateProgress   MessageType = "update.progress"
-	TypeUpdateStaged     MessageType = "update.staged"
-	TypeUpdateRestarting MessageType = "update.restarting"
-	TypeUpdateTrial      MessageType = "update.trial"
-	TypeUpdateConfirmed  MessageType = "update.confirmed"
-	TypeUpdateRolledBack MessageType = "update.rolled_back"
-	TypeUpdateFailed     MessageType = "update.failed"
+	TypeUpdateOffer     MessageType = "update.offer"
+	TypeUpdateDecision  MessageType = "update.decision"
+	TypeUpdateProgress  MessageType = "update.progress"
+	TypeUpdateConfirmed MessageType = "update.confirmed"
+	TypeUpdateCancelled MessageType = "update.cancelled"
+	TypeUpdateFailed    MessageType = "update.failed"
 
 	// device controls
 
@@ -71,9 +67,8 @@ var allMessageTypes = []MessageType{
 	TypeTurnStart, TypeTurnCancel,
 	TypeWakeModels, TypeWakeStatus,
 	TypeAudioStart, TypeAudioStop, TypePlayStart, TypePlayStop,
-	TypeUpdateOffer, TypeUpdateAccept, TypeUpdateReject, TypeUpdateProgress,
-	TypeUpdateStaged, TypeUpdateRestarting, TypeUpdateTrial, TypeUpdateConfirmed,
-	TypeUpdateRolledBack, TypeUpdateFailed,
+	TypeUpdateOffer, TypeUpdateDecision, TypeUpdateProgress, TypeUpdateConfirmed,
+	TypeUpdateCancelled, TypeUpdateFailed,
 	TypeButton, TypeMute, TypeVolume,
 	TypePing, TypePong, TypeError,
 }
@@ -124,15 +119,14 @@ type DeviceState string
 
 // Device states.
 const (
-	StateIdle        DeviceState = "idle"
-	StateListening   DeviceState = "listening"
-	StateThinking    DeviceState = "thinking"
-	StateSpeaking    DeviceState = "speaking"
-	StateMuted       DeviceState = "muted"
-	StateOffline     DeviceState = "offline"
-	StateUpdating    DeviceState = "updating"
-	StateUpdateTrial DeviceState = "update_trial"
-	StateError       DeviceState = "error"
+	StateIdle      DeviceState = "idle"
+	StateListening DeviceState = "listening"
+	StateThinking  DeviceState = "thinking"
+	StateSpeaking  DeviceState = "speaking"
+	StateMuted     DeviceState = "muted"
+	StateOffline   DeviceState = "offline"
+	StateUpdating  DeviceState = "updating"
+	StateError     DeviceState = "error"
 )
 
 var allDeviceStates = []DeviceState{
@@ -144,7 +138,6 @@ var allDeviceStates = []DeviceState{
 	StateOffline,
 	StateError,
 	StateUpdating,
-	StateUpdateTrial,
 }
 
 // AllDeviceStates returns every semantic device state in documentation order.
@@ -162,17 +155,15 @@ type AudioFormat string
 const AudioFormatPCMS16LE AudioFormat = "pcm_s16le"
 
 // Hello is the first message a device sends after connecting. It announces
-// identity, versions and capabilities, and reports any update currently on
-// trial so the gateway learns the device's update state before anything else.
+// identity, versions and capabilities, and reports its update state.
 type Hello struct {
-	DeviceID          string       `json:"device_id"`
-	AgentVersion      string       `json:"agent_version"`
-	SupervisorVersion string       `json:"supervisor_version"`
-	Protocol          int          `json:"protocol"`
-	Capabilities      Capabilities `json:"capabilities"`
-	WakeConfig        WakeConfig   `json:"wake_config"`
-	UpdateState       UpdatePhase  `json:"update_state"`
-	ConfigVersion     uint64       `json:"config_version"`
+	DeviceID      string       `json:"device_id"`
+	AgentVersion  string       `json:"agent_version"`
+	Protocol      int          `json:"protocol"`
+	Capabilities  Capabilities `json:"capabilities"`
+	WakeConfig    WakeConfig   `json:"wake_config"`
+	UpdateState   UpdatePhase  `json:"update_state"`
+	ConfigVersion uint64       `json:"config_version"`
 }
 
 // WakeConfig summarizes the device-local wake stack. It is reported for
@@ -250,31 +241,6 @@ type PlayStop struct {
 type State struct {
 	State  DeviceState `json:"state"`
 	Detail string      `json:"detail,omitempty"`
-}
-
-// UpdateOffer offers a release to a device. The device fetches the artifact
-// over authenticated HTTPS rather than through this connection.
-type UpdateOffer struct {
-	Version     string `json:"version"`
-	BuildID     string `json:"build_id"`
-	ArtifactURL string `json:"artifact_url"`
-	Size        int64  `json:"size"`
-	SHA256      string `json:"sha256"`
-	ManifestURL string `json:"manifest_url,omitempty"`
-}
-
-// UpdateProgress reports where a device is in the update state machine.
-type UpdateProgress struct {
-	Phase   UpdatePhase `json:"phase"`
-	Percent int         `json:"percent,omitempty"`
-	Detail  string      `json:"detail,omitempty"`
-}
-
-// UpdateFailed reports a terminal update failure. It does not imply the device
-// is unhealthy: the device keeps its previous slot and stays on it.
-type UpdateFailed struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
 }
 
 // Error is the generic error frame. It implements the error interface so a

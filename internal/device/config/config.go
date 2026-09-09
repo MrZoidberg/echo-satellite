@@ -26,6 +26,7 @@ type Settings struct {
 	Version     uint64                     `json:"version"`
 	Wake        wake.Config                `json:"wake"`
 	Endpointing protocol.EndpointingConfig `json:"endpointing"`
+	Audio       protocol.AudioConfig       `json:"audio"`
 	Logs        protocol.LogSettings       `json:"logs"`
 }
 
@@ -38,7 +39,8 @@ func Bootstrap() Settings {
 			SpeechThreshold: 0.50, SpeechOnsetMS: 160, TrailingSilenceMS: 1500,
 			NoSpeechTimeoutMS: 3000, MaxTurnMS: 60000,
 		},
-		Logs: protocol.LogSettings{ForwardLevel: protocol.LogLevelInfo},
+		Audio: protocol.AudioConfig{ConditioningProfile: protocol.ConditioningProfileBypass},
+		Logs:  protocol.LogSettings{ForwardLevel: protocol.LogLevelInfo},
 	}
 }
 
@@ -55,7 +57,7 @@ func FromProtocol(value protocol.DeviceConfig) (Settings, error) {
 				Threshold: value.Wake.VADThreshold, LookbackMS: value.Wake.VADLookbackMS},
 			PreRollMS: value.Wake.PreRollMS, MinIntervalMS: value.Wake.MinIntervalMS,
 			AlwaysScoreWake: value.Wake.AlwaysScoreWake},
-		Endpointing: value.Endpointing, Logs: value.Logs,
+		Endpointing: value.Endpointing, Audio: value.Audio, Logs: value.Logs,
 	}
 	if err := settings.Wake.Validate(); err != nil {
 		return Settings{}, fmt.Errorf("validate local wake config: %w", err)
@@ -70,7 +72,7 @@ func (s Settings) ToProtocol() protocol.DeviceConfig {
 		VADEnabled: s.Wake.VAD.Enabled, VADThreshold: s.Wake.VAD.Threshold,
 		VADLookbackMS: s.Wake.VAD.LookbackMS, PreRollMS: s.Wake.PreRollMS,
 		MinIntervalMS: s.Wake.MinIntervalMS, AlwaysScoreWake: s.Wake.AlwaysScoreWake,
-	}, Endpointing: s.Endpointing, Logs: s.Logs}
+	}, Endpointing: s.Endpointing, Audio: s.Audio, Logs: s.Logs}
 }
 
 // Store writes state with a staged file and the durability ordering required

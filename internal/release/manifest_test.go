@@ -16,7 +16,6 @@ func TestParseManifest_Valid(t *testing.T) {
 	assert.Equal(t, "linux-arm64", m.Architecture)
 	assert.Equal(t, int64(len(fixtureArtifact)), m.Size)
 	assert.Equal(t, 1, m.ProtocolMin)
-	assert.Equal(t, 1, m.SupervisorMin)
 	assert.True(t, m.ReleasedAt.Equal(fixtureReleasedAt))
 }
 
@@ -44,7 +43,6 @@ func TestManifest_Validate(t *testing.T) {
 		{"digest too short", func(m *Manifest) { m.SHA256 = "abcd" }, ErrInvalidManifest},
 		{"inverted protocol range", func(m *Manifest) { m.ProtocolMin, m.ProtocolMax = 3, 2 }, ErrInvalidManifest},
 		{"zero protocol min", func(m *Manifest) { m.ProtocolMin = 0 }, ErrInvalidManifest},
-		{"negative supervisor min", func(m *Manifest) { m.SupervisorMin = -1 }, ErrInvalidManifest},
 		{"no release time", func(m *Manifest) { m.ReleasedAt = zeroTime() }, ErrInvalidManifest},
 	}
 

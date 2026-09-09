@@ -38,7 +38,7 @@ func TestRender_OfflineIsRed(t *testing.T) {
 func TestRender_AnimatedStatesAdvanceAndNegativeTicksAreSafe(t *testing.T) {
 	assert.NotEqual(t, Render(protocol.StateThinking, 0), Render(protocol.StateThinking, 1))
 	assert.NotEqual(t, Render(protocol.StateUpdating, 0), Render(protocol.StateUpdating, 1))
-	assert.NotEqual(t, Render(protocol.StateUpdateTrial, 0), Render(protocol.StateUpdateTrial, 1))
+	assert.NotEqual(t, Render(protocol.StateUpdating, 0), Render(protocol.StateUpdating, 1))
 	assert.NotPanics(t, func() { Render(protocol.StateListening, -1) })
 }
 

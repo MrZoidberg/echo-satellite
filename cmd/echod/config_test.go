@@ -180,5 +180,5 @@ func TestParseArgs_MissingConfigFile(t *testing.T) {
 func TestAnnouncedCapabilities_AlwaysLocalWake(t *testing.T) {
 	caps := announcedCapabilities()
 	assert.True(t, caps.Has(protocol.CapWakeLocal), "wake detection is always device-local")
-	assert.True(t, caps.Has(protocol.CapUpdateAB))
+	assert.True(t, caps.Has(protocol.CapUpdateSingle))
 }

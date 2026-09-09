@@ -76,7 +76,7 @@ func testProtocolConfig(version uint64) protocol.DeviceConfig {
 		AlwaysScoreWake: true,
 	}, Endpointing: protocol.EndpointingConfig{SpeechThreshold: 0.5, SpeechOnsetMS: 160,
 		TrailingSilenceMS: 1500, NoSpeechTimeoutMS: 3000, MaxTurnMS: 60000,
-	}, Logs: protocol.LogSettings{ForwardLevel: protocol.LogLevelInfo}}
+	}, Audio: protocol.AudioConfig{ConditioningProfile: protocol.ConditioningProfileBypass}, Logs: protocol.LogSettings{ForwardLevel: protocol.LogLevelInfo}}
 }
 
 func TestFromProtocolRejectsNonFinite(t *testing.T) {

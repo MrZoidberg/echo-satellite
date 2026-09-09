@@ -96,5 +96,5 @@ func writeSimWAV(t *testing.T, samples []int16) string {
 }
 
 func simDeviceConfig(version uint64) protocol.DeviceConfig {
-	return protocol.DeviceConfig{Version: version, Wake: protocol.WakeSettings{Engine: "openwakeword", Model: "okay_nabu", Threshold: .5, VADEnabled: true, VADThreshold: .5, VADLookbackMS: 1200, PreRollMS: 600, MinIntervalMS: 2000, AlwaysScoreWake: true}, Endpointing: protocol.EndpointingConfig{SpeechThreshold: .5, SpeechOnsetMS: 160, TrailingSilenceMS: 1500, NoSpeechTimeoutMS: 3000, MaxTurnMS: 60000}, Logs: protocol.LogSettings{ForwardLevel: protocol.LogLevelInfo}}
+	return protocol.DeviceConfig{Version: version, Wake: protocol.WakeSettings{Engine: "openwakeword", Model: "okay_nabu", Threshold: .5, VADEnabled: true, VADThreshold: .5, VADLookbackMS: 1200, PreRollMS: 600, MinIntervalMS: 2000, AlwaysScoreWake: true}, Endpointing: protocol.EndpointingConfig{SpeechThreshold: .5, SpeechOnsetMS: 160, TrailingSilenceMS: 1500, NoSpeechTimeoutMS: 3000, MaxTurnMS: 60000}, Audio: protocol.AudioConfig{ConditioningProfile: protocol.ConditioningProfileBypass}, Logs: protocol.LogSettings{ForwardLevel: protocol.LogLevelInfo}}
 }

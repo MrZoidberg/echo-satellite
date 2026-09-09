@@ -160,7 +160,7 @@ type rawComplete struct {
 }
 
 func (r rawComplete) complete(version uint64) (protocol.DeviceConfig, error) {
-	value := protocol.DeviceConfig{Version: version}
+	value := protocol.DeviceConfig{Version: version, Audio: protocol.AudioConfig{ConditioningProfile: protocol.ConditioningProfileBypass}}
 	var err error
 	if value.Wake, err = r.Wake.complete(); err != nil {
 		return protocol.DeviceConfig{}, fmt.Errorf("wake: %w", err)

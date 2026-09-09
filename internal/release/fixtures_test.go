@@ -44,16 +44,15 @@ func readFixture(t *testing.T, name, file string) []byte {
 func manifestFor(artifact []byte, version string) Manifest {
 	sum := sha256.Sum256(artifact)
 	return Manifest{
-		Schema:        SchemaVersion,
-		Version:       version,
-		BuildID:       "git-abc123",
-		Architecture:  "linux-arm64",
-		Size:          int64(len(artifact)),
-		SHA256:        hex.EncodeToString(sum[:]),
-		ProtocolMin:   1,
-		ProtocolMax:   1,
-		SupervisorMin: 1,
-		ReleasedAt:    fixtureReleasedAt,
+		Schema:       SchemaVersion,
+		Version:      version,
+		BuildID:      "git-abc123",
+		Architecture: "linux-arm64",
+		Size:         int64(len(artifact)),
+		SHA256:       hex.EncodeToString(sum[:]),
+		ProtocolMin:  1,
+		ProtocolMax:  1,
+		ReleasedAt:   fixtureReleasedAt,
 	}
 }
 

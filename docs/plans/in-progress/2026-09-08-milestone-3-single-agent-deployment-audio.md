@@ -1,7 +1,7 @@
 # Milestone 3 — Single-agent deployment and command-audio conditioning
 
 **Status:** in-progress
-**Owner or active agent:** unassigned (Task 1 completed by Codex)
+**Owner or active agent:** unassigned (Tasks 1–2 completed by Codex)
 **Created:** 2026-09-08
 **Updated:** 2026-09-08
 **Started:** 2026-09-08
@@ -239,7 +239,7 @@ historical mention is clearly labeled superseded or out of scope.
 
 ### Task 2: Qualify launcher and filesystem behavior on FireOS
 
-**Status:** not started
+**Status:** completed 2026-09-08
 
 **Purpose:** Resolve hardware-dependent deployment assumptions before
 implementing the installer.
@@ -263,6 +263,8 @@ backed up, gateway reachable.
   replace the active `echod`.
 - Verify Magisk `service.d` execution timing and environment with a diagnostic
   hook that writes only a timestamp/version marker.
+- Detect the service directory actually consumed by the installed Magisk;
+  hardware evidence may replace the initially assumed modern path.
 - Measure at least 20 current-agent starts from process launch through
   authenticated `welcome`.
 - Validate controlled exit-code propagation and launcher restart behavior.
@@ -278,21 +280,18 @@ assumptions are supported by real-device evidence.
 
 **Verification:**
 
-```sh
-"$ADB" -s "$DEVICE_SERIAL" shell "su -c '
-  cat /proc/mounts
-  df -k /data
-  test -d /data/adb/service.d
-  readlink /proc/\$(pidof echod)/exe
-'"
-```
+Run the inventory, executable-mode, staged-file/directory fsync, live rename,
+reboot persistence, root-owned modern/legacy boot-hook A/B, controlled-exit,
+complete crash-backoff, 20-start timing, installed-binary readlink, and cleanup
+commands recorded under **Reproduction record** in
+[`docs/device-diagnostics.md`](../../device-diagnostics.md).
 
 Expected: the diagnostic record includes filesystem observations, boot-hook
 proof, 20 startup timings, controlled restart proof, and cleanup confirmation.
 
 ### Task 3: Revise release and protocol contracts
 
-**Status:** not started
+**Status:** completed 2026-09-09
 
 **Purpose:** Provide strict contracts for signed single-agent deployment and
 named audio profiles.
@@ -412,6 +411,11 @@ without building a recovery supervisor.
 **Concrete changes:**
 
 - Add a minimal launcher that starts `/data/local/bin/echod`.
+- Install it in the version-qualified Magisk service directory. On the
+  qualified Magisk v17.3 Dot this is
+  `/sbin/.core/img/.core/service.d`, not `/data/adb/service.d`; fail closed on
+  an unrecognized layout.
+- Reserve exit code 75 for controlled update restart.
 - Restart the controlled update exit code immediately.
 - For unexpected exits, back off 1, 2, 4, 8, 16, 32, then 60 seconds; reset the
   backoff after 60 seconds of continuous runtime.
@@ -858,6 +862,23 @@ completion evidence names which checks ran on real hardware.
 
 ## Progress log
 
+- 2026-09-08: Task 2 completed on rooted Dot `G090LF0964060EHP`. `/data` ext4
+  supported executable-mode enforcement, staged-file and directory fsync,
+  atomic same-directory replacement, old-inode execution until exit, and
+  reboot persistence. The planned staging margin remained adequate.
+- 2026-09-08: Hardware invalidated the assumed modern Magisk hook location.
+  Magisk v17.3 ignored `/data/adb/service.d` and executed the root-owned legacy
+  hook from `/sbin/.core/img/.core/service.d` at 7.19 seconds uptime. The plan
+  and design now require version-qualified service-directory detection.
+- 2026-09-08: Twenty current-agent launches all reached authenticated `welcome`
+  in 630.968–810.274 ms (median 649.703 ms). Exit 75 produced an immediate
+  approximately 20 ms restart; unexpected exit 1 honored the full bounded
+  1/2/4/8/16/32/60-second backoff. The hook and isolated files were removed,
+  FireOS services restored, and the installed agent digest remained unchanged.
+- 2026-09-08: Codex claimed Task 2 and began the rooted-Dot launcher and
+  filesystem qualification. The active `echod` path is explicitly excluded
+  from diagnostic writes; all test payloads use
+  `/data/local/tmp/echo-satellite-m3-diagnostic`.
 - 2026-09-08: Plan created. The original A/B supervisor architecture was
   rejected before implementation in favor of signed single-agent replacement,
   a minimal Magisk launcher, gateway redeployment when the client works, and ADB
@@ -885,6 +906,29 @@ completion evidence names which checks ran on real hardware.
 
 ## Completion evidence
 
+- Task 2 rooted-Dot filesystem and launcher qualification — passed 2026-09-08;
+  `docs/device-diagnostics.md` records filesystem/mount/inode observations,
+  executable permissions, file/directory fsync, atomic rename, reboot
+  persistence, boot-hook environment, controlled restart and full crash
+  backoff measurements.
+- Task 2 authenticated startup timing — passed 2026-09-08; 20/20 current-agent
+  launches completed authenticated `hello`/`welcome`, with 630.968 ms minimum,
+  649.703 ms median, 744.369 ms nearest-rank p95 and 810.274 ms maximum.
+- Task 2 cleanup — passed 2026-09-08; diagnostic hooks and
+  `/data/local/tmp/echo-satellite-m3-diagnostic` were absent, no agent remained,
+  `ledcontroller` and `mdnsd` were running, and `/data/local/bin/echod` retained
+  SHA-256 `41ed22dba37da3d583c257991e3b4d69460fc07265010f189594a4d38184f8c6`,
+  matching the host backup.
+- Task 2 repository verification — `make fmt-check`, `make lint`, `make test`,
+  `git diff --check`, and `make verify` passed 2026-09-08. The first sandboxed
+  `make test` attempt could not bind loopback `httptest` listeners; its
+  permission-enabled rerun passed with race detection and 70.3% total coverage.
+- Task 2 fresh-context review and targeted re-reviews — completed 2026-09-08.
+  All findings were fixed: hardware verification now contains the exact command
+  and harness record, staging paths agree, the timing claim stops at the proven
+  authenticated `welcome`, every installed hook is included in cleanup, and
+  post-Task-2 repository checks are recorded. No findings were declined or
+  postponed; the final reviewer reported no residual defect.
 - Task 1 exact `rg -n "A/B|inactive slot|trial health|automatic rollback|supervisor_min|update\\.ab" AGENTS.md docs/DESIGN.md docs/protocol.md` — passed
   2026-09-08; its three matches are only `update.ab` and `supervisor_min` in
   `docs/protocol.md`'s explicitly labeled legacy/superseded wire snapshot,
@@ -906,3 +950,13 @@ completion evidence names which checks ran on real hardware.
 
 Remaining plan tasks require later implementation and hardware sessions, so the
 plan remains `in-progress`.
+
+- 2026-09-09: Task 3 completed. Removed `supervisor_min` and supervisor
+  eligibility, regenerated signed release fixtures, replaced the A/B capability
+  with `update.single.v1`, and replaced legacy update messages with strict
+  deployment-scoped offer, decision, progress, confirmation, cancellation and
+  failure payloads. The wire configuration now carries an exact named audio
+  conditioning profile (`bypass-v1` or `dot-gen2-qualified-v1`). Scoped race
+  tests, fixture regeneration, formatting and lint passed. A broad `go test
+  ./...` compiled the touched callers but could not run pre-existing TLS tests
+  because this sandbox disallows loopback listeners.

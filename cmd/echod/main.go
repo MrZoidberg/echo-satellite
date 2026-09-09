@@ -460,7 +460,7 @@ func announcedCapabilities() protocol.Capabilities {
 		protocol.CapButton,
 		protocol.CapLED,
 		protocol.CapMute,
-		protocol.CapUpdateAB,
+		protocol.CapUpdateSingle,
 	)
 }
 

@@ -23,6 +23,7 @@ func TestDeviceConfig_Validate(t *testing.T) {
 		{"invalid disabled VAD threshold", func(c *DeviceConfig) { c.Wake.VADEnabled = false; c.Wake.VADThreshold = 1.1 }},
 		{"invalid endpoint threshold", func(c *DeviceConfig) { c.Endpointing.SpeechThreshold = -0.1 }},
 		{"zero duration", func(c *DeviceConfig) { c.Endpointing.MaxTurnMS = 0 }},
+		{"unsupported conditioning profile", func(c *DeviceConfig) { c.Audio.ConditioningProfile = "adaptive-v2" }},
 		{"invalid log level", func(c *DeviceConfig) { c.Logs.ForwardLevel = "verbose" }},
 	}
 	for _, tt := range tests {
@@ -32,6 +33,18 @@ func TestDeviceConfig_Validate(t *testing.T) {
 			assert.Error(t, config.Validate())
 		})
 	}
+}
+
+func TestDeviceConfig_UnmarshalJSONRejectsUnknownAudioField(t *testing.T) {
+	data, err := json.Marshal(testDeviceConfig())
+	require.NoError(t, err)
+	var raw map[string]any
+	require.NoError(t, json.Unmarshal(data, &raw))
+	raw["audio"].(map[string]any)["channel_delays"] = []int{1}
+	data, err = json.Marshal(raw)
+	require.NoError(t, err)
+	var config DeviceConfig
+	assert.Error(t, json.Unmarshal(data, &config))
 }
 
 func TestDeviceConfig_UnmarshalJSONRequiresCompleteConfig(t *testing.T) {

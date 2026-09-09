@@ -12,8 +12,8 @@
 //
 // Eligibility is not feature gating. Feature behavior is negotiated by
 // capability announcement in hello; protocol_min, protocol_max and
-// supervisor_min exist only to stop an installation that would produce a device
-// which cannot talk to the gateway or cannot be recovered by its supervisor.
+// protocol_max exist only to stop an installation that would produce a device
+// which cannot talk to the gateway.
 //
 // The release private key lives in the controlled build and release process. It
 // never lives on the gateway or on a device; both only ever hold the public key.
@@ -46,16 +46,15 @@ var (
 // Manifest describes one release artifact. The field set is fixed by
 // docs/DESIGN.md 11.1.
 type Manifest struct {
-	Schema        int       `json:"schema"`
-	Version       string    `json:"version"`
-	BuildID       string    `json:"build_id"`
-	Architecture  string    `json:"architecture"`
-	Size          int64     `json:"size"`
-	SHA256        string    `json:"sha256"`
-	ProtocolMin   int       `json:"protocol_min"`
-	ProtocolMax   int       `json:"protocol_max"`
-	SupervisorMin int       `json:"supervisor_min"`
-	ReleasedAt    time.Time `json:"released_at"`
+	Schema       int       `json:"schema"`
+	Version      string    `json:"version"`
+	BuildID      string    `json:"build_id"`
+	Architecture string    `json:"architecture"`
+	Size         int64     `json:"size"`
+	SHA256       string    `json:"sha256"`
+	ProtocolMin  int       `json:"protocol_min"`
+	ProtocolMax  int       `json:"protocol_max"`
+	ReleasedAt   time.Time `json:"released_at"`
 }
 
 // ParseManifest reads a manifest. Unknown fields are rejected: a manifest is a
@@ -94,9 +93,6 @@ func (m Manifest) Validate() error {
 	}
 	if m.ProtocolMin <= 0 || m.ProtocolMax < m.ProtocolMin {
 		return fmt.Errorf("%w: protocol range %d..%d", ErrInvalidManifest, m.ProtocolMin, m.ProtocolMax)
-	}
-	if m.SupervisorMin < 0 {
-		return fmt.Errorf("%w: supervisor_min %d", ErrInvalidManifest, m.SupervisorMin)
 	}
 	if m.ReleasedAt.IsZero() {
 		return fmt.Errorf("%w: no released_at", ErrInvalidManifest)

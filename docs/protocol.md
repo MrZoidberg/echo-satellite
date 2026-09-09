@@ -19,14 +19,9 @@ untouched. After replacement there is no preserved fallback; a client that
 cannot reconnect requires ADB recovery, while gateway rollback for a connected
 client means deploying a previous signed compatible release.
 
-The obsolete update elements in §§3–6 below are a **legacy wire snapshot,
-superseded as architecture and non-normative for new update implementation**.
-They remain only because Task 3 of the active Milestone 3 plan changes
-`internal/protocol` and these wire details together. Specifically, the old
-multi-copy capability, `supervisor_version`, pre-commit phase/state and
-device-local recovery message are obsolete. The offer, progress, staged,
-restarting, confirmed and failed concepts remain part of the single-agent
-design; Task 3 will complete their exact payloads and phase rules.
+Update payloads are strict: required fields cannot be omitted and unknown
+fields are rejected. A deployment is identified by its non-empty
+`deployment_id` in every update message.
 
 ## 1. Transport and framing
 
@@ -106,15 +101,11 @@ fixed, and its payload lands with the milestone that needs it).
 | `audio.stop` | D→G | defined | closes the command audio window |
 | `play.start` | G→D | defined | opens the playback window |
 | `play.stop` | G→D | defined | closes the playback window |
-| `update.offer` | G→D | defined | offers a release, with an authenticated artifact URL |
-| `update.accept` | D→G | reserved | device accepts an offer |
-| `update.reject` | D→G | reserved | device declines an offer, with a reason |
+| `update.offer` | G→D | defined | offers a signed release and its HTTPS resources |
+| `update.decision` | D→G | defined | device accepts or rejects an offer |
 | `update.progress` | D→G | defined | current update phase and progress |
-| `update.staged` | D→G | reserved | replacement verified and ready to commit |
-| `update.restarting` | D→G | reserved | replacement committed; controlled restart requested |
-| `update.trial` | D→G | reserved | legacy/superseded pre-commit status |
-| `update.confirmed` | D→G | reserved | installed version/build confirmed after reconnect |
-| `update.rolled_back` | D→G | reserved | legacy/superseded device-local recovery status |
+| `update.confirmed` | D→G | defined | installed version/build confirmed after reconnect |
+| `update.cancelled` | D→G | defined | deployment cancelled before replacement |
 | `update.failed` | D→G | defined | terminal update failure, with a code |
 | `button` | D→G | reserved | action button press |
 | `mute` | both | reserved | microphone mute state |
@@ -131,9 +122,8 @@ fixed, and its payload lands with the milestone that needs it).
 {
   "device_id": "dot-kitchen",
   "agent_version": "0.3.0",
-  "supervisor_version": "1",
-  "protocol": 1,
-  "capabilities": ["audio.capture", "audio.playback", "update.ab", "wake.local"],
+	"protocol": 1,
+  "capabilities": ["audio.capture", "audio.playback", "update.single.v1", "wake.local"],
   "wake_config": {
     "engine": "openwakeword",
     "models": ["okay_nabu"],
@@ -142,22 +132,20 @@ fixed, and its payload lands with the milestone that needs it).
     "pre_roll_ms": 500
   },
   "config_version": 3,
-  "update_state": "trial"
+	"update_state": "idle"
 }
 ```
 
 `wake_config` is reported for observability. The gateway cannot change the local
 wake stack by replying with a different summary, and it never scores wake audio.
 
-The example's `supervisor_version`, old update capability and `update_state`
-value are legacy/superseded wire elements retained until Task 3 changes the Go
-types. They do not describe the approved deployment architecture or imply any
-launcher-version contract.
+`hello` does not carry a launcher/supervisor version. The launcher has no
+deployment compatibility contract.
 
 ### `welcome` (G→D)
 
 ```json
-{ "server_id": "home-gateway", "protocol": 1, "config": { "version": 3, "wake": { "engine": "openwakeword", "model": "okay_nabu", "threshold": 0.5, "vad_enabled": true, "vad_threshold": 0.5, "vad_lookback_ms": 1200, "pre_roll_ms": 600, "min_interval_ms": 2000, "always_score_wake": true }, "endpointing": { "speech_threshold": 0.5, "speech_onset_ms": 160, "trailing_silence_ms": 1500, "no_speech_timeout_ms": 3000, "max_turn_ms": 60000 }, "logs": { "forward_level": "info" } } }
+{ "server_id": "home-gateway", "protocol": 1, "config": { "version": 3, "wake": { "engine": "openwakeword", "model": "okay_nabu", "threshold": 0.5, "vad_enabled": true, "vad_threshold": 0.5, "vad_lookback_ms": 1200, "pre_roll_ms": 600, "min_interval_ms": 2000, "always_score_wake": true }, "endpointing": { "speech_threshold": 0.5, "speech_onset_ms": 160, "trailing_silence_ms": 1500, "no_speech_timeout_ms": 3000, "max_turn_ms": 60000 }, "audio": { "conditioning_profile": "bypass-v1" }, "logs": { "forward_level": "info" } } }
 ```
 
 `config` is a typed, complete device configuration. Protocol version 1 owns its
@@ -216,42 +204,55 @@ values; implementations sanitize credentials before forwarding them.
 ```
 
 States, in display order: `idle`, `listening`, `thinking`, `speaking`, `muted`,
-`offline`, `error`, `updating`, `update_trial`. `muted` distinguishes the local
-privacy state from a fault, `offline` indicates loss of gateway connectivity,
-and the final legacy state identifies the superseded pre-commit update model.
+`offline`, `error`, `updating`. `muted` distinguishes the local privacy state
+from a fault and `offline` indicates loss of gateway connectivity.
 
 ### `update.offer` (G→D)
 
 ```json
 {
+	"deployment_id": "01J...",
   "version": "0.3.0",
   "build_id": "git-abc123",
   "artifact_url": "https://gateway.local/artifacts/echod-0.3.0",
   "size": 12849320,
   "sha256": "…",
-  "manifest_url": "https://gateway.local/artifacts/echod-0.3.0/manifest.json"
+	"manifest_url": "https://gateway.local/artifacts/echod-0.3.0/manifest.json",
+	"signature_url": "https://gateway.local/artifacts/echod-0.3.0/manifest.sig"
 }
 ```
 
-The artifact is fetched over authenticated HTTPS, never streamed through this
-connection as control messages.
+All three resource URLs must be absolute HTTPS URLs. The artifact is fetched
+over authenticated HTTPS, never streamed through this connection as control messages.
+
+### `update.decision` (D→G)
+
+```json
+{ "deployment_id": "01J...", "decision": "rejected", "code": "busy", "detail": "voice turn active" }
+```
+
+`decision` is `accepted` or `rejected`. Accepted decisions have an empty code;
+rejected decisions use a stable failure code.
 
 ### `update.progress` (D→G)
 
 ```json
-{ "phase": "downloading", "percent": 42, "detail": "" }
+{ "deployment_id": "01J...", "phase": "downloading", "percent": 42, "detail": "" }
 ```
 
 ### `update.failed` (D→G)
 
 ```json
-{ "code": "digest_mismatch", "message": "sha256 did not match manifest" }
+{ "deployment_id": "01J...", "code": "digest_mismatch", "detail": "sha256 did not match manifest" }
 ```
 
-Under the superseded wire snapshot, this payload represented a failure before
-the old activation step. In the approved architecture, a pre-replacement
-failure leaves the installed agent untouched, while a post-replacement failure
-may require ADB recovery.
+`update.confirmed` contains `deployment_id`, `version`, and `build_id` after
+reconnect. `update.cancelled` contains `deployment_id` and sanitized `detail`.
+Failures and rejected decisions use only: `busy`, `invalid_offer`,
+`ineligible`, `insufficient_space`, `download_failed`, `signature_invalid`,
+`size_mismatch`, `digest_mismatch`, `stage_failed`, `install_failed`, or
+`restart_failed`. A pre-replacement failure leaves the installed agent
+untouched; a post-replacement failure may require ADB recovery.
 
 ### `error` (both)
 
@@ -261,19 +262,15 @@ may require ADB recovery.
 
 ## 5. Update phases
 
-Until Task 3, `update.progress.phase` and `hello.update_state` use this current
-wire list, which contains both retained single-agent phases and obsolete legacy
-phases:
+`update.progress.phase` and `hello.update_state` use:
 
 ```
 idle · available · queued · downloading · verifying · staged
-restarting · trial · confirmed · failed · rolled_back · cancelled
+restarting · confirmed · failed · cancelled
 ```
 
-In this legacy wire snapshot, `confirmed`, `failed`, `rolled_back` and
-`cancelled` are terminal: nothing follows without a new offer. The approved
-single-agent state machine retains `confirmed`, `failed` and `cancelled`, but
-Task 3 removes the obsolete pre-commit and device-local recovery phases.
+`confirmed`, `failed`, and `cancelled` are terminal: nothing follows without a
+new offer. `update.progress` only reports non-terminal active phases.
 
 The device owns progression through its reported installation phases. The
 gateway observes those reports, owns desired version and rollout policy, and
@@ -291,16 +288,14 @@ whether a feature may be used with a device:
 | `audio.capture` | can stream command audio during a turn |
 | `audio.playback` | can play gateway-supplied audio |
 | `command.endpointing.local` | ends active-turn audio on the device |
-| `update.ab` | legacy/superseded multi-copy agent update capability |
+| `update.single.v1` | supports single-agent atomic replacement |
 | `led` | can display semantic LED states |
 | `button` | can report action-button presses |
 | `mute` | exposes a microphone mute control |
 
 Deciding behavior by comparing agent versions is forbidden. Version minimums
 exist only in release manifests as installation-safety constraints, never as
-feature gates. The legacy `supervisor_min` manifest constraint remains in the
-current release schema only until Task 3 removes it; it is not a launcher
-compatibility requirement.
+feature gates.
 
 ## 7. Boundary guarantees
 

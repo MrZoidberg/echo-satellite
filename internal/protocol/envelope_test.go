@@ -22,11 +22,10 @@ func TestEncodeDecode_RoundTripPayloads(t *testing.T) {
 			name:    "hello",
 			msgType: TypeHello,
 			payload: Hello{
-				DeviceID:          "dot-1",
-				AgentVersion:      "0.1.0",
-				SupervisorVersion: "1",
-				Protocol:          ProtocolVersion,
-				Capabilities:      NewCapabilities(CapWakeLocal, CapAudioCapture),
+				DeviceID:     "dot-1",
+				AgentVersion: "0.1.0",
+				Protocol:     ProtocolVersion,
+				Capabilities: NewCapabilities(CapWakeLocal, CapAudioCapture),
 				WakeConfig: WakeConfig{
 					Engine: "openwakeword", Models: []string{"okay_nabu"},
 					WakeThreshold: 0.6, VADThreshold: 0.5, PreRollMS: 500,
@@ -94,21 +93,21 @@ func TestEncodeDecode_RoundTripPayloads(t *testing.T) {
 		{
 			name:    "update.offer",
 			msgType: TypeUpdateOffer,
-			payload: UpdateOffer{Version: "0.3.0", BuildID: "git-abc123",
-				ArtifactURL: "https://gw.local/artifacts/echod", Size: 12849320, SHA256: "deadbeef"},
+			payload: UpdateOffer{DeploymentID: "deploy-1", Version: "0.3.0", BuildID: "git-abc123",
+				ArtifactURL: "https://gw.local/artifacts/echod", ManifestURL: "https://gw.local/manifest", SignatureURL: "https://gw.local/manifest.sig", Size: 12849320, SHA256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"},
 			into: func() any { return &UpdateOffer{} },
 		},
 		{
 			name:    "update.progress",
 			msgType: TypeUpdateProgress,
-			payload: UpdateProgress{Phase: PhaseDownloading, Percent: 42},
+			payload: UpdateProgress{DeploymentID: "deploy-1", Phase: PhaseDownloading, Percent: 42},
 			into:    func() any { return &UpdateProgress{} },
 		},
 		{
 			name:    "update.failed",
 			msgType: TypeUpdateFailed,
-			payload: UpdateFailed{Code: "digest_mismatch", Message: "sha256 did not match manifest"},
-			into:    func() any { return &UpdateFailed{} },
+			payload: UpdateFailure{DeploymentID: "deploy-1", Code: UpdateFailureDigestMismatch, Detail: "sha256 did not match manifest"},
+			into:    func() any { return &UpdateFailure{} },
 		},
 		{
 			name:    "error",
@@ -150,7 +149,8 @@ func testDeviceConfig() DeviceConfig {
 			MinIntervalMS: 2000, AlwaysScoreWake: true},
 		Endpointing: EndpointingConfig{SpeechThreshold: 0.5, SpeechOnsetMS: 160,
 			TrailingSilenceMS: 1500, NoSpeechTimeoutMS: 3000, MaxTurnMS: 60000},
-		Logs: LogSettings{ForwardLevel: LogLevelInfo},
+		Audio: AudioConfig{ConditioningProfile: ConditioningProfileBypass},
+		Logs:  LogSettings{ForwardLevel: LogLevelInfo},
 	}
 }
 
@@ -181,7 +181,7 @@ func TestEncodeDecode_RequireCorrelationIDs(t *testing.T) {
 }
 
 func TestEncodeDecode_RequirePayloads(t *testing.T) {
-	for _, msgType := range []MessageType{TypeWelcome, TypeConfig, TypeConfigResult, TypeLog, TypeAudioStop} {
+	for _, msgType := range []MessageType{TypeWelcome, TypeConfig, TypeConfigResult, TypeLog, TypeAudioStop, TypeUpdateOffer, TypeUpdateDecision, TypeUpdateProgress, TypeUpdateConfirmed, TypeUpdateCancelled, TypeUpdateFailed} {
 		_, err := Encode(msgType, "message-id", time.Now(), nil)
 		require.ErrorIs(t, err, ErrNoRequiredPayload, msgType)
 
