@@ -94,8 +94,10 @@ When multiple independent plan tasks run in one session, use one agent per task
 with non-overlapping files; the orchestrator owns plan state, cross-cutting
 checks, and final reporting.
 
-Before review, run `make fmt-check`, `make lint`, `make test`, and the task's
-exact verification; `make verify` is the final software check. Fix lint
+Use scoped iteration checks while implementing. Before fresh review, run the
+task's exact verification plus `make fmt-check`, `make lint`, and `make test`;
+run `make verify` once before handoff, and again only if remediation changes
+software or build behaviour. Fix lint
 findings rather than suppressing them. Review coverage for touched functions:
 test new exported functions, error paths, and design-boundary rules, and explain
 deliberately untested paths in new packages below roughly 70% coverage.
@@ -103,6 +105,12 @@ Hardware-dependent behavior is not verified by a passing `dotsim` run; report
 which checks used real hardware.
 
 ### Echo Dot hardware sessions
+
+For live Echo Dot, FireOS, ADB, Magisk, reboot, or audio work, load the
+repository `echo-dot-hardware` skill and begin with explicit runner inputs:
+`uv run --no-project --script tools/device-lab/device_lab.py preflight --adb
+<path> --serial <serial>`. It captures sanitized evidence and owns cleanup;
+only one agent may control a physical Dot.
 
 Before the first live diagnostic in an ADB session, stop `ledcontroller` and
 write `0` to `/sys/bus/i2c/devices/0-003f/boot_animation` so Amazon's indicator

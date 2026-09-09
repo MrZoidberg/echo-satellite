@@ -26,6 +26,7 @@ TASK_HEADING = re.compile(r"^#{2,3}\s+Task\s+(\d+)(?:\s|:)", re.MULTILINE)
 TOP_LEVEL_HEADING = re.compile(r"^#\s+", re.MULTILINE)
 LIFECYCLE_DIRECTORIES = ("in-progress", "future", "finished", "superseded")
 REPOSITORY_SCOPE_FILES = {"go.mod", "go.sum", "Makefile", ".golangci.yml"}
+PLAN_PREFIX = "docs/plans/"
 
 
 @dataclass(frozen=True)
@@ -143,7 +144,8 @@ def eligible_journal_paths(paths: Iterable[PatchPath], worktree: Path) -> list[P
                 eligible.append(path)
             continue
         path = normalized_relative_path(patch_path.path, worktree)
-        if path is not None and (path.suffix == ".go" or patch_path.path.replace("\\", "/") in REPOSITORY_SCOPE_FILES) and path not in seen:
+        relative = patch_path.path.replace("\\", "/")
+        if path is not None and (path.suffix == ".go" or relative in REPOSITORY_SCOPE_FILES or relative.startswith(PLAN_PREFIX)) and path not in seen:
             seen.add(path)
             eligible.append(path)
     return eligible
@@ -191,6 +193,12 @@ def baseline_path(worktree: Path, session_id: str) -> Path:
     return journal_dir_for(worktree) / f"baseline-{sha256(session_id.encode('utf-8')).hexdigest()}.json"
 
 
+def checkpoint_path(worktree: Path, session_id: str) -> Path:
+    """Return the rolling PostToolUse snapshot for one Codex session."""
+
+    return journal_dir_for(worktree) / f"checkpoint-{sha256(session_id.encode('utf-8')).hexdigest()}.json"
+
+
 def session_snapshot(worktree: Path) -> dict[str, str]:
     """Hash eligible working-tree files without following unsafe symlinks."""
 
@@ -204,7 +212,7 @@ def session_snapshot(worktree: Path) -> dict[str, str]:
         if path is None:
             continue
         relative = path.relative_to(worktree).as_posix()
-        if path.suffix == ".go" or relative in REPOSITORY_SCOPE_FILES:
+        if path.suffix == ".go" or relative in REPOSITORY_SCOPE_FILES or relative.startswith(PLAN_PREFIX):
             snapshot[relative] = sha256(path.read_bytes()).hexdigest()
     return snapshot
 
@@ -212,9 +220,13 @@ def session_snapshot(worktree: Path) -> dict[str, str]:
 def write_baseline(worktree: Path, session_id: str, snapshot: dict[str, str]) -> None:
     """Atomically persist the initial relevant-file snapshot for one session."""
 
-    directory = journal_dir_for(worktree)
-    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-    destination = baseline_path(worktree, session_id)
+    write_snapshot(baseline_path(worktree, session_id), snapshot)
+
+
+def write_snapshot(destination: Path, snapshot: dict[str, str]) -> None:
+    """Atomically persist one Git-private snapshot."""
+
+    destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     temporary = destination.with_suffix(".tmp")
     temporary.write_text(json.dumps(snapshot, sort_keys=True, separators=(",", ":")), encoding="utf-8")
     os.replace(temporary, destination)
@@ -230,6 +242,25 @@ def baseline_snapshot(worktree: Path, session_id: str) -> dict[str, str] | None:
     if not isinstance(snapshot, dict) or not all(isinstance(path, str) and isinstance(digest, str) for path, digest in snapshot.items()):
         return None
     return snapshot
+
+
+def changed_since_checkpoint(worktree: Path, session_id: str) -> list[str]:
+    """Return only changes since the prior PostToolUse event and advance it."""
+
+    previous = baseline_snapshot(worktree, session_id)
+    checkpoint = checkpoint_path(worktree, session_id)
+    if checkpoint.exists():
+        try:
+            decoded = json.loads(checkpoint.read_text(encoding="utf-8"))
+            if isinstance(decoded, dict) and all(isinstance(key, str) and isinstance(value, str) for key, value in decoded.items()):
+                previous = decoded
+        except (OSError, json.JSONDecodeError):
+            pass
+    if previous is None:
+        return []
+    current = session_snapshot(worktree)
+    write_snapshot(checkpoint, current)
+    return sorted(path for path in previous.keys() | current.keys() if previous.get(path) != current.get(path))
 
 
 def changed_since_baseline(worktree: Path, session_id: str) -> list[str]:
@@ -301,7 +332,7 @@ def handle_post_tool_use(event: dict[str, Any]) -> int:
             format_go_files(eligible_go_paths(patch_paths, worktree), worktree)
             write_journal(worktree, session_id, eligible_journal_paths(patch_paths, worktree))
         else:
-            changed_paths = changed_since_baseline(worktree, session_id)
+            changed_paths = changed_since_checkpoint(worktree, session_id)
             go_paths = [worktree / path for path in changed_paths if path.endswith(".go") and (worktree / path).is_file()]
             format_go_files(go_paths, worktree)
             write_journal(worktree, session_id, changed_paths)
@@ -485,6 +516,7 @@ def handle_session_end(event: dict[str, Any]) -> int:
     if not directory.exists():
         return 0
     baseline_path(worktree, session_id).unlink(missing_ok=True)
+    checkpoint_path(worktree, session_id).unlink(missing_ok=True)
     for record_path in directory.glob("*.json"):
         try:
             record = json.loads(record_path.read_text(encoding="utf-8"))
