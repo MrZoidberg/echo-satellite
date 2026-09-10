@@ -78,6 +78,143 @@ class CoreTests(unittest.TestCase):
             self.assertEqual("shell", captured[1][0])
             self.assertTrue(captured[1][1].startswith("su -c '/data/local/tmp/.echo-device-lab-root-"))
 
+    def test_lock_conflict_prints_canonical_owned_resume(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            parent = Path(directory) / "device-lab"
+            owner = parent / "owner-session"
+            owner.mkdir(parents=True)
+            (owner / "state.json").write_text(json.dumps({"ownership_token": "owner-token"}), encoding="utf-8")
+            (owner / "evidence.json").write_text(json.dumps({"serial": "dot"}), encoding="utf-8")
+            runner = object.__new__(device_lab.Runner)
+            runner.root = parent / "new-session"
+            runner.root.mkdir()
+            runner.args = argparse.Namespace(serial="dot")
+            runner.token = "new-token"
+            lock = parent / "dot.lock"
+            lock.write_text("owner-token", encoding="ascii")
+            with self.assertRaisesRegex(device_lab.LabError, r"--resume \.bin/device-lab/owner-session"):
+                runner.acquire_host_lock()
+
+    def test_capability_probe_is_observational(self) -> None:
+        runner = object.__new__(device_lab.Runner)
+        runner.root_shell = lambda _script: device_lab.CommandResult(
+            0,
+            "busybox_path=/data/adb/magisk/busybox\nbusybox_version=BusyBox v1\nbusybox_cmp=available\nbusybox_sed=available\nbusybox_awk=available\nbusybox_sha256sum=available\nsystem_cmp=available\nsystem_sed=missing\nsystem_awk=missing\nsystem_sha256sum=available\nsystem_cmp_s=rejected\nbusybox_cmp_s=supported\n",
+            "",
+        )
+        capabilities = runner.command_capabilities()
+        self.assertEqual("rejected", capabilities["system_cmp_s"])
+        self.assertEqual("supported", capabilities["busybox_cmp_s"])
+        self.assertEqual("missing", capabilities["system_sed"])
+        self.assertEqual("missing", capabilities["system_awk"])
+        self.assertEqual("BusyBox v1", capabilities["busybox_version"])
+
+    def test_stage_external_records_identity_without_installing(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            artifact = Path(directory) / "agent.bin"
+            artifact.write_bytes(b"operator artifact")
+            runner = object.__new__(device_lab.Runner)
+            runner.args = argparse.Namespace(artifact=str(artifact), retain=False)
+            runner.root = Path(directory) / "session"
+            runner.root.mkdir()
+            runner.state = {}
+            runner.remote_root = "/data/local/tmp/echo-device-lab/session"
+            prepared = []
+            runner.prepare = lambda: prepared.append(True)
+            captured = []
+            runner.adb = lambda arguments: captured.append(arguments) or device_lab.CommandResult(0, "", "")
+            runner.root_shell = lambda script: device_lab.CommandResult(
+                0,
+                f"{device_lab.digest(artifact)}  artifact\n0:600:{artifact.stat().st_size}\n" if "$BB sha256sum" in script else "",
+                "",
+            )
+            observations = []
+            runner.phase = lambda _name, action: observations.append(action())
+            runner.stage_external()
+            self.assertEqual([True], prepared)
+            self.assertEqual("push", captured[0][0])
+            self.assertIn("/data/local/tmp/.echo-device-lab-external-session-", captured[0][-1])
+            self.assertTrue(observations[0]["remote_path"].startswith(runner.remote_root + "/external/"))
+            self.assertFalse(observations[0]["retained"])
+            runner.args.retain = True
+            runner.stage_external()
+            self.assertEqual([True, True], prepared)
+            self.assertNotEqual(captured[0][-1], captured[1][-1])
+            self.assertTrue(observations[1]["remote_path"].startswith("/data/local/tmp/echo-device-lab-retained/session/"))
+            self.assertTrue(observations[1]["retained"])
+
+    def test_external_action_records_read_only_checkpoints(self) -> None:
+        runner = object.__new__(device_lab.Runner)
+        runner.args = argparse.Namespace(action="install", checkpoint="after", hook_path=device_lab.DEFAULT_HOOK_PATH, metadata_path=device_lab.DEFAULT_METADATA_PATH, serial="dot")
+        runner.state = {"initial_device_state": {"installed_agent_digest": "a" * 64}}
+        runner.evidence = {"serial": "dot", "phases": [{"name": "prepare", "status": "passed"}]}
+        runner.acquire_host_lock = lambda: None
+        runner.installed_digest = lambda: "a" * 64
+        runner._path_status = lambda path: "present" if path.endswith(".sh") else "absent"
+        runner._save = lambda: None
+        recorded = []
+        runner.phase = lambda _name, action: recorded.append(action())
+        runner.record_external_action()
+        self.assertEqual("a" * 64, runner.state["external_actions"]["install"]["after"]["installed_agent_digest"])
+        self.assertEqual("present", recorded[0]["hook_status"])
+        with self.assertRaisesRegex(device_lab.LabError, "already recorded"):
+            runner.record_external_action()
+
+    def test_external_action_rejects_unprepared_or_cross_serial_session(self) -> None:
+        runner = object.__new__(device_lab.Runner)
+        runner.args = argparse.Namespace(action="install", checkpoint="before", hook_path=device_lab.DEFAULT_HOOK_PATH, metadata_path=device_lab.DEFAULT_METADATA_PATH, serial="dot")
+        runner.state = {"initial_device_state": {"installed_agent_digest": "a" * 64}}
+        runner.evidence = {"serial": "dot", "phases": [{"name": "preflight-initial-state", "status": "passed"}]}
+        with self.assertRaisesRegex(device_lab.LabError, "prepared resumed"):
+            runner.record_external_action()
+        runner.evidence["phases"].append({"name": "prepare", "status": "passed"})
+        runner.evidence["serial"] = "other-dot"
+        with self.assertRaisesRegex(device_lab.LabError, "serial does not match"):
+            runner.record_external_action()
+
+    def test_external_staging_rejects_transfer_mismatch_and_symlinks(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            artifact = Path(directory) / "agent.bin"
+            artifact.write_bytes(b"operator artifact")
+            runner = object.__new__(device_lab.Runner)
+            runner.args = argparse.Namespace(artifact=str(artifact), retain=False)
+            runner.root = Path(directory) / "session"
+            runner.root.mkdir()
+            runner.state = {}
+            runner.remote_root = "/data/local/tmp/echo-device-lab/session"
+            runner.prepare = lambda: None
+            runner.adb = lambda _arguments: device_lab.CommandResult(0, "", "")
+            scripts = []
+            runner.root_shell = lambda script: scripts.append(script) or device_lab.CommandResult(0, f"{device_lab.digest(artifact)}  artifact\n0:644:{artifact.stat().st_size}\n", "")
+            runner.phase = lambda _name, action: action()
+            with self.assertRaisesRegex(device_lab.LabError, "corrupted during staging"):
+                runner.stage_external()
+            self.assertTrue(any(script.startswith("rm -f /data/local/tmp/echo-device-lab/session/external/") for script in scripts))
+            link = Path(directory) / "link.bin"
+            link.symlink_to(artifact)
+            runner.args.artifact = str(link)
+            with self.assertRaisesRegex(device_lab.LabError, "regular file"):
+                runner.stage_external()
+
+    def test_digest_drift_records_hashes_and_recovery_without_repair(self) -> None:
+        runner = object.__new__(device_lab.Runner)
+        runner.state = {"initial_device_state": {"installed_agent_digest": "a" * 64}}
+        runner.evidence = {"checks": []}
+        runner.installed_digest = lambda: "b" * 64
+        runner._save = lambda: None
+        runner.acquire_host_lock = lambda: None
+        with self.assertRaisesRegex(device_lab.LabError, "No automatic recovery"):
+            runner.verify_clean()
+        observation = runner.evidence["checks"][0]["observation"]
+        self.assertEqual("a" * 64, observation["expected_agent_sha256"])
+        self.assertEqual("b" * 64, observation["observed_agent_sha256"])
+
+    def test_new_commands_validate_required_options(self) -> None:
+        with self.assertRaises(SystemExit):
+            device_lab.main(["stage-external", "--adb", "adb", "--serial", "dot"])
+        with self.assertRaises(SystemExit):
+            device_lab.main(["record-external-action", "--adb", "adb", "--serial", "dot"])
+
 
 def _walk(suite: unittest.TestSuite):
     for item in suite:

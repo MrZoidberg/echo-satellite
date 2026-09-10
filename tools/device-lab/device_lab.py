@@ -31,8 +31,12 @@ SECRET_NAME = re.compile(r"(?:token|authorization|credential|private.?key|secret
 URL_QUERY = re.compile(r"https?://[^\s?]+\?[^\s]+", re.I)
 SAFE_REMOTE_ROOT = re.compile(r"^/data/local/tmp/echo-device-lab/[A-Za-z0-9_-]+$")
 SAFE_SERIAL = re.compile(r"^[A-Za-z0-9._:-]+$")
+SAFE_ARTIFACT_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+SAFE_PROBE_PATH = re.compile(r"^/(?:data/adb/service\.d|sbin/\.core/img/\.core/service\.d)/[A-Za-z0-9._-]+$")
+DEFAULT_METADATA_PATH = "/data/local/etc/echo-satellite/installed-release.json"
+DEFAULT_HOOK_PATH = "/sbin/.core/img/.core/service.d/echo-satellite.sh"
 SESSION_PARENT = (Path.cwd() / ".bin" / "device-lab").resolve()
-COMMANDS = ("preflight", "prepare", "cleanup", "verify-clean", "render-evidence")
+COMMANDS = ("preflight", "prepare", "cleanup", "verify-clean", "render-evidence", "stage-external", "record-external-action")
 
 
 class LabError(RuntimeError):
@@ -247,13 +251,35 @@ class Runner:
         try:
             descriptor = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
         except FileExistsError as error:
-            if lock.read_text(encoding="ascii") == self.token:
+            try:
+                owner_token = lock.read_text(encoding="ascii")
+            except UnicodeDecodeError:
+                raise LabError(f"device lock already exists: {lock}; do not steal it") from error
+            if owner_token == self.token:
                 return
+            recovery = self._recover_lock_command(owner_token)
+            if recovery:
+                raise LabError(f"device lock already exists: {lock}; resume its owner with: {recovery}") from error
             raise LabError(f"device lock already exists: {lock}; do not steal it") from error
         os.write(descriptor, self.token.encode("ascii"))
         os.close(descriptor)
         self.state["host_lock"] = str(lock)
         self._save()
+
+    def _recover_lock_command(self, token: str) -> str | None:
+        """Return a canonical resume command only for a proven local owner."""
+
+        for session in self.root.parent.iterdir():
+            if not session.is_dir() or session == self.root:
+                continue
+            try:
+                state = json.loads((session / "state.json").read_text(encoding="utf-8"))
+                evidence = json.loads((session / "evidence.json").read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if state.get("ownership_token") == token and evidence.get("serial") == self.args.serial:
+                return f"--resume .bin/device-lab/{session.name}"
+        return None
 
     def release_host_lock(self) -> None:
         lock = self.state.get("host_lock")
@@ -278,13 +304,46 @@ class Runner:
             self._save()
             return {"installed_agent_digest": agent_digest, "boot_id": lines[1], "microphone": "idle"}
         self.phase("preflight-initial-state", capture)
+        self.phase("preflight-command-capabilities", self.command_capabilities)
         self.phase("preflight-lock", lambda: {"ownership": "acquired"})
+
+    def command_capabilities(self) -> dict[str, str]:
+        """Capture FireOS command behavior as diagnostic evidence, never a gate."""
+
+        script = (
+            "BB=/data/adb/magisk/busybox; "
+            "printf 'busybox_path=%s\\n' \"$BB\"; "
+            "printf 'busybox_version='; $BB 2>&1 | $BB head -n 1; "
+            "for applet in cmp sed awk sha256sum; do "
+            "if $BB \"$applet\" --help >/dev/null 2>&1; then printf 'busybox_%s=available\\n' \"$applet\"; "
+            "else printf 'busybox_%s=missing\\n' \"$applet\"; fi; done; "
+            "for command in cmp sed awk sha256sum; do "
+            "if command -v \"$command\" >/dev/null 2>&1; then printf 'system_%s=available\\n' \"$command\"; "
+            "else printf 'system_%s=missing\\n' \"$command\"; fi; done; "
+            "probe=/data/local/tmp/.echo-device-lab-cmp-$$; : > \"$probe\"; "
+            "if command -v cmp >/dev/null 2>&1; then "
+            "if cmp -s \"$probe\" \"$probe\" >/dev/null 2>&1; then echo system_cmp_s=supported; "
+            "else echo system_cmp_s=rejected; fi; else echo system_cmp_s=missing; fi; "
+            "if $BB cmp -s \"$probe\" \"$probe\" >/dev/null 2>&1; then echo busybox_cmp_s=supported; "
+            "else echo busybox_cmp_s=rejected; fi; rm -f \"$probe\""
+        )
+        result = self.root_shell(script)
+        self._must_succeed(result, "probe command capabilities")
+        capabilities: dict[str, str] = {}
+        for line in result.stdout.splitlines():
+            key, separator, value = line.partition("=")
+            if separator and re.fullmatch(r"[a-z0-9_]+", key):
+                capabilities[key] = bounded(value)
+        return capabilities
+
+    def ensure_remote_root(self) -> None:
+        script = f"BB=/data/adb/magisk/busybox; umask 077; test ! -e {self.remote_root} || test \"$($BB cat {self.remote_root}/.owner 2>/dev/null)\" = '{self.token}' || exit 73; mkdir -p {self.remote_root}; chown root:root {self.remote_root}; chmod 700 {self.remote_root}; $BB printf '%s' '{self.token}' > {self.remote_root}/.owner; chown root:root {self.remote_root}/.owner; chmod 600 {self.remote_root}/.owner; test ! -e {self.remote_root}/.lock || test \"$($BB cat {self.remote_root}/.lock)\" = '{self.token}' || exit 74; $BB printf '%s' '{self.token}' > {self.remote_root}/.lock; chown root:root {self.remote_root}/.lock; chmod 600 {self.remote_root}/.lock; $BB sync"
+        self._must_succeed(self.root_shell(script), "create root-owned diagnostic root and remote lock")
 
     def stage_payloads(self) -> dict[str, str]:
         """Push immutable repository payloads into the already validated session root."""
 
-        create = self.root_shell(f"BB=/data/adb/magisk/busybox; umask 077; test ! -e {self.remote_root} || test \"$($BB cat {self.remote_root}/.owner 2>/dev/null)\" = '{self.token}' || exit 73; mkdir -p {self.remote_root}; chown root:root {self.remote_root}; chmod 700 {self.remote_root}; $BB printf '%s' '{self.token}' > {self.remote_root}/.owner; chown root:root {self.remote_root}/.owner; chmod 600 {self.remote_root}/.owner; test ! -e {self.remote_root}/.lock || test \"$($BB cat {self.remote_root}/.lock)\" = '{self.token}' || exit 74; $BB printf '%s' '{self.token}' > {self.remote_root}/.lock; chown root:root {self.remote_root}/.lock; chmod 600 {self.remote_root}/.lock; $BB sync")
-        self._must_succeed(create, "create root-owned diagnostic root and remote lock")
+        self.ensure_remote_root()
         payload_directory = Path(__file__).with_name("payloads")
         staged: dict[str, str] = {}
         for source in sorted(payload_directory.glob("*.sh")):
@@ -316,6 +375,88 @@ class Runner:
             return self._must_succeed(result, "verify captured initial state")
         self.phase("prepare", prepare_payload)
 
+    def stage_external(self) -> None:
+        """Stage an operator artifact without interpreting or installing it."""
+
+        if self.state.get("cleaned"):
+            raise LabError("a cleaned session cannot stage an external artifact; start a new session")
+        artifact = Path(self.args.artifact)
+        if artifact.is_symlink() or not artifact.is_file() or not SAFE_ARTIFACT_NAME.fullmatch(artifact.name):
+            raise LabError("--artifact must name a regular file with a safe basename")
+        self.prepare()
+        artifact_digest = digest(artifact)
+        artifact_size = artifact.stat().st_size
+        retained = bool(self.args.retain)
+        destination_root = (
+            f"/data/local/tmp/echo-device-lab-retained/{self.root.name}"
+            if retained else f"{self.remote_root}/external"
+        )
+        destination = f"{destination_root}/{artifact_digest[:12]}-{artifact.name}"
+        temporary = f"/data/local/tmp/.echo-device-lab-external-{self.root.name}-{artifact_digest[:12]}-{secrets.token_hex(5)}"
+
+        def stage() -> dict[str, Any]:
+            pushed = self.adb(("push", str(artifact), temporary))
+            if pushed.returncode:
+                self.root_shell(f"rm -f {temporary}")
+                self._must_succeed(pushed, "push external artifact")
+            try:
+                script = f"umask 077; mkdir -p {destination_root}; chown root:root {destination_root}; chmod 700 {destination_root}; mv {temporary} {destination}; chown root:root {destination}; chmod 600 {destination}; sync"
+                self._must_succeed(self.root_shell(script), "secure external artifact")
+            except LabError:
+                self.root_shell(f"rm -f {temporary}")
+                raise
+            verified = self._must_succeed(self.root_shell(f"BB=/data/adb/magisk/busybox; $BB sha256sum {destination}; $BB stat -c %u:%a:%s {destination}"), "verify external artifact")
+            lines = verified["output"].splitlines()
+            remote_digest = lines[0].split(maxsplit=1)[0] if lines else ""
+            remote_properties = lines[1] if len(lines) > 1 else ""
+            if remote_digest != artifact_digest or remote_properties != f"0:600:{artifact_size}":
+                self.root_shell(f"rm -f {destination}")
+                raise LabError("external artifact changed or was corrupted during staging")
+            return {"artifact_basename": artifact.name, "artifact_size": artifact_size, "artifact_sha256": artifact_digest, "remote_path": destination, "retained": retained}
+
+        lifetime = "retained" if retained else "session"
+        self.phase(f"stage-external-{artifact_digest[:12]}-{lifetime}", stage)
+
+    def record_external_action(self) -> None:
+        """Append read-only checkpoints around an action performed outside device-lab."""
+
+        prepared = any(phase.get("name") == "prepare" and phase.get("status") == "passed" for phase in self.evidence.get("phases", []))
+        if not isinstance(self.state.get("initial_device_state"), dict) or not prepared:
+            raise LabError("record-external-action requires a prepared resumed session")
+        if self.evidence.get("serial") != self.args.serial:
+            raise LabError("record-external-action serial does not match the resumed session")
+        if not SAFE_PROBE_PATH.fullmatch(self.args.hook_path):
+            raise LabError("--hook-path must be beneath a qualified Magisk service directory")
+        if self.args.metadata_path != DEFAULT_METADATA_PATH:
+            raise LabError(f"--metadata-path must be {DEFAULT_METADATA_PATH}")
+        self.acquire_host_lock()
+        observation = {
+            "action": self.args.action,
+            "checkpoint": self.args.checkpoint,
+            "installed_agent_digest": self.installed_digest(),
+            "hook_path": self.args.hook_path,
+            "hook_status": self._path_status(self.args.hook_path),
+            "metadata_path": self.args.metadata_path,
+            "metadata_status": self._path_status(self.args.metadata_path),
+        }
+        actions = self.state.setdefault("external_actions", {})
+        if self.args.checkpoint in actions.get(self.args.action, {}):
+            raise LabError("external action checkpoint is already recorded; start a new session for another observation")
+        actions.setdefault(self.args.action, {})[self.args.checkpoint] = observation
+        self._save()
+        self.phase(f"external-action-{self.args.action}-{self.args.checkpoint}", lambda: observation)
+
+    def installed_digest(self) -> str:
+        output = self._must_succeed(self.root_shell("/data/adb/magisk/busybox sha256sum /data/local/bin/echod"), "read installed-agent digest")["output"]
+        value = output.split(maxsplit=1)[0]
+        if not re.fullmatch(r"[0-9a-f]{64}", value):
+            raise LabError("could not read installed-agent digest")
+        return value
+
+    def _path_status(self, path: str) -> str:
+        result = self.root_shell(f"if test -f {path}; then echo present; elif test -e {path}; then echo non_regular; else echo absent; fi")
+        return self._must_succeed(result, f"probe {path}")["output"].strip()
+
     def cleanup(self) -> None:
         self.acquire_host_lock()
         # Resume may follow a harness repair; refresh only the token-owned
@@ -332,10 +473,12 @@ class Runner:
         initial = self.state.get("initial_device_state")
         if not isinstance(initial, dict) or not isinstance(initial.get("installed_agent_digest"), str):
             raise LabError("verify-clean requires captured initial device state")
-        result = self.root_shell("/data/adb/magisk/busybox sha256sum /data/local/bin/echod")
-        current = self._must_succeed(result, "read final installed-agent digest")["output"].split(maxsplit=1)[0]
+        current = self.installed_digest()
         if current != initial["installed_agent_digest"]:
-            raise LabError("installed-agent digest changed during diagnostics")
+            drift = {"expected_agent_sha256": initial["installed_agent_digest"], "observed_agent_sha256": current, "recovery": "No automatic recovery was attempted. Use ADB with echoctl update install and a known-good signed compatible artifact."}
+            self.evidence["checks"].append({"name": "installed-agent-digest", "status": "failed", "observation": drift, "provenance": "hardware"})
+            self._save()
+            raise LabError(f"installed-agent digest changed during diagnostics (expected {initial['installed_agent_digest']}, observed {current}); {drift['recovery']}")
         absent = self.root_shell(f"test ! -e {self.remote_root}")
         self._must_succeed(absent, "verify removal of token-owned diagnostic root")
         residual = self.root_shell(f"BB=/data/adb/magisk/busybox; for p in /proc/[0-9]*/cmdline; do test -r \"$p\" || continue; text=$($BB tr '\\000' ' ' < \"$p\" 2>/dev/null || true); case \"$text\" in *'{self.remote_root}'*) exit 71;; esac; done")
@@ -358,6 +501,12 @@ def parser() -> argparse.ArgumentParser:
     argument_parser.add_argument("--adb", required=True)
     argument_parser.add_argument("--serial", required=True)
     argument_parser.add_argument("--resume")
+    argument_parser.add_argument("--artifact")
+    argument_parser.add_argument("--retain", action="store_true")
+    argument_parser.add_argument("--action", choices=("bootstrap", "install"))
+    argument_parser.add_argument("--checkpoint", choices=("before", "after"))
+    argument_parser.add_argument("--hook-path", default=DEFAULT_HOOK_PATH)
+    argument_parser.add_argument("--metadata-path", default=DEFAULT_METADATA_PATH)
     return argument_parser
 
 
@@ -373,6 +522,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         root = Path(args.resume)
         print(render(json.loads((root / "evidence.json").read_text(encoding="utf-8"))), end="")
         return 0
+    if args.command == "stage-external" and not args.artifact:
+        parser().error("stage-external requires --artifact")
+    if args.command == "record-external-action" and (not args.action or not args.checkpoint):
+        parser().error("record-external-action requires --action and --checkpoint")
+    if args.command == "record-external-action" and not args.resume:
+        parser().error("record-external-action requires --resume for a prepared session")
     try:
         runner = Runner(args)
         getattr(runner, args.command.replace("-", "_"))()

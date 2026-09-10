@@ -3,7 +3,7 @@
 **Status:** in-progress
 **Owner or active agent:** Codex (/root)
 **Created:** 2026-09-08
-**Updated:** 2026-09-09
+**Updated:** 2026-09-10
 **Started:** 2026-09-08
 **Completed:** not completed
 
@@ -478,6 +478,61 @@ uv run --no-project --script .codex/hooks/plan_lint.py docs/plans/in-progress/20
 Expected: all review findings have deterministic regression coverage. No
 hardware success is claimed by these tests.
 
+### Task 9: Make qualified operator handoffs observable
+
+**Status:** completed 2026-09-10
+
+**Purpose:** Remove the remaining ad hoc transfer and evidence gaps exposed by
+the 2026-09-10 Milestone 3 hardware session without giving device-lab authority
+to install, select, validate, or replace the agent.
+
+**Dependencies:** Task 8's contained session, locking, redaction, and cleanup
+behavior.
+
+**Hardware required:** no for deterministic implementation tests; yes for a
+future qualified-Dot evidence run.
+
+**Files or components:** `tools/device-lab/device_lab.py`,
+`tools/device-lab/device_lab_test.py`, and this plan.
+
+**Concrete changes:**
+
+- When a host lock belongs to a locally proven session for the selected serial,
+  report its canonical `--resume .bin/device-lab/<session-id>` guidance; never
+  infer a recovery path for an unknown owner.
+- Record BusyBox path/version plus `cmp -s`, `sed`, `awk`, and `sha256sum`
+  availability/behavior as non-gating preflight evidence.
+- Add `stage-external --artifact <local-file> [--retain]`: push through a
+  unique per-invocation `/data/local/tmp` path and root-move into a restrictive session-owned
+  path after preparation has captured the cleanup baseline. Reject symlinks and
+  verify final root ownership/mode, size, and SHA-256 before recording basename,
+  size, digest, final path, and retention. Default cleanup removes the staged
+  file; `--retain` makes the handoff an explicit operator-owned exception.
+- Add `record-external-action --action bootstrap|install --checkpoint
+  before|after --resume <prepared-session>`, which reads and journals installed
+  digest, qualified hook status, and installed-release metadata status. Reject
+  duplicate checkpoints, preflight-only sessions, and a serial that disagrees
+  with resumed evidence. Its default is the measured legacy Magisk hook path;
+  it accepts no raw command and invokes no `echoctl` command or agent installation.
+- On cleanup digest drift, retain expected and observed hashes in evidence and
+  print the ADB/known-good signed `echoctl update install` recovery hint without
+  attempting recovery.
+
+**Expected outcome:** Operators can stage their artifact and record their own
+bootstrap/install work reproducibly, while the harness remains unable to alter
+the installed agent.
+
+**Verification:**
+
+```sh
+uv run --no-project --script tools/device-lab/device_lab_test.py
+uv run --no-project --script .codex/hooks/plan_lint.py docs/plans/in-progress/2026-09-08-agentic-harness-device-lab.md
+```
+
+Expected: deterministic tests cover lock guidance, diagnostic capability
+capture, staged-artifact ownership/cleanup/retention, read-only external-action
+journaling, and digest drift. No physical-device claim is made by these tests.
+
 ## Cross-task risks
 
 - **Automation increases blast radius:** strict explicit targets, safe path
@@ -488,6 +543,9 @@ hardware success is claimed by these tests.
   ambiguity; never guess a service directory.
 - **Evidence leaks credentials:** allowlisted structured fields plus a final
   redaction validator reject the artifact before rendering.
+- **Staging blurs the update boundary:** artifact identity capture and
+  root-owned transfer are permitted, but signature verification, compatibility,
+  metadata mutation, and installation remain `echoctl update install` work.
 - **Hook optimization misses changes:** retain the session baseline as a Stop
   fallback and test deleted, renamed, untracked, concurrent, and missing-event
   cases.
@@ -600,6 +658,15 @@ hardware success is claimed by these tests.
   but the prepared-session `initial-state` artifact remains absent despite a
   successful runner phase, so live qualification remains blocked rather than
   being claimed from that false-positive result.
+- 2026-09-10: Task 9 completed with deterministic coverage. The runner now
+  reports canonical recover-lock guidance only for a proven serial-matching
+  session; records system and BusyBox command capabilities; stages a
+  root-owned, remotely verified external artifact through a unique temporary
+  path; and journals only prepared, serial-matching external-action checkpoints.
+  Three fresh-context reviews produced seven findings, all fixed: baseline-less
+  cleanup, transfer identity/ownership verification, qualified hook default,
+  complete capability capture, duplicate checkpoints, preflight-only journaling,
+  and predictable temporary names. No finding was declined or postponed.
 
 ## Completion evidence
 
@@ -618,5 +685,9 @@ hardware success is claimed by these tests.
   lint, payload shell syntax checks, `make fmt-check`, `make lint`, and
   `make test` — passed. Live prepare checkpoint remains blocked as recorded in
   the progress log.
+- 2026-09-10: `uv run --no-project --script tools/device-lab/device_lab_test.py`
+  (15 tests), active-plan lint, `git diff --check`, and `make verify` — passed.
+  No live Dot action was performed; Task 9’s future hardware evidence remains
+  owned by the plan’s blocked real-device work.
 - Remaining: Task 7 and Task 6 real-device evidence, fresh review/triage, and
   final repository verification.
