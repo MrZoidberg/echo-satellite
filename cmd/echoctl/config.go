@@ -24,6 +24,7 @@ type opts struct {
 	Bench       benchCommand   `command:"bench" description:"benchmark on-device mel, embedding, classifier and VAD inference"`
 	Status      statusCommand  `command:"status" description:"report device health and wake diagnostics"`
 	WiFi        wifiCommand    `command:"wifi" description:"configure device Wi-Fi through Android supplicant"`
+	Update      updateCommand  `command:"update" description:"bootstrap and recover the installed agent"`
 }
 
 type versionCommand struct{}
@@ -39,6 +40,34 @@ type wifiSetCommand struct {
 
 type releaseCommand struct {
 	Verify verifyCommand `command:"verify" description:"verify a release bundle: manifest, artifact digest and signature"`
+}
+
+type updateCommand struct {
+	Bootstrap updateBootstrapCommand `command:"bootstrap" description:"install the launcher and an initial known-good agent over ADB"`
+	Install   updateInstallCommand   `command:"install" description:"verify and atomically install a local release on the device"`
+	Status    updateStatusCommand    `command:"status" description:"show installed-release metadata"`
+}
+
+type updateBootstrapCommand struct {
+	ADB      string `long:"adb" required:"true" description:"path to the host ADB executable"`
+	Serial   string `long:"serial" required:"true" description:"ADB device serial"`
+	Agent    string `long:"agent" required:"true" description:"local known-good echod binary"`
+	Launcher string `long:"launcher" required:"true" description:"local echo-satellite launcher script"`
+}
+
+type updateInstallCommand struct {
+	Artifact      string `long:"artifact" required:"true" description:"local echod artifact path"`
+	Manifest      string `long:"manifest" required:"true" description:"local release manifest path"`
+	Sig           string `long:"sig" description:"local detached manifest signature path"`
+	PubKey        string `long:"pubkey" description:"base64 Ed25519 release public key path"`
+	AllowUnsigned bool   `long:"allow-unsigned-dev-builds" description:"accept an unsigned local bundle; development only"`
+	AgentPath     string `long:"agent-path" default:"/data/local/bin/echod" description:"installed agent path"`
+	MetadataPath  string `long:"metadata-path" default:"/data/local/etc/echo-satellite/installed-release.json" description:"installed-release metadata path"`
+	MaxSize       int64  `long:"max-artifact-size" default:"268435456" description:"maximum accepted artifact size in bytes"`
+}
+
+type updateStatusCommand struct {
+	MetadataPath string `long:"metadata-path" default:"/data/local/etc/echo-satellite/installed-release.json" description:"installed-release metadata path"`
 }
 
 type micCommand struct {

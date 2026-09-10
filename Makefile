@@ -45,8 +45,14 @@ build-device:
 
 TAGS ?=
 
-build-device-ctl:
+build-device-ctl: launcher-check
 	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build $(if $(TAGS),-tags $(TAGS),) -ldflags "$(LDFLAGS)" -o .bin/linux_arm64/echoctl ./cmd/echoctl
+
+launcher-check:
+	@test -x device_payloads/launcher/echo-satellite.sh || \
+		{ echo "launcher payload must be executable"; exit 1; }
+	@grep -q '^# echo-satellite-launcher-v1$$' device_payloads/launcher/echo-satellite.sh || \
+		{ echo "launcher payload marker is missing"; exit 1; }
 
 build-device-noasm:
 	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -tags noasm -ldflags "$(LDFLAGS)" -o .bin/linux_arm64/echod-noasm ./cmd/echod
@@ -130,4 +136,4 @@ version:
 	@echo "revision: $(REV)"
 endif
 
-.PHONY: all build build-windows build-device build-device-ctl build-device-noasm check-portability bench device-check push-device run-device device-stopped test test-fast race lint fmt fmt-check verify version
+.PHONY: all build build-windows build-device build-device-ctl build-device-noasm launcher-check check-portability bench device-check push-device run-device device-stopped test test-fast race lint fmt fmt-check verify version

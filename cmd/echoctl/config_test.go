@@ -47,6 +47,22 @@ func TestParseArgs_Commands(t *testing.T) {
 		assert.Equal(t, "m.pub", o.Release.Verify.PubKey)
 	})
 
+	t.Run("update commands", func(t *testing.T) {
+		o, command, err := parseArgs([]string{"update", "bootstrap", "--adb=/sdk/adb", "--serial=dot", "--agent=echod", "--launcher=launcher.sh"})
+		require.NoError(t, err)
+		assert.Equal(t, "update bootstrap", command)
+		assert.Equal(t, "dot", o.Update.Bootstrap.Serial)
+
+		o, command, err = parseArgs([]string{"update", "install", "--artifact=echod", "--manifest=manifest.json", "--allow-unsigned-dev-builds"})
+		require.NoError(t, err)
+		assert.Equal(t, "update install", command)
+		assert.True(t, o.Update.Install.AllowUnsigned)
+		assert.Equal(t, "/data/local/bin/echod", o.Update.Install.AgentPath)
+
+		_, _, err = parseArgs([]string{"update", "bootstrap", "--adb=adb"})
+		require.Error(t, err)
+	})
+
 	t.Run("manifest is required", func(t *testing.T) {
 		_, _, err := parseArgs([]string{"release", "verify"})
 		require.Error(t, err)

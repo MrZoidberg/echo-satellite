@@ -1,7 +1,7 @@
 # Milestone 3 — Single-agent deployment and command-audio conditioning
 
 **Status:** in-progress
-**Owner or active agent:** unassigned (Tasks 1–2 completed by Codex)
+**Owner or active agent:** Codex (Tasks 1–5 completed)
 **Created:** 2026-09-08
 **Updated:** 2026-09-10
 **Started:** 2026-09-08
@@ -394,7 +394,7 @@ metadata step proves pre-commit failures preserve the original executable.
 
 ### Task 5: Add the Magisk launcher and minimal deployment CLI
 
-**Status:** not started
+**Status:** completed 2026-09-10
 
 **Purpose:** Provide repeatable bootstrap, restart, status, and ADB recovery
 without building a recovery supervisor.
@@ -448,6 +448,30 @@ make check-portability
 
 Expected: fake-ADB tests cover fresh install, idempotence, backup, interruption,
 conflicting files, signed downgrade, and unsigned rejection.
+
+#### Task 5 hardware remediation: qualify bootstrap comparison utility
+
+**Status:** completed 2026-09-10
+
+**Purpose:** Correct a FireOS-specific bootstrap defect discovered during the
+isolated real-device check without changing the launcher/update boundary.
+
+**Dependencies:** Task 5.
+
+**Concrete changes:**
+
+- Use `/data/adb/magisk/busybox cmp -s` in the remote bootstrap script rather
+  than the incompatible FireOS `/system/bin/cmp`.
+- Add a regression test for the qualified comparator command.
+
+**Verification:**
+
+```sh
+go test -race ./cmd/echoctl/...
+```
+
+Expected: host tests pass and a same-byte real-device bootstrap removes its
+staged agent file while preserving the installed digest.
 
 ### Task 6: Integrate deployment with `echod`
 
@@ -865,6 +889,25 @@ completion evidence names which checks ran on real hardware.
 
 ## Progress log
 
+- 2026-09-10: Task 5 claimed by Codex. Scope is limited to the launcher,
+  `echoctl` bootstrap/install/status commands, build wiring, and operator
+  documentation; Task 6 retains connected-agent controlled-restart behavior.
+- 2026-09-10: Task 5 completed. Added the qualified-Magisk launcher,
+  fail-closed host ADB bootstrap, on-device signed local installation and
+  diagnostic status commands, payload build validation, and recovery guidance.
+  Fresh-context review findings were all **fixed**: hooks are staged/backed up
+  before replacement, foreign hooks fail closed, metadata directory setup is
+  pre-commit, and fake-ADB shell tests now exercise fresh, idempotent, backup,
+  interruption, and conflict scenarios. No findings were declined or postponed.
+- 2026-09-10: Task 5 hardware remediation completed. The isolated bootstrap
+  check found that FireOS `/system/bin/cmp` rejects `-s`; bootstrap now uses
+  Magisk BusyBox. The session proved unsigned rejection preserves the digest,
+  explicit unsigned same-byte installation writes metadata, and same-byte
+  bootstrap removes staging while preserving the agent digest. It restored the
+  pre-test agent and removed the test hook/metadata; device-lab cleanup and
+  verify-clean passed. This is partial Task 8 evidence only: no reboot,
+  launcher execution, signed bundle, or reconnect test was run.
+
 - 2026-09-08: Task 2 completed on rooted Dot `G090LF0964060EHP`. `/data` ext4
   supported executable-mode enforcement, staged-file and directory fsync,
   atomic same-directory replacement, old-inode execution until exit, and
@@ -921,6 +964,24 @@ completion evidence names which checks ran on real hardware.
   6 now names the required diagnostic-only behavior explicitly.
 
 ## Completion evidence
+
+- Task 5 host verification — passed 2026-09-10: `go test -race
+  ./cmd/echoctl/...`, `make build-device-ctl`, and `make check-portability`
+  passed. `make verify` passed formatting, lint (0 issues), fresh race tests,
+  coverage generation (70.2% total), and host builds. Fake-ADB tests execute
+  the generated shell script in a temporary filesystem for fresh installation,
+  idempotence, recognized-hook backup, interruption, and unrecognized-conflict
+  preservation. Hardware proof remains Task 8 and was not run.
+- Task 5 isolated hardware remediation — passed 2026-09-10: device-lab session
+  `20260910T103421Z-191d2c5599` preflight/prepare passed; a host backup matched
+  the initial `41ed22dba37da3d583c257991e3b4d69460fc07265010f189594a4d38184f8c6`
+  digest. Bootstrap installed the legacy hook and ARM64 agent; unsigned local
+  install rejected by default with its digest preserved, then explicitly
+  accepted identical bytes and recorded metadata. The final same-byte bootstrap
+  check passed after switching to Magisk BusyBox `cmp -s`. The original agent,
+  no project hook, and no test metadata were restored; device-lab cleanup and
+  verify-clean passed. No reboot, launcher start, signed install, or gateway
+  reconnect was performed.
 
 - Task 4 host verification — passed 2026-09-10: `go test -race -count=20
   ./internal/device/update/... ./internal/release/...` passed. `make verify`

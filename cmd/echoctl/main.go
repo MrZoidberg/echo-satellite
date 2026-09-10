@@ -72,6 +72,12 @@ func dispatch(w io.Writer, command string, o opts) error {
 		return deviceStatus(w, o.Status)
 	case "wifi set":
 		return wifiSet(w, o.WiFi.Set)
+	case "update bootstrap":
+		return updateBootstrap(w, o.Update.Bootstrap)
+	case "update install":
+		return updateInstall(w, o.Update.Install)
+	case "update status":
+		return updateStatus(w, o.Update.Status)
 	default:
 		return fmt.Errorf("unknown command %q", command)
 	}
