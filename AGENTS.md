@@ -55,8 +55,7 @@ library.
   software handoff.
 
 If hooks are disabled, unavailable, or `uv` is not installed, work normally
-with `make fmt-check`, `make lint`, the relevant `go test -race` command, and
-`make verify`. CI installs `uv` and runs the hook tests independently.
+with `verify`. CI installs `uv` and runs the hook tests independently.
 
 ## Code conventions
 

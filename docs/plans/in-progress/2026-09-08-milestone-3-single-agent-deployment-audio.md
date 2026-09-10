@@ -3,7 +3,7 @@
 **Status:** in-progress
 **Owner or active agent:** unassigned (Tasks 1–2 completed by Codex)
 **Created:** 2026-09-08
-**Updated:** 2026-09-08
+**Updated:** 2026-09-10
 **Started:** 2026-09-08
 **Completed:** not completed
 
@@ -340,7 +340,7 @@ fixture-regeneration run produces no diff.
 
 ### Task 4: Implement transactional single-agent staging
 
-**Status:** not started
+**Status:** completed 2026-09-10
 
 **Purpose:** Ensure every failure before the atomic rename leaves the installed
 agent unchanged.
@@ -479,6 +479,9 @@ without pulling the Gateway Update Manager into Milestone 3.
   then exit with the launcher's controlled restart code.
 - On new startup, include installed version/build and pending deployment identity
   in `hello`.
+- On startup, call Task 4's metadata reconciliation against the link-time
+  revision. Surface stale or malformed metadata only as diagnostics; it must
+  never select or recover an executable.
 - After authenticated `welcome`, report `confirmed` and clear pending restart
   metadata. This confirmation is observational only and never triggers rollback.
 - If the new agent cannot start or reconnect, rely on launcher retries and ADB
@@ -903,8 +906,29 @@ completion evidence names which checks ran on real hardware.
 - 2026-09-08: Task 1 completed after the exact terminology check, a broader
   obsolete-term sweep, `git diff --check`, the required pre-review checks, and
   final `make verify` all passed. No hardware was required or used.
+- 2026-09-10: Task 4 completed. Added a host-tested transactional installer
+  with paired-authority HTTPS downloads, strict signature/eligibility/offer
+  checks, Task-2 free-space margin, unique same-directory staging, atomic
+  replacement, diagnostic-only metadata reconciliation, and explicit
+  pre-/post-commit results. Fresh-context review findings were all triaged as
+  **fix** and resolved; none were declined or postponed. `make verify` and the
+  task's repeated update/release race test passed; no hardware was used.
+- 2026-09-10: Task 4 targeted re-review found no residual transactional or
+  security defect. The claimed trailing-JSON parsing issue was **declined**:
+  `ParseMetadata` rejects any second JSON value, as its passing `null` trailing
+  document test demonstrates. Startup invocation of the exposed reconciliation
+  API is **postponed** to Task 6, which owns the `echod` composition root; Task
+  6 now names the required diagnostic-only behavior explicitly.
 
 ## Completion evidence
+
+- Task 4 host verification — passed 2026-09-10: `go test -race -count=20
+  ./internal/device/update/... ./internal/release/...` passed. `make verify`
+  passed formatting, lint (0 issues), fresh race tests, coverage generation,
+  and all host builds. Fresh-context review findings covering fail-closed
+  architecture eligibility, free-space margin, cancellation boundary,
+  credential-safe downloader errors, strict metadata reconciliation, and
+  staging cleanup were fixed. Hardware verification is not applicable.
 
 - Task 2 rooted-Dot filesystem and launcher qualification — passed 2026-09-08;
   `docs/device-diagnostics.md` records filesystem/mount/inode observations,
