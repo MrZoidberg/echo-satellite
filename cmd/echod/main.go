@@ -59,6 +59,9 @@ func main() {
 	}
 	runErr := run(o)
 	closeErr := closeLog()
+	if errors.Is(runErr, errControlledRestart) && closeErr == nil {
+		os.Exit(75)
+	}
 	if runErr != nil || closeErr != nil {
 		slog.Error("echod failed", "error", errors.Join(runErr, closeErr))
 		os.Exit(1)

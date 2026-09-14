@@ -475,7 +475,7 @@ staged agent file while preserving the installed digest.
 
 ### Task 6: Integrate deployment with `echod`
 
-**Status:** not started
+**Status:** completed 2026-09-14
 
 **Purpose:** Make the connected device accept, execute, and report deployments
 without pulling the Gateway Update Manager into Milestone 3.
@@ -888,6 +888,20 @@ completion evidence names which checks ran on real hardware.
 - [ ] Hardware and host/simulator evidence are identified separately.
 
 ## Progress log
+
+- 2026-09-14: Task 6 completed. `echod` now accepts typed offers only at an
+  idle turn boundary, blocks new local turns while installation is active, and
+  performs the installer work independently of the WSS reader. It reports
+  decision/progress/failure/cancellation transitions, binds HTTPS fetches to
+  the authenticated WSS gateway authority/TLS/bearer settings, and exits 75
+  after the `restarting` control message drains (or immediately after a
+  disconnect). Installed metadata supplies diagnostic hello fields and a
+  reconnect confirmation is only cleared after socket delivery. Reconciliation
+  never selects an executable. Fresh-context findings were all **fixed**:
+  pending-turn races, stale metadata confirmation, confirmation delivery,
+  post-commit restart behavior, fixed deployment paths, cancellation direction,
+  and update state. No hardware was used; `make verify` and the task's
+  repeated race command passed.
 
 - 2026-09-10: Task 5 claimed by Codex. Scope is limited to the launcher,
   `echoctl` bootstrap/install/status commands, build wiring, and operator

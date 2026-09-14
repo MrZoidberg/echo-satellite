@@ -119,6 +119,10 @@ type Metadata struct {
 	Size         int64     `json:"size"`
 	SHA256       string    `json:"sha256"`
 	InstalledAt  time.Time `json:"installed_at"`
+	// PendingDeploymentID remains until the replacement has completed an
+	// authenticated reconnect. It is observational metadata, never startup
+	// selection or recovery input.
+	PendingDeploymentID string `json:"pending_deployment_id"`
 }
 
 // Result says whether the replacement rename happened. If Committed is true,
@@ -272,7 +276,7 @@ func (i *Installer) stageAndCommit(ctx context.Context, offer protocol.UpdateOff
 			return result, committedError("fsync agent directory", err)
 		}
 	}
-	result.Metadata = metadataFor(manifest, i.config.Clock.Now())
+	result.Metadata = metadataFor(manifest, offer.DeploymentID, i.config.Clock.Now())
 	if err := i.persistMetadata(result.Metadata); err != nil {
 		return result, committedError("persist installed-release metadata", err)
 	}
@@ -401,8 +405,8 @@ func stagingSpace(size int64) (int64, error) {
 	return size + margin, nil
 }
 
-func metadataFor(m release.Manifest, installedAt time.Time) Metadata {
-	return Metadata{Schema: 1, Version: m.Version, BuildID: m.BuildID, Architecture: m.Architecture, Size: m.Size, SHA256: strings.ToLower(m.SHA256), InstalledAt: installedAt.UTC()}
+func metadataFor(m release.Manifest, deploymentID string, installedAt time.Time) Metadata {
+	return Metadata{Schema: 1, Version: m.Version, BuildID: m.BuildID, Architecture: m.Architecture, Size: m.Size, SHA256: strings.ToLower(m.SHA256), InstalledAt: installedAt.UTC(), PendingDeploymentID: deploymentID}
 }
 
 // ParseMetadata reads strict diagnostic metadata. It is deliberately separate
@@ -439,7 +443,14 @@ func MetadataMatchesRevision(metadata Metadata, revision string) bool {
 // binary's link-time revision. A mismatch is returned as stale, not repaired or
 // used to choose a binary; the executable remains the sole runtime authority.
 func (i *Installer) ReconcileMetadata(revision string) (Metadata, bool, error) {
-	raw, err := i.config.FS.ReadFile(i.config.MetadataPath)
+	return ReconcileMetadata(i.config.FS, i.config.MetadataPath, revision)
+}
+
+// ReconcileMetadata reads diagnostics against the running revision without
+// changing installation state. It is shared by startup composition roots that
+// must not construct an installer merely to inspect metadata.
+func ReconcileMetadata(files FileSystem, metadataPath, revision string) (Metadata, bool, error) {
+	raw, err := files.ReadFile(metadataPath)
 	if err != nil {
 		return Metadata{}, false, fmt.Errorf("read installed-release metadata: %w", err)
 	}
@@ -448,6 +459,24 @@ func (i *Installer) ReconcileMetadata(revision string) (Metadata, bool, error) {
 		return Metadata{}, false, err
 	}
 	return metadata, MetadataMatchesRevision(metadata, revision), nil
+}
+
+// ClearPendingDeployment clears only the observational reconnect marker after
+// a welcomed session. It cannot select an executable or attempt recovery.
+func ClearPendingDeployment(files FileSystem, metadataPath string, directorySync bool) error {
+	raw, err := files.ReadFile(metadataPath)
+	if err != nil {
+		return fmt.Errorf("read installed-release metadata: %w", err)
+	}
+	metadata, err := ParseMetadata(raw)
+	if err != nil {
+		return err
+	}
+	if metadata.PendingDeploymentID == "" {
+		return nil
+	}
+	metadata.PendingDeploymentID = ""
+	return (&Installer{config: Config{FS: files, MetadataPath: metadataPath, DirectorySync: directorySync}}).persistMetadata(metadata)
 }
 
 func (i *Installer) persistMetadata(metadata Metadata) error {

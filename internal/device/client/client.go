@@ -90,6 +90,33 @@ type Jitter interface {
 	Duration(time.Duration) time.Duration
 }
 
+// UpdateHandler owns device-specific installation work.  The reader invokes it
+// asynchronously: fetching a release must never prevent heartbeats, pings, or
+// cancellation frames from being processed.
+type UpdateHandler interface {
+	Offer(context.Context, protocol.UpdateOffer, UpdateAccess, UpdateReporter)
+	Cancel(protocol.UpdateCancellation)
+	Welcome(context.Context, UpdateReporter)
+}
+
+// UpdateAccess binds HTTPS release fetching to the authenticated gateway
+// session. Resource URLs may contain scoped credentials, but the bearer and
+// TLS policy remain identical to the WSS session.
+type UpdateAccess struct {
+	HTTPClient       *http.Client
+	GatewayAuthority string
+	Headers          http.Header
+}
+
+// UpdateReporter is the session-safe, high-priority update reporting surface.
+type UpdateReporter interface {
+	ReportUpdateDecision(protocol.UpdateDecision) error
+	ReportUpdateProgress(protocol.UpdateProgress, func()) error
+	ReportUpdateConfirmed(protocol.UpdateConfirmation, func()) error
+	ReportUpdateCancelled(protocol.UpdateCancellation) error
+	ReportUpdateFailed(protocol.UpdateFailure) error
+}
+
 // Options configures a shared session client.
 type Options struct {
 	Discovery discovery.Config
@@ -115,6 +142,7 @@ type Options struct {
 	// it ceases to be usable. Device composition roots use it to discard local
 	// turns rather than retaining microphone audio across an outage.
 	SessionChanged func(bool)
+	Update         UpdateHandler
 }
 
 // Client maintains one reconnecting device session.
@@ -126,6 +154,7 @@ type Client struct {
 	active bool
 	high   chan outbound
 	logs   chan protocol.LogRecord
+	access UpdateAccess
 }
 
 type outbound struct {
@@ -210,6 +239,10 @@ func (c *Client) runOnce(ctx context.Context, usePairing bool) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	u, err := url.Parse(endpoint.URL)
+	if err != nil {
+		return false, fmt.Errorf("parse gateway endpoint: %w", err)
+	}
 	headers := make(http.Header)
 	headers.Set("Authorization", "Bearer "+token)
 	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12}
@@ -220,6 +253,9 @@ func (c *Client) runOnce(ctx context.Context, usePairing bool) (bool, error) {
 		tlsConfig.InsecureSkipVerify = true
 		c.opts.Logger.Warn("TLS certificate verification disabled", "security_mode", "development", "tls_skip_verify", true)
 	}
+	c.mu.Lock()
+	c.access = UpdateAccess{HTTPClient: &http.Client{Transport: &http.Transport{TLSClientConfig: tlsConfig}}, GatewayAuthority: u.Host, Headers: headers.Clone()}
+	c.mu.Unlock()
 	conn, err := c.opts.Dialer.Dial(ctx, endpoint.URL, headers, tlsConfig)
 	if err != nil {
 		return false, fmt.Errorf("dial gateway: %w", err)
@@ -249,6 +285,9 @@ func (c *Client) runOnce(ctx context.Context, usePairing bool) (bool, error) {
 	workers.Add(2)
 	go func() { defer workers.Done(); errCh <- c.writer(sessionCtx, conn) }()
 	go func() { defer workers.Done(); errCh <- c.reader(sessionCtx, conn) }()
+	if c.opts.Update != nil {
+		c.opts.Update.Welcome(sessionCtx, c)
+	}
 	if c.opts.TurnSource != nil {
 		workers.Go(func() { c.forwardTurns(sessionCtx) })
 	}
@@ -435,6 +474,27 @@ func (c *Client) reader(ctx context.Context, conn Connection) error {
 			if err := c.enqueueControl(protocol.TypePong, "", nil); err != nil {
 				return fmt.Errorf("queue pong: %w", err)
 			}
+		case protocol.TypeUpdateOffer:
+			if c.opts.Update == nil {
+				continue
+			}
+			var offer protocol.UpdateOffer
+			if err := env.DecodePayload(&offer); err != nil {
+				return fmt.Errorf("decode update offer: %w", err)
+			}
+			c.mu.Lock()
+			access := c.access
+			c.mu.Unlock()
+			go c.opts.Update.Offer(ctx, offer, access, c)
+		case protocol.TypeUpdateCancelled:
+			if c.opts.Update == nil {
+				continue
+			}
+			var cancellation protocol.UpdateCancellation
+			if err := env.DecodePayload(&cancellation); err != nil {
+				return fmt.Errorf("decode update cancellation: %w", err)
+			}
+			c.opts.Update.Cancel(cancellation)
 		case protocol.TypePlayStart, protocol.TypePlayStop:
 			return errors.New("device client: gateway playback is not implemented")
 		default:
@@ -469,6 +529,59 @@ func (c *Client) ReportConfigResult(result protocol.ConfigResult) error {
 		return fmt.Errorf("queue config result: %w", err)
 	}
 	return nil
+}
+
+// ReportUpdateDecision queues an update acceptance or rejection.
+func (c *Client) ReportUpdateDecision(value protocol.UpdateDecision) error {
+	if err := value.Validate(); err != nil {
+		return fmt.Errorf("validate update decision: %w", err)
+	}
+	return c.enqueueControl(protocol.TypeUpdateDecision, "", value)
+}
+
+// ReportUpdateProgress queues a progress record. done runs only after the
+// writer has handed the record to the socket, which permits a controlled
+// restart to drain its restarting notification before exiting.
+func (c *Client) ReportUpdateProgress(value protocol.UpdateProgress, done func()) error {
+	if err := value.Validate(); err != nil {
+		return fmt.Errorf("validate update progress: %w", err)
+	}
+	return c.reportUpdate(protocol.TypeUpdateProgress, value, done)
+}
+
+// ReportUpdateCancelled queues a terminal cancellation.
+func (c *Client) ReportUpdateCancelled(value protocol.UpdateCancellation) error {
+	if err := value.Validate(); err != nil {
+		return fmt.Errorf("validate update cancellation: %w", err)
+	}
+	return c.enqueueControl(protocol.TypeUpdateCancelled, "", value)
+}
+
+// ReportUpdateConfirmed queues a reconnect confirmation.
+func (c *Client) ReportUpdateConfirmed(value protocol.UpdateConfirmation, done func()) error {
+	if err := value.Validate(); err != nil {
+		return fmt.Errorf("validate update confirmation: %w", err)
+	}
+	return c.reportUpdate(protocol.TypeUpdateConfirmed, value, done)
+}
+
+func (c *Client) reportUpdate(type_ protocol.MessageType, value any, done func()) error {
+	data, err := protocol.Encode(type_, "", c.opts.Clock.Now(), value)
+	if err != nil {
+		return fmt.Errorf("encode update report: %w", err)
+	}
+	if len(data) > maxFrameBytes {
+		return errors.New("device client: control frame exceeds 64 KiB")
+	}
+	return c.enqueue(outbound{type_: websocket.MessageText, data: data, done: done})
+}
+
+// ReportUpdateFailed queues a terminal, sanitized update failure.
+func (c *Client) ReportUpdateFailed(value protocol.UpdateFailure) error {
+	if err := value.Validate(); err != nil {
+		return fmt.Errorf("validate update failure: %w", err)
+	}
+	return c.enqueueControl(protocol.TypeUpdateFailed, "", value)
 }
 
 // SendTurn sends one complete canonical PCM turn. It rejects disconnected and

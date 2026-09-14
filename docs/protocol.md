@@ -105,7 +105,7 @@ fixed, and its payload lands with the milestone that needs it).
 | `update.decision` | D→G | defined | device accepts or rejects an offer |
 | `update.progress` | D→G | defined | current update phase and progress |
 | `update.confirmed` | D→G | defined | installed version/build confirmed after reconnect |
-| `update.cancelled` | D→G | defined | deployment cancelled before replacement |
+| `update.cancelled` | both | defined | deployment cancelled before replacement |
 | `update.failed` | D→G | defined | terminal update failure, with a code |
 | `button` | D→G | reserved | action button press |
 | `mute` | both | reserved | microphone mute state |
@@ -132,12 +132,19 @@ fixed, and its payload lands with the milestone that needs it).
     "pre_roll_ms": 500
   },
   "config_version": 3,
-	"update_state": "idle"
+	"update_state": "idle",
+  "installed_version": "0.3.0",
+  "installed_build_id": "git-abc123",
+  "pending_deployment_id": ""
 }
 ```
 
 `wake_config` is reported for observability. The gateway cannot change the local
 wake stack by replying with a different summary, and it never scores wake audio.
+
+`agent_version` is the running executable's link-time revision. Installed
+version/build and pending deployment identity are diagnostic metadata only; a
+stale or malformed record cannot select or recover an executable.
 
 `hello` does not carry a launcher/supervisor version. The launcher has no
 deployment compatibility contract.

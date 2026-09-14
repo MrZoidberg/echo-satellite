@@ -45,6 +45,7 @@ type opts struct {
 	PreferredServerID string           `long:"preferred-server-id" env:"ECHOD_PREFERRED_SERVER_ID" description:"gateway server_id to prefer"`
 	PairingState      string           `long:"pairing-state" env:"ECHOD_PAIRING_STATE" default:"/data/local/etc/echo-satellite/paired-gateway.json" description:"persisted authenticated gateway state"`
 	ConfigState       string           `long:"config-state" env:"ECHOD_CONFIG_STATE" default:"/data/local/etc/echo-satellite/config.json" description:"persisted gateway configuration state"`
+	UpdateMaxSize     int64            `long:"update-max-artifact-size" env:"ECHOD_UPDATE_MAX_ARTIFACT_SIZE" default:"268435456" description:"maximum accepted deployment artifact size in bytes"`
 	DiscoveryTimeout  int              `long:"discovery-timeout-ms" env:"ECHOD_DISCOVERY_TIMEOUT_MS" default:"5000" description:"maximum mDNS resolution time in milliseconds"`
 	WakeOnly          bool             `long:"wake-only" env:"ECHOD_WAKE_ONLY" description:"run the device-local wake pipeline without gateway traffic"`
 	TestStartAudio    string           `long:"test-start-audio" env:"ECHOD_TEST_START_AUDIO" default:"/data/local/etc/echo-satellite/starting_test.wav" description:"16 kHz mono WAV played before live wake-only diagnostics"`
@@ -149,6 +150,9 @@ func validateOpts(o opts) (opts, error) {
 	}
 	if o.DiscoveryTimeout <= 0 {
 		return opts{}, errors.New("discovery timeout must be positive")
+	}
+	if o.UpdateMaxSize <= 0 {
+		return opts{}, errors.New("update max artifact size must be positive")
 	}
 	return o, nil
 }

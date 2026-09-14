@@ -127,6 +127,17 @@ func TestTurnCoordinator_ButtonHasNoWakeDiagnosticsAndRejectsNestedTrigger(t *te
 	assert.Zero(t, turn.Start.VADScore)
 }
 
+func TestTurnCoordinator_RejectsNewTurnWhileDeploymentIsAccepted(t *testing.T) {
+	controller, err := endpointing.New(protocol.EndpointingConfig{SpeechThreshold: 0.5, SpeechOnsetMS: 160, TrailingSilenceMS: 1500, NoSpeechTimeoutMS: 3000, MaxTurnMS: 60000}, &runtimeDetector{})
+	require.NoError(t, err)
+	turns := newTestTurnCoordinator(t, controller)
+	turns.SetConnected(true)
+	turns.SetUpdating(true)
+	require.ErrorIs(t, turns.TriggerButton(), endpointing.ErrActiveTurn)
+	turns.SetUpdating(false)
+	require.NoError(t, turns.TriggerButton())
+}
+
 func TestTurnCoordinator_DropsOfflineTurnInsteadOfRetainingAudioForReconnect(t *testing.T) {
 	controller, err := endpointing.New(protocol.EndpointingConfig{SpeechThreshold: 0.5, SpeechOnsetMS: 160, TrailingSilenceMS: 1500, NoSpeechTimeoutMS: 3000, MaxTurnMS: 60000}, &runtimeDetector{})
 	require.NoError(t, err)

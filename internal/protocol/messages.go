@@ -157,13 +157,19 @@ const AudioFormatPCMS16LE AudioFormat = "pcm_s16le"
 // Hello is the first message a device sends after connecting. It announces
 // identity, versions and capabilities, and reports its update state.
 type Hello struct {
-	DeviceID      string       `json:"device_id"`
-	AgentVersion  string       `json:"agent_version"`
-	Protocol      int          `json:"protocol"`
-	Capabilities  Capabilities `json:"capabilities"`
-	WakeConfig    WakeConfig   `json:"wake_config"`
-	UpdateState   UpdatePhase  `json:"update_state"`
-	ConfigVersion uint64       `json:"config_version"`
+	DeviceID     string       `json:"device_id"`
+	AgentVersion string       `json:"agent_version"`
+	Protocol     int          `json:"protocol"`
+	Capabilities Capabilities `json:"capabilities"`
+	WakeConfig   WakeConfig   `json:"wake_config"`
+	UpdateState  UpdatePhase  `json:"update_state"`
+	// InstalledVersion and InstalledBuildID are diagnostic release identity from
+	// the last verified installation; AgentVersion remains the running binary's
+	// link-time authority.
+	InstalledVersion    string `json:"installed_version"`
+	InstalledBuildID    string `json:"installed_build_id"`
+	PendingDeploymentID string `json:"pending_deployment_id"`
+	ConfigVersion       uint64 `json:"config_version"`
 }
 
 // WakeConfig summarizes the device-local wake stack. It is reported for

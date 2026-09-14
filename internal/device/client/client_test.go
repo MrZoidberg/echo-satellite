@@ -116,6 +116,17 @@ func (s *fakeTurnSource) Next(context.Context) (Turn, error) {
 	return turn, nil
 }
 
+type fakeUpdateHandler struct {
+	offers  chan protocol.UpdateOffer
+	cancels chan protocol.UpdateCancellation
+}
+
+func (h *fakeUpdateHandler) Offer(_ context.Context, offer protocol.UpdateOffer, _ UpdateAccess, _ UpdateReporter) {
+	h.offers <- offer
+}
+func (h *fakeUpdateHandler) Cancel(value protocol.UpdateCancellation) { h.cancels <- value }
+func (*fakeUpdateHandler) Welcome(context.Context, UpdateReporter)    {}
+
 func testDeviceConfig() protocol.DeviceConfig {
 	return protocol.DeviceConfig{Version: 1, Wake: protocol.WakeSettings{Engine: "openwakeword", Model: "okay_nabu", Threshold: .5, VADEnabled: true, VADThreshold: .5, VADLookbackMS: 1200, PreRollMS: 600, MinIntervalMS: 2000, AlwaysScoreWake: true}, Endpointing: protocol.EndpointingConfig{SpeechThreshold: .5, SpeechOnsetMS: 160, TrailingSilenceMS: 1500, NoSpeechTimeoutMS: 3000, MaxTurnMS: 60000}, Audio: protocol.AudioConfig{ConditioningProfile: protocol.ConditioningProfileBypass}, Logs: protocol.LogSettings{ForwardLevel: protocol.LogLevelInfo}}
 }
@@ -179,6 +190,30 @@ func TestReader_ConfigAcknowledged(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, protocol.TypeConfigResult, env.Type)
 	assert.Equal(t, []protocol.DeviceConfig{testDeviceConfig()}, consumer.got)
+}
+
+func TestReader_DelegatesUpdateOfferAndCancellationWithoutBlocking(t *testing.T) {
+	consumer := &fakeConfig{result: protocol.ConfigResult{Version: 1, Status: protocol.ConfigResultApplied}}
+	client := testClient(t, consumer)
+	handler := &fakeUpdateHandler{offers: make(chan protocol.UpdateOffer, 1), cancels: make(chan protocol.UpdateCancellation, 1)}
+	client.opts.Update = handler
+	conn := newFakeConn()
+	client.conn = conn
+	offer := protocol.UpdateOffer{DeploymentID: "deploy-1", Version: "0.3.0", BuildID: "build-1", ArtifactURL: "https://gateway.test/a", ManifestURL: "https://gateway.test/m", SignatureURL: "https://gateway.test/s", Size: 1, SHA256: strings.Repeat("0", 64)}
+	payload, err := protocol.Encode(protocol.TypeUpdateOffer, "", time.Now(), offer)
+	require.NoError(t, err)
+	cancelPayload, err := protocol.Encode(protocol.TypeUpdateCancelled, "", time.Now(), protocol.UpdateCancellation{DeploymentID: offer.DeploymentID})
+	require.NoError(t, err)
+	conn.reads <- incoming{type_: websocket.MessageText, data: payload}
+	conn.reads <- incoming{type_: websocket.MessageText, data: cancelPayload}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	errCh := make(chan error, 1)
+	go func() { errCh <- client.reader(ctx, conn) }()
+	require.Equal(t, offer, <-handler.offers)
+	require.Equal(t, offer.DeploymentID, (<-handler.cancels).DeploymentID)
+	cancel()
+	<-errCh
 }
 
 func TestWriter_PrioritizesTurnControlOverLogs(t *testing.T) {

@@ -15,13 +15,21 @@ import (
 	"github.com/MrZoidberg/echo-satellite/internal/device/endpointing"
 	"github.com/MrZoidberg/echo-satellite/internal/device/led"
 	"github.com/MrZoidberg/echo-satellite/internal/device/system"
+	"github.com/MrZoidberg/echo-satellite/internal/device/update"
 	"github.com/MrZoidberg/echo-satellite/internal/device/wake"
 	"github.com/MrZoidberg/echo-satellite/internal/device/wake/oww"
 	"github.com/MrZoidberg/echo-satellite/internal/device/wake/vadlevel"
 	"github.com/MrZoidberg/echo-satellite/internal/discovery"
 	"github.com/MrZoidberg/echo-satellite/internal/discovery/mdns"
 	"github.com/MrZoidberg/echo-satellite/internal/protocol"
+	"github.com/MrZoidberg/echo-satellite/internal/release"
 )
+
+var errControlledRestart = errors.New("echod: controlled update restart")
+
+type updateClock struct{}
+
+func (updateClock) Now() time.Time { return time.Now() }
 
 type timedResolver struct {
 	resolver client.Resolver
@@ -313,6 +321,7 @@ type turnCoordinator struct {
 	active       bool
 	pending      bool
 	connected    bool
+	updating     bool
 	nextOffset   int64
 	history      []audio.Frame
 	historySize  int
@@ -331,13 +340,25 @@ func (t *turnCoordinator) Active() bool {
 	return t.active
 }
 
+func (t *turnCoordinator) Idle() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return !t.active && !t.pending
+}
+
+func (t *turnCoordinator) SetUpdating(updating bool) {
+	t.mu.Lock()
+	t.updating = updating
+	t.mu.Unlock()
+}
+
 func (t *turnCoordinator) Trigger(start protocol.TurnStart, preRoll []int16, offset int64) error {
 	if !start.Trigger.Valid() {
 		return errors.New("invalid turn trigger")
 	}
 	request := turnTrigger{start: start, preRoll: append([]int16(nil), preRoll...), offset: offset}
 	t.mu.Lock()
-	if !t.connected || t.active || t.pending {
+	if !t.connected || t.updating || t.active || t.pending {
 		t.mu.Unlock()
 		return endpointing.ErrActiveTurn
 	}
@@ -352,6 +373,155 @@ func (t *turnCoordinator) Trigger(start protocol.TurnStart, preRoll []int16, off
 		t.mu.Unlock()
 		return endpointing.ErrActiveTurn
 	}
+}
+
+// deploymentManager serializes one offer and deliberately does not retain a
+// recovery executable. A committed installation requests launcher restart;
+// any failure before commit reopens local turn creation.
+type deploymentManager struct {
+	newInstaller func(protocol.UpdateOffer, client.UpdateAccess) (*update.Installer, error)
+	turns        *turnCoordinator
+	restart      func()
+	mu           sync.Mutex
+	deployment   string
+	cancel       context.CancelFunc
+	pending      update.Metadata
+	metadataPath string
+}
+
+func (m *deploymentManager) Offer(ctx context.Context, offer protocol.UpdateOffer, access client.UpdateAccess, report client.UpdateReporter) {
+	m.mu.Lock()
+	if m.deployment != "" || !m.turns.Idle() {
+		m.mu.Unlock()
+		_ = report.ReportUpdateDecision(protocol.UpdateDecision{DeploymentID: offer.DeploymentID, Decision: protocol.UpdateDecisionRejected, Code: protocol.UpdateFailureBusy})
+		return
+	}
+	m.deployment = offer.DeploymentID
+	workCtx, cancel := context.WithCancel(ctx)
+	m.cancel = cancel
+	m.turns.SetUpdating(true)
+	m.mu.Unlock()
+	defer cancel()
+	_ = report.ReportUpdateDecision(protocol.UpdateDecision{DeploymentID: offer.DeploymentID, Decision: protocol.UpdateDecisionAccepted})
+	_ = report.ReportUpdateProgress(protocol.UpdateProgress{DeploymentID: offer.DeploymentID, Phase: protocol.PhaseDownloading}, nil)
+	installer, err := m.newInstaller(offer, access)
+	if err == nil {
+		_ = report.ReportUpdateProgress(protocol.UpdateProgress{DeploymentID: offer.DeploymentID, Phase: protocol.PhaseVerifying}, nil)
+		_, err = installer.Install(workCtx, offer)
+	}
+	if err != nil {
+		if errors.Is(workCtx.Err(), context.Canceled) {
+			m.finish(offer.DeploymentID)
+			_ = report.ReportUpdateCancelled(protocol.UpdateCancellation{DeploymentID: offer.DeploymentID})
+			return
+		}
+		_ = report.ReportUpdateFailed(protocol.UpdateFailure{DeploymentID: offer.DeploymentID, Code: updateFailureCode(err), Detail: "installation failed"})
+		if errors.Is(err, update.ErrCommitted) {
+			// A replacement may already be live even though a post-rename fsync or
+			// metadata write failed. Keep turns blocked and let the launcher start
+			// that installed executable; reopening voice would falsely imply the
+			// old agent is still authoritative.
+			m.requestRestart(workCtx, offer.DeploymentID, report)
+			return
+		}
+		m.finish(offer.DeploymentID)
+		return
+	}
+	_ = report.ReportUpdateProgress(protocol.UpdateProgress{DeploymentID: offer.DeploymentID, Phase: protocol.PhaseStaged, Percent: 100}, nil)
+	m.requestRestart(workCtx, offer.DeploymentID, report)
+}
+
+func (m *deploymentManager) requestRestart(ctx context.Context, deploymentID string, report client.UpdateReporter) {
+	drained := make(chan struct{})
+	done := func() {
+		select {
+		case drained <- struct{}{}:
+		default:
+		}
+	}
+	if err := report.ReportUpdateProgress(protocol.UpdateProgress{DeploymentID: deploymentID, Phase: protocol.PhaseRestarting, Percent: 100}, done); err != nil {
+		slog.Error("report committed deployment restart", "error", err, "deployment_id", deploymentID)
+		m.restart()
+		return
+	}
+	select {
+	case <-drained:
+	case <-ctx.Done(): // The socket cannot drain after disconnect; restart anyway.
+	}
+	m.restart()
+}
+
+func (m *deploymentManager) Cancel(value protocol.UpdateCancellation) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if value.DeploymentID == m.deployment && m.cancel != nil {
+		m.cancel()
+	}
+}
+
+func (m *deploymentManager) Welcome(_ context.Context, report client.UpdateReporter) {
+	m.mu.Lock()
+	pending := m.pending
+	m.mu.Unlock()
+	if pending.PendingDeploymentID == "" {
+		return
+	}
+	if err := report.ReportUpdateConfirmed(protocol.UpdateConfirmation{DeploymentID: pending.PendingDeploymentID, Version: pending.Version, BuildID: pending.BuildID}, func() {
+		if err := update.ClearPendingDeployment(update.OSFileSystem{}, m.metadataPath, true); err != nil {
+			slog.Warn("clear confirmed deployment metadata", "error", err, "deployment_id", pending.PendingDeploymentID)
+			return
+		}
+		m.mu.Lock()
+		m.pending.PendingDeploymentID = ""
+		m.mu.Unlock()
+	}); err != nil {
+		slog.Warn("report deployment confirmation", "error", err, "deployment_id", pending.PendingDeploymentID)
+	}
+}
+
+func (m *deploymentManager) finish(id string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.deployment == id {
+		m.deployment, m.cancel = "", nil
+		m.turns.SetUpdating(false)
+	}
+}
+
+func (m *deploymentManager) pendingMetadata() update.Metadata {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.pending
+}
+
+func updateFailureCode(err error) protocol.UpdateFailureCode {
+	switch {
+	case errors.Is(err, update.ErrBusy):
+		return protocol.UpdateFailureBusy
+	case errors.Is(err, update.ErrInsufficientSpace):
+		return protocol.UpdateFailureInsufficientSpace
+	case errors.Is(err, update.ErrDownloadFailed):
+		return protocol.UpdateFailureDownloadFailed
+	case errors.Is(err, update.ErrInvalidOffer), errors.Is(err, update.ErrOfferMismatch):
+		return protocol.UpdateFailureInvalidOffer
+	case errors.Is(err, update.ErrCommitted):
+		return protocol.UpdateFailureRestartFailed
+	default:
+		return protocol.UpdateFailureInstallFailed
+	}
+}
+
+func installedReleaseDiagnostics(path string) update.Metadata {
+	metadata, matches, err := update.ReconcileMetadata(update.OSFileSystem{}, path, revision)
+	if err != nil {
+		slog.Warn("installed-release metadata unavailable or malformed", "error", err)
+		return update.Metadata{}
+	}
+	if !matches {
+		slog.Warn("installed-release metadata is stale", "metadata_build_id", metadata.BuildID, "running_revision", revision)
+		return update.Metadata{}
+	}
+	return metadata
 }
 
 func (t *turnCoordinator) Next(ctx context.Context) (client.Turn, error) {
@@ -419,7 +589,7 @@ func (t *turnCoordinator) Run(ctx context.Context) error {
 func (t *turnCoordinator) start(request turnTrigger) {
 	t.mu.Lock()
 	t.pending = false
-	if !t.connected || t.active {
+	if !t.connected || t.updating || t.active {
 		t.mu.Unlock()
 		return
 	}
@@ -621,10 +791,28 @@ func runConnected(ctx context.Context, o opts) (returnErr error) {
 		}
 	}
 	resolver := timedResolver{resolver: discovery.NewResolver(mdns.NewDevice(), protocol.ProtocolVersion), timeout: time.Duration(o.DiscoveryTimeout) * time.Millisecond}
+	installed := installedReleaseDiagnostics(update.DefaultMetadataPath)
+	restartRequested := make(chan struct{}, 1)
+	manager := &deploymentManager{turns: turns, pending: installed, metadataPath: update.DefaultMetadataPath, restart: func() {
+		select {
+		case restartRequested <- struct{}{}:
+		default:
+		}
+	}}
+	manager.newInstaller = func(_ protocol.UpdateOffer, access client.UpdateAccess) (*update.Installer, error) {
+		return update.New(update.Config{
+			Downloader: update.HTTPDownloader{Client: access.HTTPClient, GatewayAuthority: access.GatewayAuthority, RequestHeaders: access.Headers},
+			FS:         update.OSFileSystem{}, Space: statSpace{}, Clock: updateClock{}, Trust: release.TrustPolicy{},
+			Voice: turns, Device: release.Device{Architecture: "linux-arm64", Protocol: protocol.ProtocolVersion},
+			TargetPath: update.DefaultAgentPath, MetadataPath: update.DefaultMetadataPath, GatewayAuthority: access.GatewayAuthority,
+			MaxArtifactSize: o.UpdateMaxSize, DirectorySync: true,
+		})
+	}
 	session, err := client.New(client.Options{Discovery: o.discoveryConfig(), HelloSource: func() protocol.Hello {
 		current := state.current()
-		return protocol.Hello{DeviceID: identity.DeviceID, AgentVersion: revision, Protocol: protocol.ProtocolVersion, Capabilities: announcedCapabilities(), WakeConfig: wakeSummary(current), ConfigVersion: current.Version}
-	}, Dialer: client.WSSDialer{}, Resolver: resolver, Pairings: discovery.PairingStore{Path: o.PairingState}, Config: state, TurnSource: turns, TokenPath: o.GatewayTokenFile, SkipTLSVerify: o.TLSSkipVerify, Logger: slog.Default(), SessionChanged: func(connected bool) {
+		metadata := manager.pendingMetadata()
+		return protocol.Hello{DeviceID: identity.DeviceID, AgentVersion: revision, Protocol: protocol.ProtocolVersion, Capabilities: announcedCapabilities(), WakeConfig: wakeSummary(current), UpdateState: protocol.PhaseIdle, InstalledVersion: metadata.Version, InstalledBuildID: metadata.BuildID, PendingDeploymentID: metadata.PendingDeploymentID, ConfigVersion: current.Version}
+	}, Dialer: client.WSSDialer{}, Resolver: resolver, Pairings: discovery.PairingStore{Path: o.PairingState}, Config: state, TurnSource: turns, TokenPath: o.GatewayTokenFile, SkipTLSVerify: o.TLSSkipVerify, Logger: slog.Default(), Update: manager, SessionChanged: func(connected bool) {
 		turns.SetConnected(connected)
 		if indicator != nil {
 			indicator.SetConnected(connected)
@@ -663,7 +851,14 @@ func runConnected(ctx context.Context, o opts) (returnErr error) {
 			}
 		})
 	}
-	return runWakeWorkers(ctx, raw, workers)
+	result := make(chan error, 1)
+	go func() { result <- runWakeWorkers(ctx, raw, workers) }()
+	select {
+	case err := <-result:
+		return err
+	case <-restartRequested:
+		return errControlledRestart
+	}
 }
 
 func consumeWakeEvents(ctx context.Context, events <-chan wake.Event, turns *turnCoordinator, animator *led.Service) error {
