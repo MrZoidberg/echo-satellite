@@ -33,6 +33,8 @@ type opts struct {
 	StateDir          string  `long:"state-dir" env:"DOTSIM_STATE_DIR" default:".dotsim" description:"directory for persisted gateway and config state"`
 	DiscoveryTimeout  int     `long:"discovery-timeout-ms" env:"DOTSIM_DISCOVERY_TIMEOUT_MS" default:"5000" description:"maximum mDNS resolution time in milliseconds"`
 	Once              bool    `long:"once" env:"DOTSIM_ONCE" description:"exit after the first successfully transmitted fixture turn"`
+	UpdateFailure     string  `long:"update-failure" env:"DOTSIM_UPDATE_FAILURE" default:"none" choice:"none" choice:"interrupted-download" choice:"invalid-signature" choice:"digest-mismatch" choice:"insufficient-space" choice:"restart-failure" choice:"reconnect-failure" description:"deterministic deployment failure to simulate"`
+	UpdatePublicKey   string  `long:"update-public-key" env:"DOTSIM_UPDATE_PUBLIC_KEY" description:"base64 Ed25519 key for simulated signed deployments"`
 
 	LogFile     string `long:"log-file" env:"DOTSIM_LOG_FILE" description:"bounded rotating operational log file"`
 	LogMaxBytes int64  `long:"log-max-bytes" env:"DOTSIM_LOG_MAX_BYTES" default:"10485760" description:"total byte cap across rotating logs"`
@@ -86,6 +88,9 @@ func (o opts) validate() error {
 	}
 	if o.LogFile != "" && o.LogMaxBytes < 3 {
 		return errors.New("--log-max-bytes must be at least 3")
+	}
+	if o.UpdateFailure != "" && o.UpdateFailure != "none" && o.UpdateFailure != "interrupted-download" && o.UpdateFailure != "invalid-signature" && o.UpdateFailure != "digest-mismatch" && o.UpdateFailure != "insufficient-space" && o.UpdateFailure != "restart-failure" && o.UpdateFailure != "reconnect-failure" {
+		return fmt.Errorf("unknown --update-failure %q", o.UpdateFailure)
 	}
 	return nil
 }

@@ -1,9 +1,9 @@
 # Milestone 3 — Single-agent deployment and command-audio conditioning
 
 **Status:** in-progress
-**Owner or active agent:** Codex (Tasks 1–5 completed)
+**Owner or active agent:** Codex (Tasks 1–7 completed)
 **Created:** 2026-09-08
-**Updated:** 2026-09-10
+**Updated:** 2026-09-14
 **Started:** 2026-09-08
 **Completed:** not completed
 
@@ -527,7 +527,7 @@ reconnect, and post-commit failure reporting.
 
 ### Task 7: Simulate single-agent deployments
 
-**Status:** not started
+**Status:** completed 2026-09-14
 
 **Purpose:** Keep future gateway work testable without a physical Dot.
 
@@ -1049,6 +1049,22 @@ completion evidence names which checks ran on real hardware.
 
 Remaining plan tasks require later implementation and hardware sessions, so the
 plan remains `in-progress`.
+
+- 2026-09-14: Task 7 completed. `dotsim` now uses the production single-agent
+  installer against simulator-owned files and exposes deterministic controls
+  for interrupted download, invalid signature, digest mismatch, insufficient
+  space, restart failure, and no replacement reconnect. It reports accepted,
+  download (0% and 50%), verification, staging, restart, cancellation, failure
+  and confirmed-reconnect states; a controlled restart rebuilds the simulated
+  process from persisted installation metadata. Signed downgrade is a fresh
+  deployment. Scoped verification `go test -race -count=20 ./cmd/dotsim/...
+  ./internal/protocol/...`, plus `make fmt-check`, `make lint`, and `make test`,
+  all passed. Fresh review findings about restart, metadata, reconnect, and
+  progress were fixed. The reviewer also recommended a future end-to-end
+  authenticated WebSocket harness test; direct simulator lifecycle tests use an
+  authenticated in-process release server and existing client protocol tests
+  cover envelope routing, so this non-correctness coverage expansion is
+  postponed to Milestone 4 gateway-harness work.
 
 - 2026-09-09: Task 3 completed. Removed `supervisor_min` and supervisor
   eligibility, regenerated signed release fixtures, replaced the A/B capability
