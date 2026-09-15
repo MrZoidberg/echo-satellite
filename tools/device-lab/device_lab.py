@@ -291,14 +291,15 @@ class Runner:
         self.phase("preflight-adb", lambda: self._must_succeed(self.adb(("get-state",)), "ADB device state"))
         self.phase("preflight-root", lambda: self._must_succeed(self.adb(("shell", "su", "-c", "id")), "root check"))
         def capture() -> dict[str, str]:
-            result = self.root_shell("/data/adb/magisk/busybox sha256sum /data/local/bin/echod 2>/dev/null; /data/adb/magisk/busybox cat /proc/sys/kernel/random/boot_id; for p in /proc/[0-9]*/fd/*; do readlink \"$p\" 2>/dev/null; done | /data/adb/magisk/busybox grep -m1 /dev/snd || true; getprop init.svc.ledcontroller; getprop init.svc.mdnsd; /data/adb/magisk/busybox cat /sys/bus/i2c/devices/0-003f/boot_animation 2>/dev/null || true; /data/adb/magisk/busybox cat /sys/class/gpio/gpio444/value 2>/dev/null || true")
+            result = self.root_shell("BB=/data/adb/magisk/busybox; $BB sha256sum /data/local/bin/echod 2>/dev/null; $BB cat /proc/sys/kernel/random/boot_id; for p in /proc/[0-9]*; do for fd in \"$p\"/fd/*; do target=$($BB readlink \"$fd\" 2>/dev/null || true); case \"$target\" in /dev/snd/*) $BB printf 'mic_holder=%s:%s\\n' \"${p#/proc/}\" \"$($BB readlink \"$p/exe\" 2>/dev/null || true)\";; esac; done; done; getprop init.svc.ledcontroller; getprop init.svc.mdnsd; $BB cat /sys/bus/i2c/devices/0-003f/boot_animation 2>/dev/null || true; $BB cat /sys/class/gpio/gpio444/value 2>/dev/null || true")
             self._must_succeed(result, "capture initial device state")
             lines = result.stdout.splitlines()
             agent_digest = lines[0].split(maxsplit=1)[0] if lines else ""
             if len(lines) < 2 or not re.fullmatch(r"[0-9a-f]{64}", agent_digest):
                 raise LabError("could not capture installed-agent digest")
-            if any("/dev/snd" in line for line in lines[2:]):
-                raise LabError("microphone is busy; coordinate with its owner")
+            holders = [line.removeprefix("mic_holder=") for line in lines[2:] if line.startswith("mic_holder=")]
+            if holders:
+                raise LabError(f"microphone is busy; coordinate with its owner ({', '.join(holders)})")
             state = {"installed_agent_digest": agent_digest, "boot_id": lines[1], "services_gpio": lines[2:]}
             self.state["initial_device_state"] = state
             self._save()

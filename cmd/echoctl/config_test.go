@@ -78,6 +78,16 @@ func TestParseArgs_Commands(t *testing.T) {
 		assert.InDelta(t, 2.0, o.Mic.Record.Seconds, 0.001)
 	})
 
+	t.Run("mic scorecard", func(t *testing.T) {
+		o, command, err := parseArgs([]string{"mic", "scorecard", "--input=speech.wav", "--out=scorecard.json", "--position=front", "--distance-mm=1000", "--condition=normal-speech", "--retain-input"})
+		require.NoError(t, err)
+		assert.Equal(t, "mic scorecard", command)
+		assert.Equal(t, "speech.wav", o.Mic.Scorecard.Input)
+		assert.Equal(t, "front", o.Mic.Scorecard.Position)
+		assert.Equal(t, 1000, o.Mic.Scorecard.DistanceMM)
+		assert.True(t, o.Mic.Scorecard.RetainInput)
+	})
+
 	t.Run("speaker test", func(t *testing.T) {
 		o, command, err := parseArgs([]string{"speaker", "test", "--to-file=spk.wav", "--resampler=linear"})
 		require.NoError(t, err)

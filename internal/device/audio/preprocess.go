@@ -1,11 +1,19 @@
 package audio
 
-// Preprocessor is the seam for device-local DSP. Deferred stages include
-// beamforming, noise suppression, and acoustic echo cancellation. Milestone 1
-// deliberately ships Bypass; the hardware finding is recorded by Task 25.
+// Preprocessor is the seam for device-local DSP. Conditioning candidates first
+// reduce the seven physical microphones to canonical mono, then implement this
+// interface before fanout. Profile selection remains hardware-qualified work.
 type Preprocessor interface {
 	Process(in []int16) []int16
 	Name() string
+}
+
+// MultichannelPreprocessor reduces the seven physical microphone channels
+// before the canonical mono Preprocessor stage. Capturer recognizes it only
+// when its configured channel map is exactly mic0 through mic6.
+type MultichannelPreprocessor interface {
+	Preprocessor
+	ProcessChannels(mics [][]int16) []int16
 }
 
 // Bypass leaves canonical PCM unchanged.

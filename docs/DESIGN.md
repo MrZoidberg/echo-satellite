@@ -1918,9 +1918,12 @@ Implement this **before Hermes integration** so subsequent device development ca
 - connected-device downgrade deployment;
 - ADB recovery installation and runbook;
 - simulator replacement/reconnect/failure tests.
-- characterize all seven physical microphone channels on the qualified Dot;
-- retain the single capture path while comparing channel 0, an unsteered mix,
-  and a steerable delay-and-sum beamformer;
+- adapt EchoLocal's MIT-licensed microphone mixing and steerable beamforming
+  primitives behind the existing single capture path, with copied-file
+  attribution and no imported assistant/controller behavior;
+- qualify channel 0, an unsteered mix, and the EchoLocal-derived steerable
+  delay-and-sum beamformer on the qualified Dot rather than assuming upstream
+  calibration wins;
 - add bounded capture gain and output leveling with clipping, gain, and
   speech/noise metrics rather than a blind fixed boost;
 - requalify local wake and command endpointing with the selected preprocessing,
@@ -2094,9 +2097,13 @@ with an explicit ADB recovery boundary early.
   device-local endpointing ownership. Evidence: Task 11 in
   [`docs/plans/in-progress/2026-08-27-milestone-2-discovery-protocol-simulator.md`](plans/in-progress/2026-08-27-milestone-2-discovery-protocol-simulator.md).
 - What is the cost of one versus multiple active local wake models?
-- **Beamforming:** beamforming initially bypassed; the `Preprocessor` seam reserves it for
-  later hardware qualification. Evidence:
-  [`docs/device-diagnostics.md`](device-diagnostics.md).
+- **Beamforming:** the `Preprocessor` seam reserves conditioning before fanout.
+  EchoLocal's MIT-licensed mixing and steerable beamforming primitives are the
+  implementation baseline, copied and adapted because upstream packages are
+  Go `internal` packages. Channel 0, an unsteered mix, and that baseline still
+  require qualified-Dot comparison; copied calibration is not a selected
+  hardware profile. Evidence: Task 9 onward in
+  [`docs/plans/in-progress/2026-09-08-milestone-3-single-agent-deployment-audio.md`](plans/in-progress/2026-09-08-milestone-3-single-agent-deployment-audio.md).
 - **AEC:** deferred to barge-in/full-duplex work; it is not required for this
   one-way local wake slice. Evidence:
   [`docs/device-diagnostics.md`](device-diagnostics.md).

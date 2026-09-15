@@ -49,6 +49,9 @@ func NewCapturer(source PCMSource, config CaptureConfig, logger *slog.Logger) (*
 	if config.Preprocessor == nil {
 		return nil, errors.New("create capturer: nil preprocessor")
 	}
+	if _, ok := config.Preprocessor.(MultichannelPreprocessor); ok && !physicalChannelMap(config.Channels) {
+		return nil, errors.New("create capturer: multichannel preprocessor requires channels mic0 through mic6 in order")
+	}
 	if config.StepSamples <= 0 {
 		return nil, fmt.Errorf("create capturer: step samples must be positive: %d", config.StepSamples)
 	}
@@ -125,9 +128,36 @@ func (c *Capturer) convert(raw []byte, decoded, selected, mono []int16) ([]int16
 	if err != nil {
 		return nil, fmt.Errorf("select capture channels: %w", err)
 	}
+	if processor, ok := c.config.Preprocessor.(MultichannelPreprocessor); ok {
+		return processor.ProcessChannels(deinterleavePhysicalMicrophones(selected[:selectedSamples])), nil
+	}
 	frames, err := MonoDownmix(mono, selected[:selectedSamples], len(c.config.Channels))
 	if err != nil {
 		return nil, fmt.Errorf("downmix capture channels: %w", err)
 	}
 	return mono[:frames], nil
+}
+
+func physicalChannelMap(channels []int) bool {
+	if len(channels) != PhysicalMicrophones {
+		return false
+	}
+	for channel := range channels {
+		if channels[channel] != channel {
+			return false
+		}
+	}
+	return true
+}
+
+func deinterleavePhysicalMicrophones(interleaved []int16) [][]int16 {
+	frames := len(interleaved) / PhysicalMicrophones
+	mics := make([][]int16, PhysicalMicrophones)
+	for mic := range mics {
+		mics[mic] = make([]int16, frames)
+		for frame := range frames {
+			mics[mic][frame] = interleaved[frame*PhysicalMicrophones+mic]
+		}
+	}
+	return mics
 }

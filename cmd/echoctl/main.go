@@ -52,6 +52,8 @@ func dispatch(w io.Writer, command string, o opts) error {
 		return verifyRelease(w, o.Release.Verify)
 	case "mic record":
 		return micRecord(w, o.Mic.Record)
+	case "mic scorecard":
+		return micScorecard(w, o.Mic.Scorecard)
 	case "speaker test":
 		return speakerTest(w, o.Speaker.Test)
 	case "led test":

@@ -54,6 +54,18 @@ func TestCapturer_OffsetsAreContiguousAcrossPeriods(t *testing.T) {
 	assert.Equal(t, []int16{1, 2}, frames[0].Samples, "emitted frames must own their samples")
 }
 
+func TestCapturer_RoutesOnlySevenPhysicalChannelsToMultichannelPreprocessor(t *testing.T) {
+	t.Parallel()
+
+	format := Format{SampleRate: 16_000, Channels: 9, Layout: LayoutS16LE}
+	processor := &multichannelStub{}
+	source := &sourceStub{format: format, reads: []sourceRead{{data: encodeS16([]int16{1, 2, 3, 4, 5, 6, 7, 70, 80})}, {err: io.EOF}}}
+	capturer := newTestCapturer(t, source, CaptureConfig{Device: format, Channels: []int{0, 1, 2, 3, 4, 5, 6}, Preprocessor: processor, StepSamples: 1})
+
+	require.NoError(t, capturer.Run(context.Background(), func(Frame) error { return nil }))
+	assert.Equal(t, [][]int16{{1}, {2}, {3}, {4}, {5}, {6}, {7}}, processor.mics)
+}
+
 func TestCapturer_ContinuesAfterXRun(t *testing.T) {
 	t.Parallel()
 
@@ -139,6 +151,16 @@ func (s *frameCountSourceStub) ReadInterleaved([]byte) (int, error) { return s.f
 func (s *frameCountSourceStub) Format() Format { return s.format }
 
 func (*frameCountSourceStub) Close() error { return nil }
+
+type multichannelStub struct{ mics [][]int16 }
+
+func (s *multichannelStub) ProcessChannels(mics [][]int16) []int16 {
+	s.mics = mics
+	return mics[0]
+}
+
+func (*multichannelStub) Process(in []int16) []int16 { return in }
+func (*multichannelStub) Name() string               { return "test" }
 
 func encodeS16(samples []int16) []byte {
 	encoded := make([]byte, len(samples)*2)

@@ -19,7 +19,7 @@ file:
 // Adapted from github.com/ygelfand/echolocal (MIT). See docs/third-party-notices.md.
 ```
 
-Planned adapted paths for Milestone 1:
+Adapted paths:
 
 - `internal/device/vec/vec.go`
 - `internal/device/vec/vec_arm64.go`
@@ -31,6 +31,9 @@ Planned adapted paths for Milestone 1:
 - `internal/device/mixer/control_linux.go`
 - `internal/device/wake/vadlevel/detector.go`
 - `internal/device/wake/tflite/*.go`
+- `internal/device/audio/echolocal_beam.go` (adapted from EchoLocal revision
+  `1e12085abd91edbf0e8d2e3501d703d006357c08`,
+  `internal/hardware/mic/beam.go`)
 
 The TFLite interpreter and its reference vectors are adapted from EchoLocal
 commit `be6b0b00d7d5d765d859b3cbe0e19e127a0c2031`. The generated synthetic

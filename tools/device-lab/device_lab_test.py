@@ -112,6 +112,17 @@ class CoreTests(unittest.TestCase):
         self.assertIn("$BB printf", scripts[0])
         self.assertIn("$BB rm -f", scripts[0])
 
+    def test_preflight_probe_reports_the_microphone_holder(self) -> None:
+        runner = object.__new__(device_lab.Runner)
+        runner.acquire_host_lock = lambda: None
+        runner.phase = lambda _name, action: action()
+        runner._save = lambda: None
+        runner.state = {}
+        runner.adb = lambda _arguments: device_lab.CommandResult(0, "device\n", "")
+        runner.root_shell = lambda _script: device_lab.CommandResult(0, "a" * 64 + "  /data/local/bin/echod\nboot\nmic_holder=316:/data/local/bin/echod\n", "")
+        with self.assertRaisesRegex(device_lab.LabError, r"316:/data/local/bin/echod"):
+            runner.preflight()
+
     def test_stage_external_records_identity_without_installing(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             artifact = Path(directory) / "agent.bin"

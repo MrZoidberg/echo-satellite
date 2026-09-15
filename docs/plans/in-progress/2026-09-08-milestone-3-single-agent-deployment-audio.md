@@ -752,12 +752,13 @@ Expected: authentication, absolute offer URLs, artifact modes, one-shot offer,
 and update-result recording are covered by host tests; the Windows binary
 builds for the operator-run gateway host.
 
-### Task 9: Characterize the seven physical microphone channels
+### Task 9: Adapt the EchoLocal conditioning baseline
 
-**Status:** not started
+**Status:** completed 2026-09-15
 
-**Purpose:** Establish evidence for preprocessing selection using identical
-multichannel input.
+**Purpose:** Reuse a proven Go-native microphone mixing and steerable
+beamforming implementation without importing upstream assistant behavior or
+assuming its hardware calibration wins on this Dot.
 
 **Dependencies:** Task 5's qualified launcher/bootstrap path. This audio work
 does not depend on deferred signed-release qualification.
@@ -767,38 +768,44 @@ and GPIO 444 low.
 
 **Files or components:**
 
-- Extend `echoctl mic` diagnostics.
-- Modify `docs/device-diagnostics.md`.
-- Add operator-approved fixtures only when necessary.
+- Modify `internal/device/audio`.
+- Extend `echoctl` comparison diagnostics.
+- Modify `docs/third-party-notices.md`, `docs/device-diagnostics.md`, and this
+  plan.
+- Add deterministic multichannel fixtures and operator-approved recordings only
+  when necessary for qualification.
 
 **Concrete changes:**
 
-- Capture all seven physical microphone channels simultaneously; continue
-  excluding playback loopback channels 7–8.
-- Record controlled silence, steady room noise, normal speech, continuous quiet
-  speech, and loud/clipping speech.
-- Repeat speech from front, off-axis, and far-field positions at recorded
-  distances.
-- Measure per-channel polarity, relative delay/correlation, noise floor, RMS/peak
-  dBFS, clipping fraction, and speech/noise separation.
-- Produce comparable offline inputs for channel 0, an unsteered mix, and
-  steerable delay-and-sum processing.
+- Copy and adapt only EchoLocal's microphone mixing and steerable beamforming
+  primitives behind the existing `Preprocessor` seam. Do not copy its
+  assistant, controller, wake-routing, service, configuration, update, or
+  hardware-lifecycle behavior.
+- Pin the upstream source revision; retain the local MIT license and add the
+  required adapted-file headers and third-party-notice entries.
+- Preserve the seven physical microphone inputs and exclude playback loopback
+  channels 7–8 in every candidate.
+- Add deterministic impulse, fixed-delay, polarity, channel-exclusion,
+  silence, saturation, and portable-`noasm` tests. The tests establish
+  algorithm behavior, not a claim about this Dot's array geometry.
+- Retain the local scorecard to verify capture format, physical channel order,
+  polarity/delay observations, and clean capture health before qualification.
 - Keep raw voice recordings only with operator approval; otherwise retain
   derived metrics and delete captures after analysis.
 
-**Expected outcome:** A reproducible seven-channel scorecard identifies channel
-behavior and beamformer inputs without guessing array properties.
+**Expected outcome:** EchoLocal-derived candidate processors are attributable,
+deterministic, portable, and ready for an evidence-based qualification run.
 
-**Verification:** `echoctl mic` JSON output and the diagnostic record contain all
-seven physical channels, test positions, metrics, capture format, zero
-XRuns/dropped frames, and raw-audio disposition.
+**Verification:** deterministic host tests cover every adapted primitive and
+`echoctl mic` JSON verifies an exactly-seven-channel, clean physical capture
+with an accurate raw-audio disposition. Real-device acoustics remain Task 10.
 
 ### Task 10: Implement and select the conditioning profile
 
 **Status:** not started
 
-**Purpose:** Produce a bounded, observable preprocessing path chosen from
-measured evidence.
+**Purpose:** Qualify and select a bounded, observable profile among channel 0,
+an unsteered mix, and the EchoLocal-derived steerable beamformer.
 
 **Dependencies:** Task 9.
 
@@ -813,14 +820,15 @@ recordings from Task 9.
 
 **Concrete changes:**
 
-- Implement three processors behind the existing `Preprocessor` interface:
-  channel 0, polarity-correct unsteered mix, and steerable delay-and-sum.
+- Complete the three processors behind the existing `Preprocessor` interface:
+  channel 0, polarity-correct unsteered mix, and the Task 9 EchoLocal-derived
+  steerable delay-and-sum baseline.
 - Add bounded automatic gain/output leveling with maximum 12 dB gain, at least
   1 dBFS headroom, saturation-safe conversion, and controlled attack/release.
 - Report profile name, applied gain, peak/RMS, clipping count/fraction, noise
   level, speech/noise separation, and processing duration.
-- Add multichannel impulse, polarity, delay, silence, noise, quiet-speech,
-  loud-speech, clipping, and gain-transition tests.
+- Add gain-transition tests and qualify every candidate with the Task 9
+  deterministic fixtures plus simultaneous real-Dot captures.
 - Disqualify a candidate if it:
   - clips more than 0.1% of output samples;
   - causes an XRun or dropped capture frame;
@@ -828,12 +836,16 @@ recordings from Task 9.
   - accepts fewer than 18 of 20 qualified wakes;
   - endpoints continuous quiet speech before 60 seconds;
   - fails deliberate-silence endpointing.
-- Among passing candidates, choose the greatest repeatable improvement in the
+- Capture controlled silence, steady room noise, normal speech, continuous
+  quiet speech, and loud/clipping speech from front, off-axis, and far-field
+  positions at recorded distances. Among passing candidates, choose the
+  greatest repeatable improvement in the
   minimum speech/noise separation across measured positions. Treat differences
   below 1 dB as equivalent and prefer the simpler candidate in this order:
   channel 0, unsteered mix, delay-and-sum.
-- Publish the winner as `dot-gen2-qualified-v1`. If none passes, retain
-  `bypass-v1` and leave the milestone blocked.
+- Publish the winner as `dot-gen2-qualified-v1`. EchoLocal-derived beamforming
+  is not presumed to win; if none passes, retain `bypass-v1` and leave the
+  milestone blocked.
 
 **Expected outcome:** The selected profile has objective evidence, bounded gain,
 and explanatory diagnostics.
@@ -1017,6 +1029,189 @@ completion evidence names which checks ran on real hardware.
 - [ ] Hardware and host/simulator evidence are identified separately.
 
 ## Progress log
+
+- 2026-09-15: The approved EchoLocal conditioning-baseline amendment changes
+  Task 9 onward. Task 9 now owns copied/adapted, attributable and deterministic
+  mixing/beamforming primitives plus capture sanity checks; Task 10 owns the
+  physical silence/noise/speech position matrix and objective selection among
+  channel 0, unsteered mix, and the adapted beamformer; Task 11 remains the
+  selected-profile wake/endpointing integration proof. This does not select
+  beamforming or weaken any clipping, cadence, wake, endpointing, privacy, or
+  device-local voice-boundary criterion. The accepted design is
+  amendment recorded in this plan's Task 9--11 text.
+
+- 2026-09-15: Task 9 claimed by Codex. Scope is `echoctl mic` scorecard
+  diagnostics, its host tests, and the physical-Dot evidence record. The task
+  uses the qualified Dot only through a device-lab preflight/prepare/cleanup
+  session with the explicit Linux ADB path and serial already recorded by Task
+  8. Raw voice capture retention remains opt-in; absent operator approval, the
+  session retains only derived JSON metrics and deletes each capture after it
+  is scored.
+
+- 2026-09-15: Task 9 is blocked before capture. The qualified Linux ADB device
+  `G090LF0964060EHP` was attached and device-lab session
+  `20260915T132015Z-581b348683` passed its explicit ADB and root preflight
+  phases, but its read-only initial-state probe did not complete. Consequently
+  `cleanup` could not run its unstaged payload and `verify-clean` correctly
+  rejected the session because no initial state exists. No microphone was
+  opened, no LED/GPIO state was changed, no audio was retained, and no product
+  files were written. Completing the required normal/quiet/loud speech at
+  front, off-axis, and far-field positions also requires an operator to supply
+  speech and recorded distances. Resume only after investigating the runner
+  probe/owned session and arranging that acoustic setup; do not infer channel
+  geometry or fabricate its metrics.
+
+- 2026-09-15: With operator authorization, Task 9 stopped the legacy launcher
+  process and its child only (no hook or installed-agent file was changed),
+  then repeated preflight and prepared session
+  `20260915T132015Z-581b348683`. It verified the capture was idle,
+  `boot_animation=0`, GPIO 444=`0`, and `ledcontroller=stopped`. An attempted
+  front capture was discarded immediately: `echoctl mic record --channels all`
+  incorrectly included reference channels 7--8, so it cannot be evidence for
+  this task. `all` now means mic0--mic6 and its host tests pass. Cleanup and
+  verify-clean passed with the installed-agent digest unchanged; restarting
+  `echod` reasserted GPIO 444 low, so it was manually restored to the observed
+  pre-session high value. No raw voice audio was retained. The task remains
+  blocked pending the scorecard/JSON diagnostics and a complete repeated
+  operator-run position matrix.
+
+- 2026-09-15: Task 9 host diagnostic implementation is in progress; hardware
+  qualification remains blocked. `echoctl mic scorecard` now accepts only an
+  exactly-seven-channel WAV and emits local JSON containing capture format and
+  frames; per-channel peak/RMS, clipping, mic0 correlation, relative delay and
+  derived polarity; optional matched room-noise floor and speech/noise
+  separation; position/distance/condition; verified XRun/dropped-frame values
+  when a recorder-produced health sidecar matches the capture; and the
+  raw-audio retained/deleted disposition. Raw deletion is the default;
+  `--retain-input` is explicit operator-approved retention. The runbook records
+  the front/off-axis/
+  far-field × silence/noise/normal/quiet/loud matrix and requires observed
+  distances. Host verification passed: `go test -race ./cmd/echoctl/...`,
+  `make fmt-check`, `make lint`, `make build-device-ctl`, and `git diff
+  --check`. The matrix still needs an operator speaking at those measured
+  positions inside a prepared device-lab session; no raw voice audio has been
+  retained by this implementation work.
+
+- 2026-09-15: Fresh-context review found five Task 9 host defects, all fixed:
+  silent channels now serialize dBFS as JSON `null`; deletion is default and
+  scorecard publication occurs only after deletion succeeds; capture-health
+  values require a SHA-256-bound `mic record --health-out` sidecar rather than
+  being fabricated as zero; correlation uses a fixed overlap and deterministic
+  lag tie-break; and its known-delay, periodic, inverted, and silent cases are
+  covered. The review also noted that Task 9 needs operator-approved retained
+  simultaneous recordings to create the Task 10 channel-0/mix/delay-and-sum
+  offline comparisons; no profile implementation was pulled into Task 9.
+  Reverification passed `go test -race ./cmd/echoctl/...`, `make fmt-check`,
+  `make lint`, `make build-device-ctl`, `make test`, and `git diff --check`.
+
+- 2026-09-15: Task 9 now includes the self-contained EchoLocal delay-and-sum
+  baseline adapted from upstream revision
+  `1e12085abd91edbf0e8d2e3501d703d006357c08` (`internal/hardware/mic/beam.go`).
+  It accepts exactly seven equally sized physical-microphone frames and rejects
+  malformed or 7--8-loopback-inclusive input before mutating state. Deterministic
+  host coverage exercises impulse/fixed-delay/polarity determinism, channel
+  exclusion, silence, PCM saturation, and the portable `noasm` build. This is
+  an attributable candidate only: it does not select the upstream geometry,
+  channel order, profile, or gain. Task 9 remains blocked on the existing
+  operator-run seven-channel capture scorecard and acoustic matrix; Task 10
+  owns profile selection and qualification.
+
+- 2026-09-15: Fresh-context Task 9 review dispositions: **fix** five findings.
+  `mic record` now rejects premature EOF; a health sidecar binds SHA-256,
+  sample rate, exact frame count, and channel map `[0,1,2,3,4,5,6]`; and the
+  scorecard rejects empty input and labels absent health `unverified`. The
+  capture seam now recognizes a `MultichannelPreprocessor`, routes exactly
+  mic0--mic6 before mono reduction, and rejects any other channel map. Tests
+  cover that routing plus default candidate behavior, deterministic delay and
+  polarity, silence, saturation, and `noasm`; no profile is selected. The
+  stale reference to a missing design record was replaced with this plan's
+  recorded amendment. Reverification passed focused race/noasm tests,
+  `make fmt-check`, `make lint`, `make verify`, and `git diff --check`.
+
+- 2026-09-15: Qualified-Dot session `20260915T155819Z-fdb383acf2` passed
+  preflight, prepare, cleanup, and verify-clean with `/usr/bin/adb` and serial
+  `G090LF0964060EHP`. A front, 55 mm, nominal normal-speech scorecard verified
+  a 16 kHz S16_LE, seven-channel, 160,000-frame capture with zero XRuns and
+  dropped frames; raw WAVs were deleted and only the derived JSON was retained
+  in the token-owned session evidence. It is not speech-qualification evidence:
+  the measured speech/noise separation was -0.75 to -0.81 dB across channels,
+  indicating that normal speech was not present during the capture window.
+  Repeat the controlled pair with speech synchronized to the ten-second
+  speech capture before using any acoustic metric. Task 9 remains blocked on
+  that matrix.
+
+- 2026-09-15: Repeated the front, 55 mm normal-speech cell in qualified-Dot
+  session `20260915T160243Z-f0237983d4`, using the semantic cyan-green
+  `listening` ring during the human speech window. The local scorecard verified
+  16 kHz S16_LE, seven channels, 160,000 frames, zero XRuns/dropped frames,
+  zero clipping, normal polarity for mic1--mic6, and relative delays of
+  0, -1, -2, -2, -1, and -1 samples against mic0. The per-channel
+  speech/noise separation was 17.50--20.01 dB. Raw WAVs were deleted after
+  local scoring; only the JSON metric artifact remains under the token-owned
+  host evidence directory. This completes one normal-speech position cell,
+  not Task 9's required silence/noise/quiet/loud and off-axis/far-field matrix.
+
+- 2026-09-15: Qualified-Dot device-lab session `20260915T160603Z-314c638f2b`
+  completed the front, 55 mm deliberate-silence cell with the semantic
+  cyan-green `listening` ring active. The local verified scorecard recorded a
+  16 kHz S16_LE seven-channel, 160,000-frame capture with zero XRuns, dropped
+  frames, and clipping; per-channel RMS was -63.84 to -60.07 dBFS. A
+  speech/noise-separation figure does not apply to a silence-only capture. The
+  raw WAV was confirmed deleted after local scoring, while the derived JSON
+  remains in the session's token-owned host evidence directory. Preflight,
+  prepare, cleanup, and verify-clean all passed; the installed-agent digest was
+  unchanged. Quiet and loud speech plus off-axis/far-field matrix cells remain.
+
+- 2026-09-15: Qualified-Dot device-lab session `20260915T161003Z-09519438e1`
+  completed the front, 55 mm continuous-quiet-speech cell. A matched room-noise
+  capture immediately preceded the ten-second speech capture, whose semantic
+  cyan-green `listening` ring was active. The verified 16 kHz S16_LE,
+  seven-channel, 160,000-frame scorecard recorded zero XRuns, dropped frames,
+  and clipping, with per-channel speech/noise separation of 3.15--3.23 dB. The
+  raw quiet-speech WAV was confirmed deleted after scoring and cleanup removed
+  the temporary noise WAV; only derived JSON metrics remain in token-owned host
+  evidence. Preflight, prepare, cleanup, and verify-clean passed with the
+  installed-agent digest unchanged. Loud speech and off-axis/far-field cells
+  remain.
+
+- 2026-09-15: Qualified-Dot device-lab session `20260915T161447Z-3e028ea061`
+  completed the front, 55 mm loud-speech cell. A matched room-noise capture
+  immediately preceded the ten-second speech capture, whose semantic
+  cyan-green `listening` ring was active. The verified 16 kHz S16_LE,
+  seven-channel, 160,000-frame scorecard recorded zero XRuns, dropped frames,
+  and clipping, with per-channel speech/noise separation of 10.87--12.95 dB.
+  The raw loud-speech WAV was confirmed deleted after scoring and cleanup
+  removed the temporary noise WAV; only derived JSON metrics remain in
+  token-owned host evidence. Preflight, prepare, cleanup, and verify-clean
+  passed with the installed-agent digest unchanged. The front 55 mm silence,
+  normal, quiet, and loud cells are now complete; off-axis and far-field cells
+  remain.
+
+- 2026-09-15: Qualified-Dot device-lab session `20260915T161902Z-8e723ac1dc`
+  completed the off-axis, 55 mm normal-speech cell. A matched room-noise
+  capture immediately preceded the ten-second speech capture, whose semantic
+  cyan-green `listening` ring was active. The verified 16 kHz S16_LE,
+  seven-channel, 160,000-frame scorecard recorded zero XRuns, dropped frames,
+  and clipping, with per-channel speech/noise separation of 12.39--15.33 dB.
+  The raw normal-speech WAV was confirmed deleted after scoring and cleanup
+  removed the temporary noise WAV; only derived JSON metrics remain in
+  token-owned host evidence. Preflight, prepare, cleanup, and verify-clean
+  passed with the installed-agent digest unchanged. Further off-axis conditions
+  and all far-field conditions remain.
+
+- 2026-09-15: Qualified-Dot device-lab session `20260915T162419Z-cc45191739`
+  completed the far-field normal-speech scorecard at the operator-supplied
+  measured distance of 1,000 mm. A matched room-noise capture immediately
+  preceded the ten-second speech capture, whose semantic cyan-green `listening`
+  ring was active. The verified 16 kHz S16_LE, seven-channel, 160,000-frame
+  scorecard recorded zero XRuns, dropped frames, and clipping, with per-channel
+  speech/noise separation of 11.34--14.31 dB. The raw normal-speech WAV was
+  confirmed deleted after scoring and cleanup removed the temporary noise WAV;
+  only derived JSON metrics remain in token-owned host evidence. Preflight,
+  prepare, cleanup, and verify-clean passed with the installed-agent digest
+  unchanged. This satisfies Task 9's physical-capture scorecard verification;
+  Task 10 remains responsible for completing the full position/condition matrix
+  and selecting a profile.
 
 - 2026-09-14: Task 6 completed. `echod` now accepts typed offers only at an
   idle turn boundary, blocks new local turns while installation is active, and

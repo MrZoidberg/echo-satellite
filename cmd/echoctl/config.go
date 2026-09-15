@@ -71,7 +71,8 @@ type updateStatusCommand struct {
 }
 
 type micCommand struct {
-	Record micRecordCommand `command:"record" description:"record microphone PCM to WAV"`
+	Record    micRecordCommand    `command:"record" description:"record microphone PCM to WAV"`
+	Scorecard micScorecardCommand `command:"scorecard" description:"write a seven-microphone capture scorecard as JSON"`
 }
 
 type micRecordCommand struct {
@@ -82,6 +83,18 @@ type micRecordCommand struct {
 	Card        int     `long:"card" default:"0" description:"ALSA card number"`
 	Device      int     `long:"device" default:"24" description:"ALSA capture device number"`
 	PrintLevels bool    `long:"print-levels" description:"print peak and RMS dBFS per selected channel"`
+	HealthOut   string  `long:"health-out" description:"write capture health JSON bound to --out"`
+}
+
+type micScorecardCommand struct {
+	Input       string `long:"input" required:"true" description:"seven-channel microphone WAV capture to analyze"`
+	Noise       string `long:"noise" description:"matched seven-channel room-noise WAV for speech/noise separation"`
+	Health      string `long:"capture-health" description:"capture health JSON produced by mic record --health-out"`
+	Out         string `long:"out" required:"true" description:"output scorecard JSON path"`
+	Position    string `long:"position" required:"true" description:"recorded source position, for example front or off-axis"`
+	DistanceMM  int    `long:"distance-mm" required:"true" description:"recorded source distance in millimeters"`
+	Condition   string `long:"condition" required:"true" choice:"silence" choice:"room-noise" choice:"normal-speech" choice:"quiet-speech" choice:"loud-speech" description:"controlled capture condition"`
+	RetainInput bool   `long:"retain-input" description:"retain --input after scoring; raw audio is otherwise deleted"`
 }
 
 type speakerCommand struct {

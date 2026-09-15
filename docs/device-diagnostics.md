@@ -1147,6 +1147,120 @@ diagnostic conversion.
 
 ### Speaker
 
+### Task 9 microphone scorecard procedure
+
+`echoctl mic record --channels all` selects exactly mic0--mic6. The Dot's
+channels 7--8 are playback-loopback references and are never valid Task 9
+inputs. For each controlled condition and recorded source position, capture a
+new simultaneous seven-channel WAV, then score it on the Dot. The scorecard is
+derived locally; it never uploads audio.
+
+```sh
+# Do this only inside a prepared device-lab session with GPIO 444 read back as 0.
+/data/local/tmp/echoctl mic record --channels all --seconds 10 \
+  --out /data/local/tmp/task9-front-normal.wav \
+  --health-out /data/local/tmp/task9-front-normal.health.json
+/data/local/tmp/echoctl mic scorecard \
+  --input /data/local/tmp/task9-front-normal.wav \
+  --noise /data/local/tmp/task9-front-room-noise.wav \
+  --capture-health /data/local/tmp/task9-front-normal.health.json \
+  --out /data/local/tmp/task9-front-normal.json \
+  --position front --distance-mm 1000 --condition normal-speech
+```
+
+For each source position, retain only the JSON metric artifact unless the
+operator explicitly approves raw-audio retention. The input is deleted by
+default only after its pending JSON is complete; use `--retain-input` only for
+an approved exception. Remove the corresponding noise capture after all
+comparisons that need it. The JSON includes capture
+format/frame count, seven per-channel peak/RMS/clipping metrics, correlation,
+relative delay and derived polarity against mic0, optional room-noise floor and
+speech/noise separation, position/distance/condition, and raw-audio
+disposition. XRun/dropped-frame values are present only when the matched
+`--health-out` sidecar verifies the capture digest; otherwise they are `null`,
+not assumed clean.
+Run the matrix for silence, room noise, normal speech, continuous quiet speech,
+and loud speech at front, off-axis, and far-field positions. Record each actual
+distance; do not substitute assumed array geometry or fabricated metrics.
+
+The 2026-09-15 front, 55 mm nominal-normal-speech trial verified the capture
+and health path (16 kHz S16_LE, seven channels, 160,000 frames, zero XRuns and
+dropped frames), but it is not acoustic evidence: all channels measured only
+0.75--0.81 dB below the matched room-noise RMS. The raw WAVs were deleted after
+local scoring. Repeat it with speech synchronized to the ten-second capture
+window before comparing conditioning candidates.
+
+A repeated front, 55 mm normal-speech capture used the semantic cyan-green
+`listening` ring during the ten-second human speech window and produced usable
+evidence: 16 kHz S16_LE, seven channels, 160,000 frames, zero XRuns/dropped
+frames and clipping, normal polarity for mic1--mic6, and respective relative
+delays of 0, -1, -2, -2, -1, and -1 samples against mic0. Per-channel
+speech/noise separation was 17.50--20.01 dB. Raw WAVs were deleted after local
+scoring; the derived JSON is retained in the device-lab session evidence.
+
+A front, 55 mm deliberate-silence cell in device-lab session
+`20260915T160603Z-314c638f2b` used the same semantic cyan-green `listening`
+ring during its ten-second capture. The verified scorecard recorded 16 kHz
+S16_LE, seven channels, 160,000 frames, zero XRuns/dropped frames and clipping,
+with RMS levels of -63.84 to -60.07 dBFS. No speech/noise separation applies to
+a silence-only capture. The raw WAV was confirmed deleted after local scoring;
+only its JSON metrics remain in the token-owned host evidence directory.
+
+A front, 55 mm continuous-quiet-speech cell in device-lab session
+`20260915T161003Z-09519438e1` used a matched ten-second room-noise baseline and
+the semantic cyan-green `listening` ring during the human speech window. The
+verified 16 kHz S16_LE, seven-channel, 160,000-frame capture had zero XRuns,
+dropped frames, and clipping. Per-channel speech/noise separation was
+3.15--3.23 dB. The raw quiet-speech WAV was confirmed deleted after local
+scoring; cleanup removed the temporary matched room-noise WAV. Only the JSON
+metric artifact remains in the token-owned host evidence directory.
+
+A front, 55 mm loud-speech cell in device-lab session
+`20260915T161447Z-3e028ea061` likewise used a matched ten-second room-noise
+baseline and the semantic cyan-green `listening` ring during the human speech
+window. The verified 16 kHz S16_LE, seven-channel, 160,000-frame capture had
+zero XRuns, dropped frames, and clipping, with per-channel speech/noise
+separation of 10.87--12.95 dB. The raw loud-speech WAV was confirmed deleted
+after local scoring; cleanup removed the temporary matched room-noise WAV.
+Only the JSON metric artifact remains in the token-owned host evidence
+directory.
+
+An off-axis, 55 mm normal-speech cell in device-lab session
+`20260915T161902Z-8e723ac1dc` used a matched ten-second room-noise baseline and
+the semantic cyan-green `listening` ring during the human speech window. The
+verified 16 kHz S16_LE, seven-channel, 160,000-frame capture had zero XRuns,
+dropped frames, and clipping, with per-channel speech/noise separation of
+12.39--15.33 dB. The raw normal-speech WAV was confirmed deleted after local
+scoring; cleanup removed the temporary matched room-noise WAV. Only the JSON
+metric artifact remains in the token-owned host evidence directory.
+
+A far-field normal-speech cell at the operator-supplied 1,000 mm distance in
+device-lab session `20260915T162419Z-cc45191739` used a matched ten-second
+room-noise baseline and the semantic cyan-green `listening` ring during the
+human speech window. The verified 16 kHz S16_LE, seven-channel, 160,000-frame
+capture had zero XRuns, dropped frames, and clipping, with per-channel
+speech/noise separation of 11.34--14.31 dB. The raw normal-speech WAV was
+confirmed deleted after local scoring; cleanup removed the temporary matched
+room-noise WAV. Only the JSON metric artifact remains in the token-owned host
+evidence directory.
+
+### 2026-09-15 diagnostic launcher coordination
+
+The qualified legacy Magisk launcher continuously restarts `echod`.  During a
+microphone diagnostic, stopping only `echod` is therefore insufficient: the
+launcher reopens `/dev/snd/pcmC0D24c` before device-lab's preparation can claim
+an idle capture device.  On this Dot, the holder was PID 8127
+`/data/local/bin/echod`, parented by PID 289 running
+`sh /sbin/.core/img/.core/service.d/echo-satellite.sh`.
+
+For a token-owned, reversible device-lab session, stop that launcher process
+and its child only after the runner identifies them, prepare the session (which
+stops `ledcontroller`, sets `boot_animation=0`, and drives GPIO 444 low), and
+restart the controlled agent after cleanup.  Do not modify the launcher hook
+or installed agent to free capture.  The device-lab preflight now records the
+exact PID and executable of any `/dev/snd` holder so an operator can coordinate
+with it rather than acting on an ambiguous busy error.
+
 Initial hardware execution found that issuing `SNDRV_PCM_IOCTL_START` on an
 empty prepared playback stream returns `EPIPE`. Capture requires explicit
 start; playback starts on its first write. The ALSA provider now applies that

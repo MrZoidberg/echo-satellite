@@ -22,5 +22,13 @@ test ! -e "$STATE" || exit 65
 } >"$STATE"
 chown root:root "$STATE"
 chmod 600 "$STATE"
+stop ledcontroller
+echo 0 > /sys/bus/i2c/devices/0-003f/boot_animation
+test -e /sys/class/gpio/gpio444/value || echo 444 > /sys/class/gpio/export
+echo out > /sys/class/gpio/gpio444/direction
+echo 0 > /sys/class/gpio/gpio444/value
+test "$(cat /sys/bus/i2c/devices/0-003f/boot_animation)" = 0
+test "$(cat /sys/class/gpio/gpio444/value)" = 0
+test "$(getprop init.svc.ledcontroller)" = stopped
 sync
 sync
