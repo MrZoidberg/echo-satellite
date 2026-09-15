@@ -668,6 +668,25 @@ journaling, and digest drift. No physical-device claim is made by these tests.
   complete capability capture, duplicate checkpoints, preflight-only journaling,
   and predictable temporary names. No finding was declined or postponed.
 
+- 2026-09-14: A live Dot session found that FireOS's root-shell PATH does not
+  provide `printf`, despite the capability probe using it before it could
+  report that fact. The probe now invokes BusyBox `printf` and `rm` explicitly,
+  with regression assertions. Rooted session `20260914T110511Z-a6f7fa0ac1`
+  then passed preflight, prepare, cleanup, and verify-clean with the installed
+  agent digest unchanged. The earlier partially prepared session was manually
+  removed only after its ownership token and unchanged digest were verified;
+  it had no initial-state payload and could not use the normal cleanup path.
+  Specifically, interrupted session `20260914T105718Z-570ba8b4e4` contained
+  only its `.owner`, `.lock`, and three runner payloads. With its private
+  token compared locally (not recorded), the operator read the installed digest
+  and bounded file list using `/data/adb/magisk/busybox`, then used the bounded
+  command `/data/adb/magisk/busybox find
+  /data/local/tmp/echo-device-lab/20260914T105718Z-570ba8b4e4 -depth -delete`;
+  the root was absent afterward and the digest remained
+  `41ed22dba37da3d583c257991e3b4d69460fc07265010f189594a4d38184f8c6`.
+  This was manual interrupted-session disposal, not normal cleanup or Task 8
+  acceptance evidence.
+
 ## Completion evidence
 
 - 2026-09-08: `uv run --no-project --script tools/device-lab/device_lab_test.py -k core` — core evidence/redaction/input/state tests passed.

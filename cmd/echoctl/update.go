@@ -69,7 +69,7 @@ func bootstrapWithRunner(ctx context.Context, w io.Writer, c updateBootstrapComm
 	}
 	localScriptPath := localScript.Name()
 	defer func() { _ = os.Remove(localScriptPath) }()
-	if _, err := localScript.WriteString("#!/system/bin/sh\ntrap 'rm -f \"$0\"' EXIT\n" + bootstrapScriptWithComparator(remoteLauncher, remoteAgent, "/data/adb/magisk/busybox cmp")); err != nil {
+	if _, err := localScript.WriteString("#!/system/bin/sh\ntrap 'rm -f \"$0\"' EXIT\n" + bootstrapScriptWithTools(remoteLauncher, remoteAgent, "/data/adb/magisk/busybox sha256sum", "/data/adb/magisk/busybox printf", "/data/adb/magisk/busybox sed")); err != nil {
 		_ = localScript.Close()
 		return fmt.Errorf("write bootstrap script: %w", err)
 	}
@@ -82,17 +82,17 @@ func bootstrapWithRunner(ctx context.Context, w io.Writer, c updateBootstrapComm
 	if _, err := runner.Run(ctx, c.ADB, "-s", c.Serial, "shell", "chmod", "0700", remoteScript); err != nil {
 		return fmt.Errorf("make bootstrap script executable: %w", err)
 	}
-	if _, err := runner.Run(ctx, c.ADB, "-s", c.Serial, "shell", "su", "-c", remoteScript); err != nil {
+	if _, err := runner.Run(ctx, c.ADB, "-s", c.Serial, "shell", "su -c '"+remoteScript+"'"); err != nil {
 		return fmt.Errorf("install bootstrap payloads: %w", err)
 	}
 	return writeReport(w, []string{"result: bootstrap installed launcher and known-good agent"})
 }
 
 func bootstrapScript(remoteLauncher, remoteAgent string) string {
-	return bootstrapScriptWithComparator(remoteLauncher, remoteAgent, "cmp")
+	return bootstrapScriptWithTools(remoteLauncher, remoteAgent, "sha256sum", "printf", "sed")
 }
 
-func bootstrapScriptWithComparator(remoteLauncher, remoteAgent, comparator string) string {
+func bootstrapScriptWithTools(remoteLauncher, remoteAgent, hasher, formatter, lineReader string) string {
 	// Every path is fixed by this binary. The remote shell receives one quoted
 	// su -c argument, so its redirections remain privileged.
 	return `set -eu
@@ -101,13 +101,19 @@ launcher="$service_dir/` + launcherName + `"
 backup="$launcher.echo-satellite-backup"
 direct_start="$service_dir/` + directStartName + `"
 direct_backup="$direct_start.echo-satellite-backup"
+digest() {
+  output=$(` + hasher + ` "$1")
+  set -- $output
+  test "$#" -ge 1 || return 1
+  ` + formatter + ` '%s\n' "$1"
+}
 test -d "$service_dir" || { echo "unsupported Magisk service layout" >&2; exit 64; }
 test -f "` + remoteLauncher + `" || { echo "missing staged launcher" >&2; exit 65; }
 test -f "` + remoteAgent + `" || { echo "missing staged agent" >&2; exit 65; }
 if test -e "$launcher"; then
-  if ` + comparator + ` -s "` + remoteLauncher + `" "$launcher"; then
+  if staged_digest="$(digest "` + remoteLauncher + `")" && installed_digest="$(digest "$launcher")" && test "$staged_digest" = "$installed_digest"; then
     launcher_action=unchanged
-  elif test "$(sed -n '2p' "$launcher")" = '` + launcherMarker + `'; then
+  elif test "$(` + lineReader + ` -n '2p' "$launcher")" = '` + launcherMarker + `'; then
     test ! -e "$backup" || { echo "existing launcher backup would be overwritten" >&2; exit 66; }
     launcher_action=replace
   else
@@ -118,7 +124,7 @@ else
   launcher_action=create
 fi
 if test -e "$direct_start"; then
-  test "$(sed -n '2p' "$direct_start")" = '` + launcherMarker + `' || { echo "unrecognized conflicting direct-start hook" >&2; exit 68; }
+  test "$(` + lineReader + ` -n '2p' "$direct_start")" = '` + launcherMarker + `' || { echo "unrecognized conflicting direct-start hook" >&2; exit 68; }
   test ! -e "$direct_backup" || { echo "existing direct-start backup would be overwritten" >&2; exit 69; }
   direct_action=backup
 else
@@ -145,7 +151,7 @@ if ! test -d /data/local/etc/echo-satellite; then
   chmod 0700 /data/local/etc/echo-satellite
 fi
 mkdir -p /data/local/bin
-if test -e /data/local/bin/echod && ` + comparator + ` -s "` + remoteAgent + `" /data/local/bin/echod; then
+if test -e /data/local/bin/echod && staged_agent_digest="$(digest "` + remoteAgent + `")" && installed_agent_digest="$(digest /data/local/bin/echod)" && test "$staged_agent_digest" = "$installed_agent_digest"; then
   rm -f "` + remoteAgent + `"
 else
   chmod 0755 "` + remoteAgent + `"

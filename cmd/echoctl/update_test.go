@@ -32,7 +32,7 @@ func TestBootstrapWithRunner_FreshInstall(t *testing.T) {
 	assert.Equal(t, []string{"-s", "dot", "push", launcher, "/data/local/tmp/echo-satellite-launcher.part"}, runner.calls[0].args)
 	assert.Equal(t, []string{"-s", "dot", "push", agent, "/data/local/tmp/echod.part"}, runner.calls[1].args)
 	assert.Equal(t, []string{"-s", "dot", "shell", "chmod", "0700", "/data/local/tmp/echo-satellite-bootstrap.sh"}, runner.calls[3].args)
-	assert.Equal(t, []string{"-s", "dot", "shell", "su", "-c", "/data/local/tmp/echo-satellite-bootstrap.sh"}, runner.calls[4].args)
+	assert.Equal(t, []string{"-s", "dot", "shell", "su -c '/data/local/tmp/echo-satellite-bootstrap.sh'"}, runner.calls[4].args)
 	assert.Contains(t, out.String(), "bootstrap installed")
 }
 
@@ -52,7 +52,7 @@ func TestBootstrapWithRunner_InterruptionAndConflictLeaveRemoteInstallUnchanged(
 				assert.Len(t, runner.calls, 1, "agent is never pushed after launcher push fails")
 			} else {
 				require.Len(t, runner.calls, 5)
-				assert.Equal(t, "/data/local/tmp/echo-satellite-bootstrap.sh", runner.calls[4].args[len(runner.calls[4].args)-1])
+				assert.Equal(t, "su -c '/data/local/tmp/echo-satellite-bootstrap.sh'", runner.calls[4].args[len(runner.calls[4].args)-1])
 			}
 		})
 	}
@@ -60,7 +60,10 @@ func TestBootstrapWithRunner_InterruptionAndConflictLeaveRemoteInstallUnchanged(
 
 func TestBootstrapScript_IdempotenceAndBackupRules(t *testing.T) {
 	script := bootstrapScript("/tmp/launcher", "/tmp/agent")
-	assert.Contains(t, script, "cmp -s \"/tmp/launcher\" \"$launcher\"")
+	assert.Contains(t, script, "output=$(sha256sum \"$1\")")
+	assert.Contains(t, script, "printf '%s\\n' \"$1\"")
+	assert.Contains(t, script, "staged_digest=\"$(digest \"/tmp/launcher\")\"")
+	assert.Contains(t, script, "installed_digest=\"$(digest \"$launcher\")\"")
 	assert.Contains(t, script, "cp \"$launcher\" \"$backup.echo-satellite-new\"")
 	assert.Contains(t, script, "mv \"$launcher.echo-satellite-new\" \"$launcher\"")
 	assert.Contains(t, script, "existing launcher backup would be overwritten")
@@ -72,10 +75,13 @@ func TestBootstrapScript_IdempotenceAndBackupRules(t *testing.T) {
 	assert.Less(t, strings.Index(script, "mkdir -p /data/local/etc/echo-satellite"), strings.LastIndex(script, "mv \"/tmp/agent\" /data/local/bin/echod"))
 }
 
-func TestBootstrapScriptWithComparator_UsesQualifiedBusyBox(t *testing.T) {
-	script := bootstrapScriptWithComparator("/tmp/launcher", "/tmp/agent", "/data/adb/magisk/busybox cmp")
-	assert.Contains(t, script, "/data/adb/magisk/busybox cmp -s \"/tmp/launcher\" \"$launcher\"")
-	assert.Contains(t, script, "/data/adb/magisk/busybox cmp -s \"/tmp/agent\" /data/local/bin/echod")
+func TestBootstrapScriptWithTools_UsesQualifiedBusyBox(t *testing.T) {
+	script := bootstrapScriptWithTools("/tmp/launcher", "/tmp/agent", "/data/adb/magisk/busybox sha256sum", "/data/adb/magisk/busybox printf", "/data/adb/magisk/busybox sed")
+	assert.Contains(t, script, "output=$(/data/adb/magisk/busybox sha256sum \"$1\")")
+	assert.Contains(t, script, "/data/adb/magisk/busybox printf '%s\\n' \"$1\"")
+	assert.Contains(t, script, "/data/adb/magisk/busybox sed -n '2p' \"$launcher\"")
+	assert.Contains(t, script, "staged_agent_digest=\"$(digest \"/tmp/agent\")\"")
+	assert.Contains(t, script, "installed_agent_digest=\"$(digest /data/local/bin/echod)\"")
 }
 
 func TestBootstrapScript_FakeADBFilesystemScenarios(t *testing.T) {
@@ -254,6 +260,8 @@ func TestLauncherPayload_OnlyOwnsRestartPolicy(t *testing.T) {
 	require.NoError(t, err)
 	payload := string(raw)
 	assert.Contains(t, payload, "CONTROLLED_RESTART=75")
+	assert.Contains(t, payload, "RUNTIME_CONFIG=/data/local/etc/echo-satellite/echod.ini")
+	assert.Contains(t, payload, "\"$AGENT\" --config \"$RUNTIME_CONFIG\"")
 	assert.Contains(t, payload, "1) delay=2")
 	assert.Contains(t, payload, "16) delay=32")
 	assert.Contains(t, payload, "*) delay=60")

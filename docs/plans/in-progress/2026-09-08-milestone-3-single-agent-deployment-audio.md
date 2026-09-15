@@ -3,7 +3,7 @@
 **Status:** in-progress
 **Owner or active agent:** Codex (Tasks 1–7 completed)
 **Created:** 2026-09-08
-**Updated:** 2026-09-14
+**Updated:** 2026-09-15
 **Started:** 2026-09-08
 **Completed:** not completed
 
@@ -473,6 +473,81 @@ go test -race ./cmd/echoctl/...
 Expected: host tests pass and a same-byte real-device bootstrap removes its
 staged agent file while preserving the installed digest.
 
+#### Task 5 hardware remediation: launch the provisioned runtime configuration
+
+**Status:** completed 2026-09-15
+
+**Purpose:** Correct the Task 8 reboot finding that the minimal launcher starts
+`echod` without the required gateway-token configuration, causing a bounded
+crash loop even when the device already has its configuration and credentials.
+
+**Dependencies:** Task 5 and the Task 8 rooted-Dot reboot observation.
+
+**Files or components:**
+
+- Modify `device_payloads/launcher/echo-satellite.sh`.
+- Modify launcher tests and `docs/device-installation.md`.
+
+**Concrete changes:**
+
+- Invoke `echod` with its typed, provisioned INI path
+  `/data/local/etc/echo-satellite/echod.ini`; do not source an arbitrary shell
+  configuration or copy credentials during bootstrap.
+- Require initial provisioning to create the root-owned INI separately, with
+  the gateway token path and any development TLS override where explicitly
+  intended.
+- Cover the exact launcher command in host tests and re-bootstrap/reboot the
+  qualified Dot with its existing token and paired gateway state.
+- Pass the fixed remote bootstrap script as the single quoted argument to the
+  Dot's `su -c`; do not rely on ADB preserving separate `su` argument tokens.
+
+**Verification:**
+
+```sh
+go test -race ./cmd/echoctl/...
+make build-device
+make build-device-ctl
+```
+
+Expected: the launcher reaches the configured `echod` process after reboot;
+missing or malformed runtime configuration remains an observable agent failure,
+not a launcher recovery decision.
+
+#### Task 5 hardware remediation: compare bootstrap payloads by SHA-256
+
+**Status:** completed 2026-09-15
+
+**Purpose:** Correct the Task 8 observation that the qualified Magisk BusyBox
+`cmp` reports success for distinct files, causing bootstrap to report success
+without replacing a recognized older launcher.
+
+**Dependencies:** Task 5 and the Task 8 rooted-Dot comparator probe.
+
+**Files or components:**
+
+- Modify `cmd/echoctl/update.go` and its tests.
+- Modify this plan and the Task 8 hardware evidence.
+
+**Concrete changes:**
+
+- Compare staged and installed launcher/agent SHA-256 digests through the
+  qualified `/data/adb/magisk/busybox sha256sum`, rather than its unreliable
+  `cmp` applet; use the same BusyBox for digest formatting and marker reads
+  because FireOS lacks the corresponding system applets.
+- Keep replacement, backup, conflict, and staged-file cleanup rules unchanged.
+- Re-bootstrap the qualified Dot, verify the old launcher is backed up and the
+  new launcher bytes are installed, then reboot and verify configured startup.
+
+**Verification:**
+
+```sh
+go test -race ./cmd/echoctl/...
+make build
+```
+
+Expected: a distinct recognized launcher is backed up and replaced on the Dot;
+same-byte bootstrap remains idempotent.
+
 ### Task 6: Integrate deployment with `echod`
 
 **Status:** completed 2026-09-14
@@ -566,7 +641,12 @@ scenarios are deterministic and race-clean.
 
 ### Task 8: Prove installation and ADB recovery on the Dot
 
-**Status:** not started
+**Status:** superseded 2026-09-15
+
+**Superseded by:** `docs/plans/future/2026-09-15-release-signing-and-deployment-qualification.md`,
+Tasks 1–2. The release-signing workflow required to create the trusted inputs
+does not exist in Milestone 3, so its live signed-release proof cannot be
+performed or completed honestly here.
 
 **Purpose:** Validate both the normal deployment path and the deliberately
 reduced recovery guarantee.
@@ -598,24 +678,79 @@ known-good build.
   unavailability and every manual recovery command.
 - Confirm no boot, recovery, system, or supervisor path was written.
 
-**Expected outcome:** Normal replacement, downgrade, pre-commit safety, and the
-manual ADB recovery boundary are proven on the target device.
+**Expected outcome:** Superseded before completion; the successor plan proves
+normal replacement, downgrade, pre-commit safety, and the manual ADB recovery
+boundary on the target device after it establishes signing.
 
 **Verification:**
 
 ```sh
 make build-device
 make build-device-ctl
+uv run --no-project --script tools/device-lab/device_lab.py preflight \
+  --adb "$ADB" --serial "$DEVICE_SERIAL"
+uv run --no-project --script tools/device-lab/device_lab.py prepare \
+  --adb "$ADB" --serial "$DEVICE_SERIAL" --resume .bin/device-lab/<session-id>
 "$ADB" -s "$DEVICE_SERIAL" shell "su -c '
   readlink /proc/\$(pidof echod)/exe
-  sha256sum /data/local/bin/echod
+  /data/adb/magisk/busybox sha256sum /data/local/bin/echod
   cat /data/local/etc/echo-satellite/installed-release.json
 '"
+uv run --no-project --script tools/device-lab/device_lab.py cleanup \
+  --adb "$ADB" --serial "$DEVICE_SERIAL" --resume .bin/device-lab/<session-id>
+uv run --no-project --script tools/device-lab/device_lab.py verify-clean \
+  --adb "$ADB" --serial "$DEVICE_SERIAL" --resume .bin/device-lab/<session-id>
 ```
 
-Expected: valid replacement and signed downgrade reconnect; all pre-commit
-failures preserve the prior digest; the post-commit bad build requires and
-successfully completes documented ADB recovery.
+Expected: superseded verification. No on-Dot signed deployment, downgrade, or
+ADB recovery result is claimed by Milestone 3.
+
+#### Task 8 remediation: disposable authenticated update-offer gateway
+
+**Status:** completed 2026-09-15
+
+**Purpose:** Supply the narrowly scoped, operable authenticated offer gateway
+that Task 8 requires without expanding the normal gateway into a release or
+rollout controller.
+
+**Dependencies:** Tasks 6–7 and the approved
+`docs/plans/2026-09-15-task8-test-gateway-design.md` design.
+
+**Hardware required:** no for implementation; it is consumed by successor-plan
+Task 2's rooted-Dot verification.
+
+**Files or components:**
+
+- Create `cmd/task8gateway` and its tests.
+- Modify `Makefile` and Task 8 operational documentation.
+
+**Concrete changes:**
+
+- Add a development-only TLS server that authenticates a device bearer token,
+  performs the normal `hello`/`welcome` exchange, serves one explicit signed
+  offer, and records sanitized update decisions and transitions across a
+  controlled-restart reconnect.
+- Serve the explicitly selected artifact, manifest, and detached signature over
+  absolute HTTPS URLs on the same listener. Support explicit test-only artifact
+  truncation, body mutation, and selected invalid-signature response modes.
+- Do not generate signatures, accept private signing keys, persist releases,
+  modify the production `gateway` binary, or send duplicate offers after a
+  reconnect.
+
+**Expected outcome:** An operator can run one auditable successor-plan scenario
+at a time against a physical Dot using its existing authenticated WSS and HTTPS
+paths.
+
+**Verification:**
+
+```sh
+go test -race ./cmd/task8gateway/...
+GOOS=windows GOARCH=amd64 go build -o .bin/task8gateway.exe ./cmd/task8gateway
+```
+
+Expected: authentication, absolute offer URLs, artifact modes, one-shot offer,
+and update-result recording are covered by host tests; the Windows binary
+builds for the operator-run gateway host.
 
 ### Task 9: Characterize the seven physical microphone channels
 
@@ -624,8 +759,8 @@ successfully completes documented ADB recovery.
 **Purpose:** Establish evidence for preprocessing selection using identical
 multichannel input.
 
-**Dependencies:** Task 8, so subsequent device iterations use the new deployment
-path.
+**Dependencies:** Task 5's qualified launcher/bootstrap path. This audio work
+does not depend on deferred signed-release qualification.
 
 **Hardware required:** yes — qualified Dot with Amazon LED ownership disabled
 and GPIO 444 low.
@@ -866,12 +1001,6 @@ completion evidence names which checks ran on real hardware.
   executable.
 - [ ] The minimal Magisk launcher starts the agent after reboot and applies
   bounded retry backoff.
-- [ ] A valid signed deployment restarts and reconnects as the expected build.
-- [ ] A signed older release can be deployed through the same path.
-- [ ] Tampered, truncated, wrong-signature, and insufficient-space releases are
-  rejected without changing the installed digest.
-- [ ] A deliberately bad committed build is recoverable through the documented
-  ADB procedure.
 - [ ] No deployment path touches bootloader, boot, recovery, system partitions,
   configuration, credentials, wake assets, or unrelated Magisk files.
 - [ ] All seven physical microphone channels are characterized on the qualified
@@ -902,6 +1031,112 @@ completion evidence names which checks ran on real hardware.
   post-commit restart behavior, fixed deployment paths, cancellation direction,
   and update state. No hardware was used; `make verify` and the task's
   repeated race command passed.
+
+- 2026-09-14: Task 8 was claimed for live qualification. Host ARM64 builds
+  (`make build-device` and `make build-device-ctl`) passed, but the explicitly
+  selected Windows ADB at `/mnt/c/tools/android-platform-tools/adb.exe`
+  reported no attached devices for qualified serial `G090LF0964060EHP`.
+  Required device-lab preflight with those explicit inputs consequently failed
+  with `device 'G090LF0964060EHP' not found`; it created no device session or
+  remote diagnostic state.
+  Therefore no launcher/bootstrap write, reboot, gateway deployment,
+  pre-commit failure attempt, downgrade, bad-build installation, or ADB
+  recovery action was performed. The task remains blocked pending a rooted,
+  connected qualified Dot, a narrow authenticated test gateway, signed test
+  releases (including a known-good recovery bundle), and the operator's
+  explicit acknowledgement before the intentional immediate-exit build.
+
+- 2026-09-14: Linux ADB subsequently connected to the rooted qualified Dot.
+  After replacing a device-lab capability probe's unavailable system `printf`
+  with the qualified BusyBox applet, session
+  `20260914T110511Z-a6f7fa0ac1` passed preflight, prepare, cleanup, and
+  verify-clean with the initial installed digest preserved. The first session
+  preceded mandatory LED/mic preparation and is not accepted as Task 8
+  evidence; the repeated prepared session `20260914T110945Z-258d9a87f4` passed
+  with `boot_animation=0`, GPIO 444=`0`, and `ledcontroller=stopped`. No
+  product path was exercised. Task 8 remains blocked on a narrow authenticated
+  offer gateway, signed current/older/failure/recovery bundles, and the
+  operator's explicit acknowledgement immediately before the intentional
+  immediate-exit deployment. The present production gateway does not issue
+  `update.offer`, and dotsim's offer server is in-process test code rather than
+  an operable live gateway.
+
+- 2026-09-14: With Linux ADB and the operator-run gateway available, Task 8
+  backed up the original installed agent to host recovery storage and verified
+  its SHA-256 as `41ed22dba37da3d583c257991e3b4d69460fc07265010f189594a4d38184f8c6`.
+  It used `echoctl update bootstrap` to install the qualified launcher and the
+  current ARM64 agent, then requested a reboot. The Dot did not re-enumerate
+  on Linux ADB during bounded post-reboot polling. This is a post-commit
+  unavailability observation, not automatic rollback; no recovery command can
+  be issued until physical/ADB access returns. The device-lab session remains
+  unclean because its pre-bootstrap digest baseline intentionally differs from
+  the newly installed agent; do not delete or steal its token-owned root until
+  the device reconnects and its ownership can be verified. The signed recovery
+  bundle and offer-gateway prerequisites remain outstanding.
+
+- 2026-09-15: Task 8 resumed against Linux ADB `/usr/bin/adb` and qualified
+  serial `G090LF0964060EHP`, using the existing prepared device-lab session
+  `20260914T122202Z-8ee8b4ed9d`. A read-only bootstrap probe found the stale
+  launcher SHA-256 `0d7d385324c9005de65ddfd25d64f39b30b5316f4360c3a9b907b945267da8c1`.
+  The qualified BusyBox `cmp`, with and without `-s`, returned status zero for
+  distinct payloads, so bootstrap falsely reported the existing launcher as
+  unchanged. A first SHA-256 comparison remediation also failed closed
+  incorrectly because FireOS lacked system `printf`; the command-substitution
+  failure compared two empty strings. Bootstrap now qualifies `sha256sum`,
+  `printf`, and `sed` through `/data/adb/magisk/busybox`, with host regression
+  coverage. After `go test -race ./cmd/echoctl/...` and `make build`, bootstrap
+  replaced the hook with SHA-256
+  `5adadfad2eb20bb647fb8f63c6f9e1762a410a02a81bc28adc6a46719f35df9c`, preserved
+  the prior hook at `echo-satellite.sh.echo-satellite-backup`, removed its
+  staged files, and left the root-owned mode-0600 provisioned INI untouched.
+  Reboot completed and, at 24 seconds uptime, PID 339 was
+  `/data/local/bin/echod --config /data/local/etc/echo-satellite/echod.ini`;
+  its executable link and installed digest matched the bootstrapped agent.
+  Thus the bootstrap-replacement and reboot-startup blockers are resolved.
+  The pre-bootstrap device-lab cleanup correctly refused to erase its root
+  when it observed the intentional agent-digest change; after a token and
+  process-ownership inspection established no leaked diagnostic process, only
+  that token-owned root and its matching stale host lock were removed. This is
+  an explicit cleanup deviation, not a product recovery. Task 8 remains
+  blocked on an operable authenticated offer gateway, signed current/older,
+  tampered/truncated/insufficient-space, and recovery bundles, plus explicit
+  operator acknowledgement immediately before installing the intentional
+  immediate-exit diagnostic build.
+
+- 2026-09-15: Task 8 remediation added the disposable `task8gateway` command:
+  one TLS listener authenticates both WSS and artifact requests with the
+  existing device bearer token, serves one explicit manifest-derived offer,
+  supports the three controlled corrupted-response modes, and records only the
+  selected deployment's payload-correlated update events. It deliberately does
+  not sign releases, retain release state, or change the normal `gateway`.
+  Unit coverage includes empty-envelope reports over a controlled-restart
+  reconnect with no duplicate offer. Fresh-context review findings were all
+  **fixed**: artifact authentication, post-write offer consumption, payload and
+  confirmation identity correlation, temporary explicit gateway routing
+  documentation, CLI precedence/validation coverage, test validity, and file
+  modes. Host scoped race tests, repository tests, formatting, lint, direct
+  Windows cross-build of `task8gateway.exe`, and diff checks passed. `make
+  build-windows` remains unverified because the operator's running
+  `.bin/gateway.exe` holds its output file; it must be rerun after that process
+  stops. Task 8 remains blocked on the operator-supplied signed current/older/
+  failure/recovery bundles and the explicit just-in-time acknowledgement for
+  the immediate-exit drill.
+
+- 2026-09-15: The missing production signing workflow makes Task 8's live
+  signed-release acceptance criteria impossible to execute within Milestone 3.
+  Task 8 is therefore **superseded**, not completed, by future plan
+  `2026-09-15-release-signing-and-deployment-qualification.md`: its Task 1
+  establishes secure signing and its Task 2 owns complete rooted-Dot proof.
+  The completed disposable offer-gateway remediation remains Milestone 3
+  evidence. Milestone 3 retains no claim that signed deployment, downgrade,
+  failure safety, ADB recovery, or partition-write proof ran on hardware.
+
+- 2026-09-15: An interrupted workspace change temporarily removed the
+  uncommitted offer-harness source while leaving its prior build artifacts.
+  The exact Git object content was restored, and scoped race, formatting, lint,
+  direct Windows cross-build, and diff checks passed again. The remediation is
+  therefore completed; only the deferred signing and physical qualification
+  remain in the successor plan.
 
 - 2026-09-10: Task 5 claimed by Codex. Scope is limited to the launcher,
   `echoctl` bootstrap/install/status commands, build wiring, and operator
@@ -978,6 +1213,17 @@ completion evidence names which checks ran on real hardware.
   6 now names the required diagnostic-only behavior explicitly.
 
 ## Completion evidence
+
+- Task 8 disposable offer-gateway remediation — completed 2026-09-15:
+  `go test -race ./cmd/task8gateway/...`, `make test`, `make fmt-check`, `make
+  lint`, `git diff --check`, and direct `GOOS=windows GOARCH=amd64 go build`
+  for `.bin/task8gateway.exe` passed. The scoped command reached 53.2% total
+  package coverage in the fresh repository test run; all new exported surface
+  is command-local. `make build-windows` could not complete because its existing
+  `gateway.exe` output was locked by the operator-run gateway before the new
+  command target. No hardware was used. Fresh-context review found and all
+  fixes were applied for update-result correlation, artifact authentication,
+  reachable authority configuration, test coverage, and source modes.
 
 - Task 5 host verification — passed 2026-09-10: `go test -race
   ./cmd/echoctl/...`, `make build-device-ctl`, and `make check-portability`

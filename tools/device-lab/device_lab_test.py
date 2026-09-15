@@ -97,7 +97,8 @@ class CoreTests(unittest.TestCase):
 
     def test_capability_probe_is_observational(self) -> None:
         runner = object.__new__(device_lab.Runner)
-        runner.root_shell = lambda _script: device_lab.CommandResult(
+        scripts = []
+        runner.root_shell = lambda script: scripts.append(script) or device_lab.CommandResult(
             0,
             "busybox_path=/data/adb/magisk/busybox\nbusybox_version=BusyBox v1\nbusybox_cmp=available\nbusybox_sed=available\nbusybox_awk=available\nbusybox_sha256sum=available\nsystem_cmp=available\nsystem_sed=missing\nsystem_awk=missing\nsystem_sha256sum=available\nsystem_cmp_s=rejected\nbusybox_cmp_s=supported\n",
             "",
@@ -108,6 +109,8 @@ class CoreTests(unittest.TestCase):
         self.assertEqual("missing", capabilities["system_sed"])
         self.assertEqual("missing", capabilities["system_awk"])
         self.assertEqual("BusyBox v1", capabilities["busybox_version"])
+        self.assertIn("$BB printf", scripts[0])
+        self.assertIn("$BB rm -f", scripts[0])
 
     def test_stage_external_records_identity_without_installing(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

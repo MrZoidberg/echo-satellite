@@ -6,6 +6,7 @@
 # and applies bounded restart delay after an unexpected exit.
 
 AGENT=/data/local/bin/echod
+RUNTIME_CONFIG=/data/local/etc/echo-satellite/echod.ini
 CONTROLLED_RESTART=75
 delay=1
 
@@ -33,7 +34,7 @@ while :; do
   fi
 
   started=$(date +%s)
-  "$AGENT"
+  "$AGENT" --config "$RUNTIME_CONFIG"
   status=$?
   if [ "$status" -eq "$CONTROLLED_RESTART" ]; then
     delay=1

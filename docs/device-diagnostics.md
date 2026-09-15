@@ -19,6 +19,64 @@ If recovery is required, stop `echod`, then explicitly run `start
 ledcontroller` and `start mdnsd` only if they were running beforehand, or
 reboot.
 
+### 2026-09-14 device-lab session smoke
+
+Linux ADB (`/usr/bin/adb`) reached rooted qualified Dot `G090LF0964060EHP`.
+The resumed-safe diagnostic session `20260914T110511Z-a6f7fa0ac1` passed
+rooted preflight, capability capture, initial-state capture, token-owned
+staging, prepare, cleanup, and verify-clean. The installed
+`/data/local/bin/echod` SHA-256 was
+`41ed22dba37da3d583c257991e3b4d69460fc07265010f189594a4d38184f8c6` before
+and after the session. No launcher, agent, release metadata, configuration,
+credentials, wake assets, or partitions were changed. This is session-safety
+evidence only; it is not signed deployment, downgrade, or ADB-recovery proof.
+It also predates the mandatory first-ADB diagnostic preparation and is not
+accepted as compliant hardware evidence.
+
+After the required quoted root preparation stopped `ledcontroller`, set
+`boot_animation=0`, and read GPIO 444 back as `0`, session
+`20260914T110945Z-258d9a87f4` passed the same preflight/prepare/cleanup/
+verify-clean cycle. Runner cleanup verified the unchanged installed SHA-256;
+a separate direct root read after cleanup reported `boot_animation=0`, GPIO
+444=`0`, and `ledcontroller=stopped`. It likewise made no product-path change
+and is limited to compliant session safety evidence. Because no project agent
+was running and the pre-preparation state had both services running, the
+operator then explicitly started `ledcontroller` and `mdnsd`; both read back as
+`running` with the installed digest still unchanged.
+
+### 2026-09-15 Task 8 bootstrap and reboot remediation
+
+With Linux ADB `/usr/bin/adb` and qualified serial `G090LF0964060EHP`, the
+prepared device-lab session `20260914T122202Z-8ee8b4ed9d` was resumed. Its
+existing launcher had SHA-256
+`0d7d385324c9005de65ddfd25d64f39b30b5316f4360c3a9b907b945267da8c1` and did
+not pass the provisioned runtime configuration. A controlled staging probe
+showed this Magisk BusyBox v1.29.2 `cmp` returns success for distinct launcher
+files, both with and without `-s`. The initial SHA-256-based repair exposed a
+second FireOS limitation: system `printf` and `sed` are absent. Bootstrap now
+uses the qualified BusyBox `sha256sum`, `printf`, and `sed` throughout its
+idempotence and recognized-hook checks.
+
+After host race tests and a rebuilt host `echoctl`, bootstrap installed launcher
+SHA-256 `5adadfad2eb20bb647fb8f63c6f9e1762a410a02a81bc28adc6a46719f35df9c`,
+preserved the prior hook as
+`/sbin/.core/img/.core/service.d/echo-satellite.sh.echo-satellite-backup`, and
+removed its staged payloads. The existing mode-0600 root-owned
+`/data/local/etc/echo-satellite/echod.ini` was unchanged. After reboot, Android
+reported boot completion at 24.28 seconds; PID 339 ran
+`/data/local/bin/echod --config /data/local/etc/echo-satellite/echod.ini`, and
+`/proc/339/exe` resolved to `/data/local/bin/echod`. This proves replacement of
+an existing recognized launcher and reboot startup with the provisioned token/
+gateway configuration. It does not prove signed gateway deployment, pre-commit
+failure handling, signed downgrade, or signed ADB recovery.
+
+Because the session's original digest intentionally predates bootstrap, its
+cleanup payload correctly refused to remove diagnostics after detecting the
+digest change. Following token-ownership checks and a process scan that found
+no surviving diagnostic process, only the session-owned remote diagnostic root
+and matching stale host lock were removed. No FireOS partition, supervisor, or
+non-session diagnostic file was changed.
+
 ### 2026-09-07 qualified startup and Windows gateway check
 
 On rooted Dot `G090LF0964060EHP`, GPIO 444 was initially unexported. Exporting

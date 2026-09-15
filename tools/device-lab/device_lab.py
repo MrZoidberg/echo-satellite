@@ -312,20 +312,20 @@ class Runner:
 
         script = (
             "BB=/data/adb/magisk/busybox; "
-            "printf 'busybox_path=%s\\n' \"$BB\"; "
-            "printf 'busybox_version='; $BB 2>&1 | $BB head -n 1; "
+            "$BB printf 'busybox_path=%s\\n' \"$BB\"; "
+            "$BB printf 'busybox_version='; $BB 2>&1 | $BB head -n 1; "
             "for applet in cmp sed awk sha256sum; do "
-            "if $BB \"$applet\" --help >/dev/null 2>&1; then printf 'busybox_%s=available\\n' \"$applet\"; "
-            "else printf 'busybox_%s=missing\\n' \"$applet\"; fi; done; "
+            "if $BB \"$applet\" --help >/dev/null 2>&1; then $BB printf 'busybox_%s=available\\n' \"$applet\"; "
+            "else $BB printf 'busybox_%s=missing\\n' \"$applet\"; fi; done; "
             "for command in cmp sed awk sha256sum; do "
-            "if command -v \"$command\" >/dev/null 2>&1; then printf 'system_%s=available\\n' \"$command\"; "
-            "else printf 'system_%s=missing\\n' \"$command\"; fi; done; "
+            "if command -v \"$command\" >/dev/null 2>&1; then $BB printf 'system_%s=available\\n' \"$command\"; "
+            "else $BB printf 'system_%s=missing\\n' \"$command\"; fi; done; "
             "probe=/data/local/tmp/.echo-device-lab-cmp-$$; : > \"$probe\"; "
             "if command -v cmp >/dev/null 2>&1; then "
             "if cmp -s \"$probe\" \"$probe\" >/dev/null 2>&1; then echo system_cmp_s=supported; "
             "else echo system_cmp_s=rejected; fi; else echo system_cmp_s=missing; fi; "
             "if $BB cmp -s \"$probe\" \"$probe\" >/dev/null 2>&1; then echo busybox_cmp_s=supported; "
-            "else echo busybox_cmp_s=rejected; fi; rm -f \"$probe\""
+            "else echo busybox_cmp_s=rejected; fi; $BB rm -f \"$probe\""
         )
         result = self.root_shell(script)
         self._must_succeed(result, "probe command capabilities")
