@@ -17,6 +17,8 @@ import json
 import os
 import re
 import secrets
+import shutil
+import stat
 import subprocess
 import sys
 import time
@@ -28,15 +30,18 @@ from typing import Any, Sequence
 SCHEMA_VERSION = 1
 MAX_OUTPUT = 8_192
 SECRET_NAME = re.compile(r"(?:token|authorization|credential|private.?key|secret|signed.?url)", re.I)
+SECRET_ASSIGNMENT = re.compile(r"(?:token|authorization|credential|private.?key|secret|signed.?url)\s*[=:]", re.I)
 URL_QUERY = re.compile(r"https?://[^\s?]+\?[^\s]+", re.I)
 SAFE_REMOTE_ROOT = re.compile(r"^/data/local/tmp/echo-device-lab/[A-Za-z0-9_-]+$")
 SAFE_SERIAL = re.compile(r"^[A-Za-z0-9._:-]+$")
 SAFE_ARTIFACT_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+SAFE_PAYLOAD_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*\.sh$")
+SAFE_RESULT_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*\.(?:json|txt)$")
 SAFE_PROBE_PATH = re.compile(r"^/(?:data/adb/service\.d|sbin/\.core/img/\.core/service\.d)/[A-Za-z0-9._-]+$")
 DEFAULT_METADATA_PATH = "/data/local/etc/echo-satellite/installed-release.json"
 DEFAULT_HOOK_PATH = "/sbin/.core/img/.core/service.d/echo-satellite.sh"
 SESSION_PARENT = (Path.cwd() / ".bin" / "device-lab").resolve()
-COMMANDS = ("preflight", "prepare", "cleanup", "verify-clean", "render-evidence", "stage-external", "record-external-action")
+COMMANDS = ("preflight", "prepare", "cleanup", "verify-clean", "render-evidence", "stage-external", "record-external-action", "run-payload")
 
 
 class LabError(RuntimeError):
@@ -68,8 +73,11 @@ def assert_safe_evidence(value: Any, *, key: str = "") -> None:
 
     if SECRET_NAME.search(key):
         raise LabError(f"evidence contains prohibited field {key!r}")
-    if isinstance(value, str) and URL_QUERY.search(value):
-        raise LabError("evidence contains a URL query string")
+    if isinstance(value, str):
+        if URL_QUERY.search(value):
+            raise LabError("evidence contains a URL query string")
+        if SECRET_ASSIGNMENT.search(value):
+            raise LabError("evidence contains a prohibited secret-like value")
     if isinstance(value, dict):
         for name, item in value.items():
             assert_safe_evidence(item, key=str(name))
@@ -115,6 +123,66 @@ def atomic_state(path: Path, value: dict[str, Any]) -> None:
 
 def bounded(text: str) -> str:
     return text if len(text) <= MAX_OUTPUT else text[:MAX_OUTPUT] + "\n[output truncated]"
+
+
+def safe_failure(text: str) -> str:
+    """Never persist diagnostic output that might contain credentials."""
+
+    value = bounded(text)
+    return "[redacted diagnostic failure]" if SECRET_NAME.search(value) or URL_QUERY.search(value) else value
+
+
+def result_manifest(path: Path) -> list[str]:
+    """Return a strictly confined result allowlist from a small JSON manifest."""
+
+    try:
+        properties = path.stat(follow_symlinks=False)
+        if not stat.S_ISREG(properties.st_mode) or properties.st_size > 1_000_000:
+            raise LabError("payload results manifest is invalid")
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise LabError("payload results manifest is invalid") from error
+    if not isinstance(manifest, dict) or set(manifest) != {"artifacts"}:
+        raise LabError("payload results manifest is invalid")
+    artifacts = manifest["artifacts"]
+    if not isinstance(artifacts, list) or not all(isinstance(item, str) for item in artifacts):
+        raise LabError("payload results manifest is invalid")
+    if len(artifacts) != len(set(artifacts)) or not all(
+        SAFE_RESULT_NAME.fullmatch(item) and all(part not in {".", ".."} for part in Path(item).parts)
+        for item in artifacts
+    ):
+        raise LabError("payload results manifest is invalid")
+    return artifacts
+
+
+def validate_result_bundle(root: Path) -> dict[str, Any]:
+    """Validate a pulled payload result directory before retaining any evidence.
+
+    The manifest is an allowlist, not an inventory supplied by the payload. In
+    particular, no raw capture can become host evidence merely by being placed
+    beside an otherwise valid report.
+    """
+
+    try:
+        artifacts = result_manifest(root / "manifest.json")
+        files: set[str] = set()
+        for directory, names, filenames in os.walk(root, followlinks=False):
+            directory_path = Path(directory)
+            if directory_path.is_symlink() or any((directory_path / name).is_symlink() for name in names + filenames):
+                raise LabError("payload results contain undeclared, unsafe, or oversized artifacts")
+            for filename in filenames:
+                path = directory_path / filename
+                if not path.is_file() or path.stat().st_size > 1_000_000:
+                    raise LabError("payload results contain undeclared, unsafe, or oversized artifacts")
+                files.add(path.relative_to(root).as_posix())
+        declared = set(artifacts) | {"manifest.json"}
+        if files != declared:
+            raise LabError("payload results contain undeclared, unsafe, or oversized artifacts")
+        for name in declared:
+            assert_safe_evidence((root / name).read_text(encoding="utf-8"))
+        return {"artifacts": sorted(artifacts), "sha256": {name: digest(root / name) for name in sorted(artifacts)}}
+    except (OSError, UnicodeError) as error:
+        raise LabError("payload results contain unreadable artifacts") from error
 
 
 @dataclass
@@ -190,12 +258,27 @@ class Runner:
         return outcome
 
     def adb(self, arguments: Sequence[str]) -> CommandResult:
-        return self.host((self.args.adb, "-s", self.args.serial, *arguments))
+        values = list(arguments)
+        if values[:1] == ["push"] and len(values) > 1:
+            values[1] = self._adb_host_path(values[1])
+        if values[:1] == ["pull"] and len(values) > 2:
+            values[2] = self._adb_host_path(values[2])
+        return self.host((self.args.adb, "-s", self.args.serial, *values))
 
-    def run_remote_payload(self, payload: str) -> CommandResult:
+    def _adb_host_path(self, path: str) -> str:
+        """Translate WSL paths only when the selected controller is Windows ADB."""
+
+        if not self.args.adb.lower().endswith(".exe") or os.name == "nt":
+            return path
+        converted = subprocess.run(("wslpath", "-w", path), capture_output=True, check=False, text=True)
+        if converted.returncode or not converted.stdout.strip():
+            raise LabError("could not convert local path for Windows adb")
+        return converted.stdout.strip()
+
+    def run_remote_payload(self, payload: str, diagnostic: str = "") -> CommandResult:
         # The script pathname is the sole su -c argument: no host-built nested shell.
         path = f"{self.remote_root}/{payload}"
-        return self.root_shell(f"ROOT={self.remote_root}; export ROOT; . {path}")
+        return self.root_shell(f"ROOT={self.remote_root}; RESULTS=$ROOT/results; DIAGNOSTIC={diagnostic}; export ROOT RESULTS DIAGNOSTIC; mkdir -p $RESULTS; chmod 700 $RESULTS; . {path}")
 
     def root_shell(self, script: str) -> CommandResult:
         """Run a generated root script as the sole ``su -c`` target.
@@ -219,6 +302,9 @@ class Runner:
             pushed = self.adb(("push", str(local), remote))
             if pushed.returncode:
                 return pushed
+            prepared = self.adb(("shell", f"chmod 700 {remote}"))
+            if prepared.returncode:
+                return prepared
             result = self.adb(("shell", f"su -c '{remote}'"))
             marker = re.search(r"^__DEVICE_LAB_STATUS=(\d+)\s*$", result.stdout, re.M)
             if marker is None:
@@ -293,13 +379,16 @@ class Runner:
         def capture() -> dict[str, str]:
             result = self.root_shell("BB=/data/adb/magisk/busybox; $BB sha256sum /data/local/bin/echod 2>/dev/null; $BB cat /proc/sys/kernel/random/boot_id; for p in /proc/[0-9]*; do for fd in \"$p\"/fd/*; do target=$($BB readlink \"$fd\" 2>/dev/null || true); case \"$target\" in /dev/snd/*) $BB printf 'mic_holder=%s:%s\\n' \"${p#/proc/}\" \"$($BB readlink \"$p/exe\" 2>/dev/null || true)\";; esac; done; done; getprop init.svc.ledcontroller; getprop init.svc.mdnsd; $BB cat /sys/bus/i2c/devices/0-003f/boot_animation 2>/dev/null || true; $BB cat /sys/class/gpio/gpio444/value 2>/dev/null || true")
             self._must_succeed(result, "capture initial device state")
-            lines = result.stdout.splitlines()
+            lines = [line for line in result.stdout.splitlines() if line]
             agent_digest = lines[0].split(maxsplit=1)[0] if lines else ""
             if len(lines) < 2 or not re.fullmatch(r"[0-9a-f]{64}", agent_digest):
                 raise LabError("could not capture installed-agent digest")
             holders = [line.removeprefix("mic_holder=") for line in lines[2:] if line.startswith("mic_holder=")]
             if holders:
-                raise LabError(f"microphone is busy; coordinate with its owner ({', '.join(holders)})")
+                if getattr(getattr(self, "args", None), "command", "") == "run-payload" and getattr(getattr(self, "args", None), "stop_known_launcher", False):
+                    self.release_known_launcher(holders)
+                else:
+                    raise LabError(f"microphone is busy; coordinate with its owner ({', '.join(holders)})")
             state = {"installed_agent_digest": agent_digest, "boot_id": lines[1], "services_gpio": lines[2:]}
             self.state["initial_device_state"] = state
             self._save()
@@ -307,6 +396,34 @@ class Runner:
         self.phase("preflight-initial-state", capture)
         self.phase("preflight-command-capabilities", self.command_capabilities)
         self.phase("preflight-lock", lambda: {"ownership": "acquired"})
+
+    def release_known_launcher(self, holders: list[str]) -> None:
+        """Release only the measured launcher/agent pair after explicit opt-in."""
+
+        if len(holders) != 1:
+            raise LabError(f"microphone has multiple holders; refusing release ({', '.join(holders)})")
+        raw_pid, separator, executable = holders[0].partition(":")
+        if not separator or not raw_pid.isdecimal() or executable != "/data/local/bin/echod":
+            raise LabError(f"microphone holder is not the known agent; refusing release ({holders[0]})")
+        pid = int(raw_pid)
+        launcher = DEFAULT_HOOK_PATH
+
+        def release() -> dict[str, str]:
+            script = (
+                f"BB=/data/adb/magisk/busybox; pid={pid}; test \"$($BB readlink /proc/$pid/exe)\" = /data/local/bin/echod; "
+                "ppid=$($BB awk '/^PPid:/{print $2}' /proc/$pid/status); test \"$ppid\" -gt 1; "
+                "test \"$($BB readlink /proc/$ppid/exe)\" = /system/bin/sh; "
+                f"cmd=$($BB tr '\\000' ' ' < /proc/$ppid/cmdline); case \"$cmd\" in 'sh {launcher} '*) ;; *) exit 70;; esac; "
+                "kill -TERM $pid $ppid; tries=0; while { kill -0 $pid 2>/dev/null || kill -0 $ppid 2>/dev/null; } && test $tries -lt 50; do sleep 0.1; tries=$((tries+1)); done; "
+                "! kill -0 $pid 2>/dev/null && ! kill -0 $ppid 2>/dev/null; for p in /proc/[0-9]*; do for fd in $p/fd/*; do target=$($BB readlink $fd 2>/dev/null || true); case \"$target\" in /dev/snd/*) exit 71;; esac; done; done; $BB printf 'agent_pid=%s\\nlauncher_pid=%s\\nagent_executable=/data/local/bin/echod\\n' $pid $ppid"
+            )
+            output = self._must_succeed(self.root_shell(script), "release known launcher")["output"]
+            values = dict(line.split("=", 1) for line in output.splitlines() if "=" in line)
+            self.state["released_launcher"] = {"agent_pid": values.get("agent_pid", raw_pid), "agent_executable": values.get("agent_executable", ""), "launcher_pid": values.get("launcher_pid", ""), "path": launcher}
+            self._save()
+            return {"agent_pid": values.get("agent_pid", raw_pid), "agent_executable": values.get("agent_executable", ""), "launcher_pid": values.get("launcher_pid", ""), "launcher_path": launcher}
+
+        self.phase("release-known-launcher", release)
 
     def command_capabilities(self) -> dict[str, str]:
         """Capture FireOS command behavior as diagnostic evidence, never a gate."""
@@ -358,7 +475,7 @@ class Runner:
     @staticmethod
     def _must_succeed(result: CommandResult, label: str) -> dict[str, str]:
         if result.returncode:
-            raise LabError(f"{label} failed: {result.stderr or result.stdout}")
+            raise LabError(f"{label} failed: {safe_failure(result.stderr or result.stdout)}")
         return {"command": label, "output": result.stdout}
 
     def prepare(self) -> None:
@@ -418,6 +535,127 @@ class Runner:
         lifetime = "retained" if retained else "session"
         self.phase(f"stage-external-{artifact_digest[:12]}-{lifetime}", stage)
 
+    def stage_diagnostic(self) -> str:
+        """Stage a run-payload diagnostic under the session root and return its path."""
+
+        if not self.args.diagnostic:
+            return ""
+        artifact = Path(self.args.diagnostic)
+        if artifact.is_symlink() or not artifact.is_file() or not SAFE_ARTIFACT_NAME.fullmatch(artifact.name):
+            raise LabError("--diagnostic must name a regular file with a safe basename")
+        value = digest(artifact)
+        destination = f"{self.remote_root}/diagnostic/{value[:12]}-{artifact.name}"
+        temporary = f"/data/local/tmp/.echo-device-lab-diagnostic-{self.root.name}-{secrets.token_hex(5)}"
+        def stage() -> dict[str, Any]:
+            self._must_succeed(self.adb(("push", str(artifact), temporary)), "push diagnostic")
+            try:
+                self._must_succeed(self.root_shell(f"umask 077; mkdir -p {self.remote_root}/diagnostic; chown root:root {self.remote_root}/diagnostic; chmod 700 {self.remote_root}/diagnostic; mv {temporary} {destination}; chown root:root {destination}; chmod 700 {destination}; BB=/data/adb/magisk/busybox; $BB sha256sum {destination}; $BB stat -c %u:%a:%s {destination}"), "secure diagnostic")
+            except LabError:
+                self.root_shell(f"rm -f {temporary}")
+                raise
+            verified = [line for line in self._must_succeed(self.root_shell(f"BB=/data/adb/magisk/busybox; $BB sha256sum {destination}; $BB stat -c %u:%a:%s {destination}"), "verify diagnostic")["output"].splitlines() if line]
+            remote_digest = verified[0].split(maxsplit=1)[0] if verified else ""
+            remote_properties = verified[1] if len(verified) > 1 else ""
+            if len(verified) != 2 or remote_digest != value or remote_properties != f"0:700:{artifact.stat().st_size}":
+                self.root_shell(f"rm -f {destination}")
+                observed = remote_properties if re.fullmatch(r"[0-9]+:[0-7]+:[0-9]+", remote_properties) else "unavailable"
+                raise LabError(f"diagnostic changed or was corrupted during staging (observed_sha256={remote_digest[:64]}, observed_properties={observed})")
+            return {"basename": artifact.name, "sha256": value, "remote_path": destination}
+        self.phase(f"stage-diagnostic-{value[:12]}", stage)
+        return destination
+
+    def restart_known_launcher(self) -> None:
+        released = self.state.get("released_launcher")
+        if not isinstance(released, dict):
+            return
+        path = released.get("path")
+        if path != DEFAULT_HOOK_PATH:
+            raise LabError("refusing to restart an unrecognized launcher")
+        self.acquire_host_lock()
+        try:
+            def restart() -> dict[str, str]:
+                script = (
+                    f"BB=/data/adb/magisk/busybox; sh {path} >/dev/null 2>&1 & launcher_pid=$!; "
+                    "tries=0; agent_pid=; while test $tries -lt 50; do kill -0 $launcher_pid 2>/dev/null || exit 72; "
+                    "for p in /proc/[0-9]*; do candidate=${p#/proc/}; test \"$($BB readlink $p/exe 2>/dev/null || true)\" = /data/local/bin/echod || continue; "
+                    "parent=$($BB awk '/^PPid:/{print $2}' $p/status); test \"$parent\" = \"$launcher_pid\" && agent_pid=$candidate && break; done; "
+                    "test -n \"$agent_pid\" && break; sleep 0.1; tries=$((tries+1)); done; test -n \"$agent_pid\"; "
+                    "$BB printf 'launcher_pid=%s\\nagent_pid=%s\\nagent_executable=/data/local/bin/echod\\n' $launcher_pid $agent_pid"
+                )
+                output = self._must_succeed(self.root_shell(script), "restart known launcher")["output"]
+                values = dict(line.split("=", 1) for line in output.splitlines() if "=" in line)
+                return {"launcher_pid": values.get("launcher_pid", ""), "agent_pid": values.get("agent_pid", ""), "agent_executable": values.get("agent_executable", "")}
+            self.phase("restart-known-launcher", restart)
+        finally:
+            self.release_host_lock()
+
+    def run_payload(self) -> None:
+        """Run one allowlisted diagnostic and always attempt safe restoration."""
+
+        payload = self.args.payload
+        source = Path(__file__).with_name("payloads") / payload
+        if not SAFE_PAYLOAD_NAME.fullmatch(payload) or payload in {"prepare.sh", "cleanup.sh", "verify_clean.sh"} or not source.is_file():
+            raise LabError("--payload must name a non-reserved version-controlled payload")
+        primary: LabError | None = None
+        try:
+            self.prepare()
+            diagnostic = self.stage_diagnostic()
+            self.verify_remote_owner(payload)
+            self.phase(f"run-payload-{payload}", lambda: self._must_succeed(self.run_remote_payload(payload, diagnostic), f"run payload {payload}"))
+            self.collect_results()
+        except Exception as error:
+            primary = error if isinstance(error, LabError) else LabError(f"payload runner failed: {safe_failure(str(error))}")
+        cleanup_errors: list[str] = []
+        for action in (self.cleanup, self.verify_clean, self.restart_known_launcher):
+            try:
+                action()
+            except Exception as error:
+                cleanup_errors.append(str(error) if isinstance(error, LabError) else safe_failure(str(error)))
+        cleanup_error = LabError("; ".join(cleanup_errors)) if cleanup_errors else None
+        if primary and cleanup_error:
+            raise LabError(f"payload failed: {primary}; cleanup failed: {cleanup_error}")
+        if primary:
+            raise primary
+        if cleanup_error:
+            raise cleanup_error
+
+    def collect_results(self) -> None:
+        """Copy only manifest-declared JSON/text results out of the session root."""
+
+        remote_parent = f"/data/local/tmp/.echo-device-lab-results-{self.root.name}"
+        remote = f"{remote_parent}/results"
+        local = self.root / "results"
+        def collect() -> dict[str, Any]:
+            manifest_local = self.root / ".payload-manifest.json"
+            source = f"{self.remote_root}/results"
+            try:
+                self._must_succeed(self.root_shell(f"test -f {source}/manifest.json; test ! -L {source}/manifest.json; BB=/data/adb/magisk/busybox; test \"$($BB stat -c %s {source}/manifest.json)\" -le 1000000; rm -rf {remote_parent}; mkdir -p {remote_parent}; $BB cp {source}/manifest.json {remote_parent}/manifest.json; chown shell:shell {remote_parent}/manifest.json; chmod 755 {remote_parent}; chmod 644 {remote_parent}/manifest.json"), "export payload manifest")
+                self._must_succeed(self.adb(("pull", f"{remote_parent}/manifest.json", str(manifest_local))), "pull payload manifest")
+                artifacts = result_manifest(manifest_local)
+                allowed_files = [f"{source}/manifest.json", *(f"{source}/{name}" for name in artifacts)]
+                allowed_directories = {source, *(str(Path(source) / Path(name).parent) for name in artifacts)}
+                file_cases = "|".join(f"'{name}'" for name in allowed_files)
+                directory_cases = "|".join(f"'{name}'" for name in sorted(allowed_directories))
+                copies = " ".join(f"{source}/{name}" for name in ["manifest.json", *artifacts])
+                self._must_succeed(self.root_shell(
+                    f"BB=/data/adb/magisk/busybox; source={source}; remote={remote}; "
+                    "for entry in $($BB find \"$source\" -print); do case \"$entry\" in "
+                    f"{file_cases}) test -f \"$entry\" && test ! -L \"$entry\" && test \"$($BB stat -c %s \"$entry\")\" -le 1000000 || exit 75;; "
+                    f"{directory_cases}) test -d \"$entry\" && test ! -L \"$entry\" || exit 76;; *) exit 77;; esac; done; "
+                    f"rm -rf {remote_parent}; mkdir -p \"$remote\"; for entry in {copies}; do relative=${{entry#$source/}}; parent=${{relative%/*}}; test \"$parent\" = \"$relative\" || mkdir -p \"$remote/$parent\"; $BB cp \"$entry\" \"$remote/$relative\"; done; $BB chmod -R 755 {remote_parent}"
+                ), "validate and export payload results")
+                shutil.rmtree(local, ignore_errors=True)
+                self._must_succeed(self.adb(("pull", remote, str(self.root))), "pull payload results")
+                try:
+                    return validate_result_bundle(local)
+                except LabError:
+                    shutil.rmtree(local, ignore_errors=True)
+                    raise
+            finally:
+                manifest_local.unlink(missing_ok=True)
+                self.root_shell(f"rm -rf {remote_parent}")
+        self.phase("collect-payload-results", collect)
+
     def record_external_action(self) -> None:
         """Append read-only checkpoints around an action performed outside device-lab."""
 
@@ -460,32 +698,36 @@ class Runner:
 
     def cleanup(self) -> None:
         self.acquire_host_lock()
-        # Resume may follow a harness repair; refresh only the token-owned
-        # payloads before executing cleanup, never device/product files.
-        self.stage_payloads()
-        self.verify_remote_owner("cleanup.sh")
-        self.phase("cleanup", lambda: self._must_succeed(self.run_remote_payload("cleanup.sh"), "cleanup payload"))
-        self.release_host_lock()
-        self.state["cleaned"] = True
-        self._save()
+        try:
+            # Resume may follow a harness repair; refresh only the token-owned
+            # payloads before executing cleanup, never device/product files.
+            self.stage_payloads()
+            self.verify_remote_owner("cleanup.sh")
+            self.phase("cleanup", lambda: self._must_succeed(self.run_remote_payload("cleanup.sh"), "cleanup payload"))
+            self.state["cleaned"] = True
+            self._save()
+        finally:
+            self.release_host_lock()
 
     def verify_clean(self) -> None:
         self.acquire_host_lock()
-        initial = self.state.get("initial_device_state")
-        if not isinstance(initial, dict) or not isinstance(initial.get("installed_agent_digest"), str):
-            raise LabError("verify-clean requires captured initial device state")
-        current = self.installed_digest()
-        if current != initial["installed_agent_digest"]:
-            drift = {"expected_agent_sha256": initial["installed_agent_digest"], "observed_agent_sha256": current, "recovery": "No automatic recovery was attempted. Use ADB with echoctl update install and a known-good signed compatible artifact."}
-            self.evidence["checks"].append({"name": "installed-agent-digest", "status": "failed", "observation": drift, "provenance": "hardware"})
-            self._save()
-            raise LabError(f"installed-agent digest changed during diagnostics (expected {initial['installed_agent_digest']}, observed {current}); {drift['recovery']}")
-        absent = self.root_shell(f"test ! -e {self.remote_root}")
-        self._must_succeed(absent, "verify removal of token-owned diagnostic root")
-        residual = self.root_shell(f"BB=/data/adb/magisk/busybox; for p in /proc/[0-9]*/cmdline; do test -r \"$p\" || continue; text=$($BB tr '\\000' ' ' < \"$p\" 2>/dev/null || true); case \"$text\" in *'{self.remote_root}'*) exit 71;; esac; done")
-        self._must_succeed(residual, "verify no token-owned process remains")
-        self.phase("verify-clean", lambda: {"installed_agent_digest": current, "remote_root": "absent", "owned_processes": "absent"})
-        self.release_host_lock()
+        try:
+            initial = self.state.get("initial_device_state")
+            if not isinstance(initial, dict) or not isinstance(initial.get("installed_agent_digest"), str):
+                raise LabError("verify-clean requires captured initial device state")
+            current = self.installed_digest()
+            if current != initial["installed_agent_digest"]:
+                drift = {"expected_agent_sha256": initial["installed_agent_digest"], "observed_agent_sha256": current, "recovery": "No automatic recovery was attempted. Use ADB with echoctl update install and a known-good signed compatible artifact."}
+                self.evidence["checks"].append({"name": "installed-agent-digest", "status": "failed", "observation": drift, "provenance": "hardware"})
+                self._save()
+                raise LabError(f"installed-agent digest changed during diagnostics (expected {initial['installed_agent_digest']}, observed {current}); {drift['recovery']}")
+            absent = self.root_shell(f"test ! -e {self.remote_root}")
+            self._must_succeed(absent, "verify removal of token-owned diagnostic root")
+            residual = self.root_shell(f"BB=/data/adb/magisk/busybox; for p in /proc/[0-9]*/cmdline; do test -r \"$p\" || continue; text=$($BB tr '\\000' ' ' < \"$p\" 2>/dev/null || true); case \"$text\" in *'{self.remote_root}'*) exit 71;; esac; done")
+            self._must_succeed(residual, "verify no token-owned process remains")
+            self.phase("verify-clean", lambda: {"installed_agent_digest": current, "remote_root": "absent", "owned_processes": "absent"})
+        finally:
+            self.release_host_lock()
 
 
 def render(evidence: dict[str, Any]) -> str:
@@ -508,6 +750,9 @@ def parser() -> argparse.ArgumentParser:
     argument_parser.add_argument("--checkpoint", choices=("before", "after"))
     argument_parser.add_argument("--hook-path", default=DEFAULT_HOOK_PATH)
     argument_parser.add_argument("--metadata-path", default=DEFAULT_METADATA_PATH)
+    argument_parser.add_argument("--payload")
+    argument_parser.add_argument("--diagnostic")
+    argument_parser.add_argument("--stop-known-launcher", action="store_true")
     return argument_parser
 
 
@@ -525,6 +770,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     if args.command == "stage-external" and not args.artifact:
         parser().error("stage-external requires --artifact")
+    if args.command == "run-payload" and not args.payload:
+        parser().error("run-payload requires --payload")
     if args.command == "record-external-action" and (not args.action or not args.checkpoint):
         parser().error("record-external-action requires --action and --checkpoint")
     if args.command == "record-external-action" and not args.resume:

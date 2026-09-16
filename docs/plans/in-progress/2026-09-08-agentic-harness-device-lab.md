@@ -3,7 +3,7 @@
 **Status:** in-progress
 **Owner or active agent:** Codex (/root)
 **Created:** 2026-09-08
-**Updated:** 2026-09-10
+**Updated:** 2026-09-16
 **Started:** 2026-09-08
 **Completed:** not completed
 
@@ -533,6 +533,77 @@ Expected: deterministic tests cover lock guidance, diagnostic capability
 capture, staged-artifact ownership/cleanup/retention, read-only external-action
 journaling, and digest drift. No physical-device claim is made by these tests.
 
+### Task 10: General safe diagnostic payload runner
+
+**Status:** in progress
+
+**Purpose:** Run a version-controlled device diagnostic in one resumable,
+auditable command while preserving the existing device-lab ownership, raw-audio,
+and installed-agent safety boundaries.
+
+**Dependencies:** Task 9. The payload interface is additive; existing
+`preflight`, `prepare`, `cleanup`, `verify-clean`, and `stage-external`
+commands retain their current behavior.
+
+**Hardware required:** no for implementation and fake-ADB tests; one later
+qualified-Dot smoke run is required before claiming the workflow operational.
+
+**Files or components:** `tools/device-lab/device_lab.py`,
+`tools/device-lab/device_lab_test.py`, `tools/device-lab/payloads/`,
+`docs/device-diagnostics.md`, and this plan.
+
+**Concrete changes:**
+
+- Add `run-payload --payload <version-controlled-basename>` with explicit ADB
+  path and serial, optional `--diagnostic <regular-host-file>`, and explicit
+  `--stop-known-launcher`. Do not accept a remote path, inline script, shell
+  fragment, or arbitrary environment variable.
+- Validate the payload basename and stage it only beneath the token-owned
+  remote root. Stage the optional diagnostic as the existing verified regular
+  artifact, expose only its verified session-root path to the payload, and
+  never write `/data/local/bin/echod`.
+- Preserve ordinary `preflight`'s fail-closed busy-holder behavior. In
+  `run-payload` only, permit release when `--stop-known-launcher` is present
+  and the holder is exactly `/data/local/bin/echod`, its parent is the measured
+  `/system/bin/sh` Magisk launcher
+  `/sbin/.core/img/.core/service.d/echo-satellite.sh`, and both PIDs remain
+  stable through verification. Record only PID, executable, and launcher path;
+  reject every other holder without signalling it.
+- After releasing that verified pair, run the normal prepare flow; run the
+  selected payload through the existing root-script mechanism with its
+  session-root and staged diagnostic paths supplied by the runner. Record each
+  lifecycle phase and payload exit result as sanitized hardware evidence.
+- Define a payload result contract: derived artifacts must be written below a
+  session `results/` directory and declared by a small JSON manifest. Accept
+  only regular JSON or text artifacts within a bounded size; reject WAV, PCM,
+  symlinks, paths escaping the session root, secrets, and undeclared artifacts.
+  Copy accepted artifacts to the host session directory with their SHA-256
+  values in evidence before cleanup.
+- Use a `finally`-equivalent path so payload failure, collection rejection, or
+  ADB failure still attempts cleanup, installed-digest verification, and,
+  only when this command stopped the verified launcher, restarts that launcher.
+  Report a cleanup or restart failure separately and never conceal the primary
+  payload failure.
+
+**Expected outcome:** A single command performs the safe lifecycle previously
+spread across manual ADB and runner invocations, without granting arbitrary
+root execution, retaining raw audio, or crossing the update boundary.
+
+**Verification:**
+
+```sh
+uv run --no-project --script tools/device-lab/device_lab_test.py
+uv run --no-project --script .codex/hooks/plan_lint.py docs/plans/in-progress/2026-09-08-agentic-harness-device-lab.md
+git diff --check
+```
+
+Expected: fake-ADB tests prove payload allowlisting, known-launcher-only
+release, no signal without explicit opt-in, artifact staging identity,
+result-manifest confinement/raw-audio rejection, cleanup/restart after every
+failure point, digest-drift handling, and evidence redaction. A later real-Dot
+smoke run records the exact command, payload identity, cleanup, launcher
+restart, and unchanged installed digest.
+
 ## Cross-task risks
 
 - **Automation increases blast radius:** strict explicit targets, safe path
@@ -686,6 +757,22 @@ journaling, and digest drift. No physical-device claim is made by these tests.
   `41ed22dba37da3d583c257991e3b4d69460fc07265010f189594a4d38184f8c6`.
   This was manual interrupted-session disposal, not normal cleanup or Task 8
   acceptance evidence.
+- 2026-09-16: Task 10 implementation started. A fresh-context review reported
+  nine findings; all are fixed in this task: manifest-confined result export
+  with hashes and raw/undeclared/symlink rejection; independently attempted
+  cleanup, verification, and conditional launcher restoration; verified
+  diagnostic staging and temporary disposal; secret-safe failure evidence;
+  rescan and identity journaling for the explicitly released known launcher;
+  restart polling for both launcher and `echod`; and payload enforcement of
+  the 0.1% clipping and 80 ms cadence limits. Host-only regression coverage
+  now exercises these boundaries. No Dot action occurred, so the required
+  qualified-Dot smoke run remains open.
+- 2026-09-16: The remediation re-review found transient result-export and
+  malformed-artifact gaps plus a schedule extension mismatch. The runner now
+  validates a bounded manifest before any result export, validates the remote
+  tree and selectively exports only its declared regular files, converts all
+  collection failures to restoration-safe errors, and uses `schedule.txt`
+  consistently. A final read-only review found no remaining finding.
 
 ## Completion evidence
 
@@ -708,5 +795,10 @@ journaling, and digest drift. No physical-device claim is made by these tests.
   (15 tests), active-plan lint, `git diff --check`, and `make verify` — passed.
   No live Dot action was performed; Task 9’s future hardware evidence remains
   owned by the plan’s blocked real-device work.
+- 2026-09-16: `sh -n tools/device-lab/payloads/task10_front_550mm.sh`, `uv run
+  --no-project --script tools/device-lab/device_lab_test.py` (24 tests), and
+  `git diff --check` — passed. This is host-only evidence; Task 10 remains in
+  progress pending the qualified-Dot smoke run and repository-wide final
+  verification after review remediation.
 - Remaining: Task 7 and Task 6 real-device evidence, fresh review/triage, and
   final repository verification.

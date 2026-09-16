@@ -67,6 +67,46 @@ class CoreTests(unittest.TestCase):
             device_lab.atomic_state(path, {"ownership_token": "private"})
             self.assertEqual({"ownership_token": "private"}, json.loads(path.read_text(encoding="utf-8")))
 
+    def test_safe_failure_redacts_sensitive_diagnostic_output(self) -> None:
+        self.assertEqual("ordinary failure", device_lab.safe_failure("ordinary failure"))
+        self.assertEqual("[redacted diagnostic failure]", device_lab.safe_failure("token=not-for-evidence"))
+        self.assertEqual("[redacted diagnostic failure]", device_lab.safe_failure("https://example.invalid/x?signed=value"))
+
+    def test_result_bundle_requires_a_confined_manifest_and_no_raw_audio(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "report.json").write_text('{"score": 1}\n', encoding="utf-8")
+            (root / "manifest.json").write_text('{"artifacts":["report.json"]}\n', encoding="utf-8")
+            result = device_lab.validate_result_bundle(root)
+            self.assertEqual(["report.json"], result["artifacts"])
+            (root / "capture.wav").write_bytes(b"raw")
+            with self.assertRaisesRegex(device_lab.LabError, "undeclared"):
+                device_lab.validate_result_bundle(root)
+            (root / "capture.wav").unlink()
+            (root / "manifest.json").write_text('{"artifacts":["../report.json"]}\n', encoding="utf-8")
+            with self.assertRaisesRegex(device_lab.LabError, "manifest"):
+                device_lab.validate_result_bundle(root)
+
+    def test_result_bundle_rejects_links_and_sensitive_content(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "report.txt").write_text("token=value\n", encoding="utf-8")
+            (root / "manifest.json").write_text('{"artifacts":["report.txt"]}\n', encoding="utf-8")
+            with self.assertRaisesRegex(device_lab.LabError, "prohibited"):
+                device_lab.validate_result_bundle(root)
+            (root / "report.txt").write_text("okay\n", encoding="utf-8")
+            (root / "linked.txt").symlink_to(root / "report.txt")
+            with self.assertRaisesRegex(device_lab.LabError, "unsafe"):
+                device_lab.validate_result_bundle(root)
+
+    def test_result_bundle_rejects_binary_declared_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "report.txt").write_bytes(b"\xff\x00")
+            (root / "manifest.json").write_text('{"artifacts":["report.txt"]}\n', encoding="utf-8")
+            with self.assertRaisesRegex(device_lab.LabError, "unreadable"):
+                device_lab.validate_result_bundle(root)
+
     def test_root_shell_stages_a_single_su_target(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             runner = object.__new__(device_lab.Runner)
@@ -75,8 +115,30 @@ class CoreTests(unittest.TestCase):
             runner.adb = lambda arguments: captured.append(arguments) or device_lab.CommandResult(0, "", "")
             runner.root_shell("printf 'owned token' > /safe/path")
             self.assertEqual("push", captured[0][0])
-            self.assertEqual("shell", captured[1][0])
-            self.assertTrue(captured[1][1].startswith("su -c '/data/local/tmp/.echo-device-lab-root-"))
+            self.assertEqual(("shell",), captured[1][:1])
+            self.assertTrue(captured[1][1].startswith("chmod 700 /data/local/tmp/.echo-device-lab-root-"))
+            self.assertEqual("shell", captured[2][0])
+            self.assertTrue(captured[2][1].startswith("su -c '/data/local/tmp/.echo-device-lab-root-"))
+
+    def test_windows_adb_translates_only_local_push_and_pull_paths(self) -> None:
+        runner = object.__new__(device_lab.Runner)
+        runner.args = argparse.Namespace(adb="C:/platform-tools/adb.exe", serial="dot")
+        captured = []
+        runner.host = lambda arguments: captured.append(arguments) or device_lab.CommandResult(0, "", "")
+        original_os_name = device_lab.os.name
+        device_lab.os.name = "posix"
+        original_run = device_lab.subprocess.run
+        device_lab.subprocess.run = lambda *_args, **_kwargs: argparse.Namespace(returncode=0, stdout="C:\\session\\payload.sh\n")
+        try:
+            runner.adb(("push", "/mnt/c/session/payload.sh", "/data/local/tmp/payload.sh"))
+            runner.adb(("pull", "/data/local/tmp/result.json", "/mnt/c/session/result.json"))
+            runner.adb(("shell", "id"))
+        finally:
+            device_lab.os.name = original_os_name
+            device_lab.subprocess.run = original_run
+        self.assertEqual("C:\\session\\payload.sh", captured[0][4])
+        self.assertEqual("C:\\session\\payload.sh", captured[1][5])
+        self.assertEqual("id", captured[2][4])
 
     def test_lock_conflict_prints_canonical_owned_resume(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -228,6 +290,49 @@ class CoreTests(unittest.TestCase):
             device_lab.main(["stage-external", "--adb", "adb", "--serial", "dot"])
         with self.assertRaises(SystemExit):
             device_lab.main(["record-external-action", "--adb", "adb", "--serial", "dot"])
+        with self.assertRaises(SystemExit):
+            device_lab.main(["run-payload", "--adb", "adb", "--serial", "dot"])
+
+    def test_run_payload_rejects_unversioned_or_reserved_payloads(self) -> None:
+        runner = object.__new__(device_lab.Runner)
+        runner.args = argparse.Namespace(payload="../unsafe.sh")
+        with self.assertRaisesRegex(device_lab.LabError, "version-controlled"):
+            runner.run_payload()
+
+    def test_run_payload_always_cleans_up_after_payload_failure(self) -> None:
+        runner = object.__new__(device_lab.Runner)
+        runner.args = argparse.Namespace(payload="task10_front_550mm.sh", diagnostic=None)
+        calls = []
+        runner.prepare = lambda: calls.append("prepare")
+        runner.stage_diagnostic = lambda: ""
+        runner.verify_remote_owner = lambda payload: calls.append("owner:" + payload)
+        runner.run_remote_payload = lambda _payload, _diagnostic: device_lab.CommandResult(1, "", "payload failure")
+        runner.cleanup = lambda: calls.append("cleanup")
+        runner.verify_clean = lambda: calls.append("verify-clean")
+        runner.restart_known_launcher = lambda: calls.append("restart")
+        runner.phase = lambda _name, action: action()
+        with self.assertRaisesRegex(device_lab.LabError, "payload failure"):
+            runner.run_payload()
+        self.assertEqual(["prepare", "owner:task10_front_550mm.sh", "cleanup", "verify-clean", "restart"], calls)
+        runner.args.payload = "prepare.sh"
+        with self.assertRaisesRegex(device_lab.LabError, "version-controlled"):
+            runner.run_payload()
+
+    def test_run_payload_attempts_every_restoration_step_after_cleanup_failure(self) -> None:
+        runner = object.__new__(device_lab.Runner)
+        runner.args = argparse.Namespace(payload="task10_front_550mm.sh", diagnostic=None)
+        calls = []
+        runner.prepare = lambda: calls.append("prepare")
+        runner.stage_diagnostic = lambda: ""
+        runner.verify_remote_owner = lambda _payload: None
+        runner.run_remote_payload = lambda _payload, _diagnostic: device_lab.CommandResult(1, "", "payload failure")
+        runner.cleanup = lambda: (_ for _ in ()).throw(device_lab.LabError("cleanup failure"))
+        runner.verify_clean = lambda: calls.append("verify-clean")
+        runner.restart_known_launcher = lambda: calls.append("restart")
+        runner.phase = lambda _name, action: action()
+        with self.assertRaisesRegex(device_lab.LabError, "cleanup failed"):
+            runner.run_payload()
+        self.assertEqual(["prepare", "verify-clean", "restart"], calls)
 
     def test_task10_front_550mm_payload_has_ordered_health_bound_captures(self) -> None:
         payload = Path(__file__).with_name("payloads") / "task10_front_550mm.sh"
@@ -245,6 +350,21 @@ class CoreTests(unittest.TestCase):
         self.assertIn("mic scorecard --input \"$OUT/silence.wav\"", text)
         self.assertIn("'^  \"xruns\": 0,$' \"$OUT/silence.health.json\"", text)
         self.assertIn("'^  \"dropped_frames\": 0,$' \"$OUT/silence.health.json\"", text)
+        self.assertIn('value + 0 > 0.001', text)
+        self.assertIn('value + 0 > 80000000', text)
+        self.assertIn('"$RESULTS/manifest.json"', text)
+        self.assertIn('SCHEDULE="$OUT/schedule.txt"', text)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / "task10-front-550mm"
+            output.mkdir()
+            (output / "schedule.txt").write_text("schedule\n", encoding="utf-8")
+            for name in ("silence.scorecard.json", "normal-speech.comparison.json", "quiet-speech.comparison.json", "loud-speech.comparison.json"):
+                (output / name).write_text("{}\n", encoding="utf-8")
+            start = text.index('{"artifacts":')
+            end = text.index("}' >", start) + 1
+            (root / "manifest.json").write_text(text[start:end] + "\n", encoding="utf-8")
+            self.assertEqual(5, len(device_lab.validate_result_bundle(root)["artifacts"]))
         for condition in ("normal-speech", "quiet-speech", "loud-speech"):
             self.assertIn(f'compare {condition} room-noise-{condition.removesuffix("-speech")} {condition}', text)
         ordered = (

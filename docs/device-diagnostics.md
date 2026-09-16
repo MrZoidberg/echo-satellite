@@ -1245,14 +1245,17 @@ before publishing `dot-gen2-qualified-v1`.
 ### Front/550 mm combined-capture procedure
 
 `tools/device-lab/payloads/task10_front_550mm.sh` prepares the first compact
-Task 10 batch without changing the agent or adding a production command. In a
-future prepared device-lab session, after the approved `echoctl` diagnostic is
-staged at `/data/local/tmp/echoctl`, the operator invokes the token-owned
-payload with its remote pathname as the sole `su -c` argument:
+Task 10 batch without changing the agent or adding a production command. The
+general safe runner stages the approved host `echoctl` diagnostic, supplies
+only its verified session-root pathname to the payload, exports only a
+manifest-declared derived result set, and always attempts cleanup and digest
+verification. From the host, run:
 
 ```sh
-"$ADB" -s "$DEVICE_SERIAL" shell \
-  "su -c '/data/local/tmp/echo-device-lab/<session-id>/task10_front_550mm.sh'"
+uv run --no-project --script tools/device-lab/device_lab.py run-payload \
+  --adb "$ADB" --serial "$DEVICE_SERIAL" \
+  --payload task10_front_550mm.sh --diagnostic .bin/linux_arm64/echoctl \
+  --stop-known-launcher
 ```
 
 It captures ten seconds each of silence, matched room-noise plus
