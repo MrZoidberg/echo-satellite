@@ -87,6 +87,13 @@ func TestParseArgs_Commands(t *testing.T) {
 		assert.Equal(t, 1000, o.Mic.Scorecard.DistanceMM)
 		assert.True(t, o.Mic.Scorecard.RetainInput)
 	})
+	t.Run("mic compare", func(t *testing.T) {
+		o, command, err := parseArgs([]string{"mic", "compare", "--input=speech.wav", "--noise=noise.wav", "--capture-health=speech.json", "--noise-capture-health=noise.json", "--position=front", "--distance-mm=1000", "--condition=normal-speech", "--out=comparison.json"})
+		require.NoError(t, err)
+		assert.Equal(t, "mic compare", command)
+		assert.Equal(t, "speech.wav", o.Mic.Compare.Input)
+		assert.Equal(t, "noise.wav", o.Mic.Compare.Noise)
+	})
 
 	t.Run("speaker test", func(t *testing.T) {
 		o, command, err := parseArgs([]string{"speaker", "test", "--to-file=spk.wav", "--resampler=linear"})

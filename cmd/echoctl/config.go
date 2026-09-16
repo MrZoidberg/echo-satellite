@@ -73,6 +73,7 @@ type updateStatusCommand struct {
 type micCommand struct {
 	Record    micRecordCommand    `command:"record" description:"record microphone PCM to WAV"`
 	Scorecard micScorecardCommand `command:"scorecard" description:"write a seven-microphone capture scorecard as JSON"`
+	Compare   micCompareCommand   `command:"compare" description:"compare bounded conditioning candidates from simultaneous captures"`
 }
 
 type micRecordCommand struct {
@@ -95,6 +96,18 @@ type micScorecardCommand struct {
 	DistanceMM  int    `long:"distance-mm" required:"true" description:"recorded source distance in millimeters"`
 	Condition   string `long:"condition" required:"true" choice:"silence" choice:"room-noise" choice:"normal-speech" choice:"quiet-speech" choice:"loud-speech" description:"controlled capture condition"`
 	RetainInput bool   `long:"retain-input" description:"retain --input after scoring; raw audio is otherwise deleted"`
+}
+
+type micCompareCommand struct {
+	Input       string `long:"input" required:"true" description:"seven-channel simultaneous speech WAV capture"`
+	Noise       string `long:"noise" required:"true" description:"matched seven-channel room-noise WAV capture"`
+	Health      string `long:"capture-health" required:"true" description:"capture-health JSON matching --input"`
+	NoiseHealth string `long:"noise-capture-health" required:"true" description:"capture-health JSON matching --noise"`
+	Position    string `long:"position" required:"true" description:"recorded source position, for example front or off-axis"`
+	DistanceMM  int    `long:"distance-mm" required:"true" description:"recorded source distance in millimeters"`
+	Condition   string `long:"condition" required:"true" choice:"normal-speech" choice:"quiet-speech" choice:"loud-speech" description:"controlled speech condition"`
+	Out         string `long:"out" required:"true" description:"output conditioning comparison JSON path"`
+	RetainInput bool   `long:"retain-input" description:"retain --input and --noise after comparison; raw audio is otherwise deleted"`
 }
 
 type speakerCommand struct {

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -116,6 +117,64 @@ func TestMicScorecard_SilenceIsJSONSafeAndHealthIsUnavailableWithoutSidecar(t *t
 	assert.Nil(t, scorecard.Channels[0].RMSDBFS)
 }
 
+func TestMicCompare_WritesCandidateMetricsAndDeletesCaptures(t *testing.T) {
+	directory := t.TempDir()
+	input := filepath.Join(directory, "speech.wav")
+	noise := filepath.Join(directory, "noise.wav")
+	writeScorecardWAV(t, input, 800)
+	writeScorecardWAV(t, noise, 10)
+	out := filepath.Join(directory, "comparison.json")
+	health := writeComparisonHealth(t, input)
+	noiseHealth := writeComparisonHealth(t, noise)
+
+	var report bytes.Buffer
+	require.NoError(t, micCompare(&report, micCompareCommand{Input: input, Noise: noise, Health: health, NoiseHealth: noiseHealth, Position: "front", DistanceMM: 1000, Condition: "normal-speech", Out: out}))
+	assert.Contains(t, report.String(), "3 candidates")
+	_, err := os.Stat(input)
+	require.ErrorIs(t, err, os.ErrNotExist)
+	_, err = os.Stat(noise)
+	require.ErrorIs(t, err, os.ErrNotExist)
+
+	data, err := os.ReadFile(out) //nolint:gosec // Test reads its private comparison output.
+	require.NoError(t, err)
+	var comparison micComparisonReport
+	require.NoError(t, json.Unmarshal(data, &comparison))
+	assert.Equal(t, "deleted", comparison.InputDisposition)
+	assert.Equal(t, "front", comparison.Position)
+	assert.Equal(t, 1000, comparison.DistanceMM)
+	assert.Zero(t, comparison.InputHealth.Xruns)
+	require.Len(t, comparison.Candidates, 3)
+	for _, candidate := range comparison.Candidates {
+		assert.NotEmpty(t, candidate.Profile)
+		assert.LessOrEqual(t, candidate.AppliedGainDB, audio.MaxConditioningGainDB)
+		assert.Greater(t, candidate.ProcessingDuration, time.Duration(0))
+	}
+}
+
+func TestConditionSamples_UsesEightyMillisecondBlocks(t *testing.T) {
+	conditioner, err := audio.NewConditioning(audio.CandidateUnsteeredMix)
+	require.NoError(t, err)
+	frames := 2*audio.ConditioningCadenceSamples + 1
+	samples := make([]int16, frames*audio.PhysicalMicrophones)
+	for i := range samples {
+		samples[i] = 1_000
+	}
+	reduced := conditionSamples(conditioner, samples)
+	assert.Len(t, reduced, frames)
+	metrics := conditioner.Metrics([]int16{100, -100})
+	assert.Positive(t, metrics.MaxBlockDuration)
+	assert.Less(t, metrics.MaxBlockDuration, 80*time.Millisecond)
+}
+
+func writeComparisonHealth(t *testing.T, path string) string {
+	t.Helper()
+	digest, err := fileSHA256(path)
+	require.NoError(t, err)
+	health := filepath.Join(t.TempDir(), filepath.Base(path)+".health.json")
+	require.NoError(t, writeJSONFile(health, micCaptureHealth{SHA256: digest, SampleRate: audio.CanonicalSampleRate, Channels: []int{0, 1, 2, 3, 4, 5, 6}, Frames: 512}))
+	return health
+}
+
 func TestStrongestCorrelation_ReportsKnownDelayAndStablePeriodicTie(t *testing.T) {
 	const frames = 600
 	samples := make([]int16, frames*2)
@@ -155,6 +214,21 @@ func TestMicScorecard_RejectsNonPhysicalChannelCapture(t *testing.T) {
 
 	err = micScorecard(io.Discard, micScorecardCommand{Input: input, Out: filepath.Join(t.TempDir(), "scorecard.json"), Position: "front", DistanceMM: 1000, Condition: "silence"})
 	require.ErrorContains(t, err, "exactly seven physical microphones")
+}
+
+func TestMicScorecard_RejectsNonCanonicalCapture(t *testing.T) {
+	input := filepath.Join(t.TempDir(), "noncanonical.wav")
+	file, err := os.Create(input) //nolint:gosec // Test creates a fixture in its private temporary directory.
+	require.NoError(t, err)
+	wav, err := audio.NewWAVWriter(file, audio.Format{SampleRate: 8_000, Channels: 7, Layout: audio.LayoutS16LE})
+	require.NoError(t, err)
+	_, err = wav.Write(make([]int16, 7*10))
+	require.NoError(t, err)
+	require.NoError(t, wav.Close())
+	require.NoError(t, file.Close())
+
+	err = micScorecard(io.Discard, micScorecardCommand{Input: input, Out: filepath.Join(t.TempDir(), "scorecard.json"), Position: "front", DistanceMM: 1000, Condition: "silence"})
+	require.ErrorContains(t, err, "must be canonical")
 }
 
 func writeScorecardWAV(t *testing.T, path string, amplitude int16) {

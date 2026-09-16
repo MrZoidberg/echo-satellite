@@ -802,7 +802,47 @@ with an accurate raw-audio disposition. Real-device acoustics remain Task 10.
 
 ### Task 10: Implement and select the conditioning profile
 
-**Status:** not started
+**Status:** in progress
+
+#### Task 10 front/550 mm combined-capture design
+
+**Status:** completed 2026-09-16
+
+**Purpose:** Reduce operator interaction for the first real-Dot acoustic matrix
+batch without weakening the per-cell capture-health, matched-noise, or
+raw-audio-retention rules.
+
+**Scope and ownership:** A new token-owned `tools/device-lab/payloads/`
+diagnostic payload and its Python runner tests. It is not an `echoctl` command,
+does not modify `/data/local/bin/echod`, and must not be run until the operator
+starts a separately requested hardware session.
+
+**Design:** At recorded front distance **550 mm**, the payload writes seven
+sequential, simultaneous seven-microphone WAV captures with a `--health-out`
+sidecar for each: deliberate silence; room noise then normal speech; a fresh
+room-noise baseline then quiet speech; and a fresh room-noise baseline then
+loud speech. Each window is ten seconds. A three-second `thinking` (blue comet)
+cue separates windows; `listening` (cyan-green) begins one second before and
+remains active through each ten-second speech window.
+The payload records its capture schedule and echoctl reports in the session
+root. It then writes a silence scorecard and three `mic compare` reports,
+passing the corresponding health sidecars; the silence sidecar is also checked
+for zero XRuns and dropped frames. The comparison command deletes raw
+paired WAVs after output publication; the payload scorecards and removes the
+standalone silence WAV after its scorecard. It fails immediately on capture,
+health, scorecard, or comparison error and leaves the device-lab cleanup path
+available.
+
+**Alternatives rejected:** A manual command sheet can mistime the operator
+windows and gives weaker provenance. A new `echoctl mic sequence` production
+command would add unsupported diagnostic surface for one qualification batch.
+
+**Verification before hardware:** Unit-test payload staging and its exact
+argument/order contract; run the relevant device-lab tests. Hardware execution
+later requires the standard preflight, prepare, cleanup, and verify-clean
+sequence, then operator observation of every cue and recording of the session
+evidence. This subtask does not select `dot-gen2-qualified-v1`; it only
+prepares the first front/550 mm evidence batch.
 
 **Purpose:** Qualify and select a bounded, observable profile among channel 0,
 an unsteered mix, and the EchoLocal-derived steerable beamformer.
@@ -1130,7 +1170,7 @@ completion evidence names which checks ran on real hardware.
 
 - 2026-09-15: Qualified-Dot session `20260915T155819Z-fdb383acf2` passed
   preflight, prepare, cleanup, and verify-clean with `/usr/bin/adb` and serial
-  `G090LF0964060EHP`. A front, 55 mm, nominal normal-speech scorecard verified
+  `G090LF0964060EHP`. A front, 550 mm, nominal normal-speech scorecard verified
   a 16 kHz S16_LE, seven-channel, 160,000-frame capture with zero XRuns and
   dropped frames; raw WAVs were deleted and only the derived JSON was retained
   in the token-owned session evidence. It is not speech-qualification evidence:
@@ -1140,7 +1180,7 @@ completion evidence names which checks ran on real hardware.
   speech capture before using any acoustic metric. Task 9 remains blocked on
   that matrix.
 
-- 2026-09-15: Repeated the front, 55 mm normal-speech cell in qualified-Dot
+- 2026-09-15: Repeated the front, 550 mm normal-speech cell in qualified-Dot
   session `20260915T160243Z-f0237983d4`, using the semantic cyan-green
   `listening` ring during the human speech window. The local scorecard verified
   16 kHz S16_LE, seven channels, 160,000 frames, zero XRuns/dropped frames,
@@ -1152,7 +1192,7 @@ completion evidence names which checks ran on real hardware.
   not Task 9's required silence/noise/quiet/loud and off-axis/far-field matrix.
 
 - 2026-09-15: Qualified-Dot device-lab session `20260915T160603Z-314c638f2b`
-  completed the front, 55 mm deliberate-silence cell with the semantic
+  completed the front, 550 mm deliberate-silence cell with the semantic
   cyan-green `listening` ring active. The local verified scorecard recorded a
   16 kHz S16_LE seven-channel, 160,000-frame capture with zero XRuns, dropped
   frames, and clipping; per-channel RMS was -63.84 to -60.07 dBFS. A
@@ -1163,7 +1203,7 @@ completion evidence names which checks ran on real hardware.
   unchanged. Quiet and loud speech plus off-axis/far-field matrix cells remain.
 
 - 2026-09-15: Qualified-Dot device-lab session `20260915T161003Z-09519438e1`
-  completed the front, 55 mm continuous-quiet-speech cell. A matched room-noise
+  completed the front, 550 mm continuous-quiet-speech cell. A matched room-noise
   capture immediately preceded the ten-second speech capture, whose semantic
   cyan-green `listening` ring was active. The verified 16 kHz S16_LE,
   seven-channel, 160,000-frame scorecard recorded zero XRuns, dropped frames,
@@ -1175,7 +1215,7 @@ completion evidence names which checks ran on real hardware.
   remain.
 
 - 2026-09-15: Qualified-Dot device-lab session `20260915T161447Z-3e028ea061`
-  completed the front, 55 mm loud-speech cell. A matched room-noise capture
+  completed the front, 550 mm loud-speech cell. A matched room-noise capture
   immediately preceded the ten-second speech capture, whose semantic
   cyan-green `listening` ring was active. The verified 16 kHz S16_LE,
   seven-channel, 160,000-frame scorecard recorded zero XRuns, dropped frames,
@@ -1183,12 +1223,12 @@ completion evidence names which checks ran on real hardware.
   The raw loud-speech WAV was confirmed deleted after scoring and cleanup
   removed the temporary noise WAV; only derived JSON metrics remain in
   token-owned host evidence. Preflight, prepare, cleanup, and verify-clean
-  passed with the installed-agent digest unchanged. The front 55 mm silence,
+  passed with the installed-agent digest unchanged. The front 550 mm silence,
   normal, quiet, and loud cells are now complete; off-axis and far-field cells
   remain.
 
 - 2026-09-15: Qualified-Dot device-lab session `20260915T161902Z-8e723ac1dc`
-  completed the off-axis, 55 mm normal-speech cell. A matched room-noise
+  completed the off-axis, 550 mm normal-speech cell. A matched room-noise
   capture immediately preceded the ten-second speech capture, whose semantic
   cyan-green `listening` ring was active. The verified 16 kHz S16_LE,
   seven-channel, 160,000-frame scorecard recorded zero XRuns, dropped frames,
@@ -1490,6 +1530,59 @@ completion evidence names which checks ran on real hardware.
 
 Remaining plan tasks require later implementation and hardware sessions, so the
 plan remains `in-progress`.
+
+- 2026-09-16: Ran the prepared front/550 mm Task 10 batch in qualified-Dot
+  device-lab session `20260916T145631Z-0233ef1d7f`. All seven capture windows
+  completed (silence; fresh noise plus normal, quiet, and loud speech), with
+  canonical 16 kHz S16_LE seven-channel 160,000-frame sidecars, zero XRuns and
+  dropped frames, zero clipping, and a worst 4.77 ms processing block. Minimum
+  candidate speech/noise separations were 6.09 dB channel-0, 6.74 dB
+  unsteered-mix, and 6.91 dB delay-and-sum; because all are within 1 dB at this
+  one position, this is not a selection result. Raw audio was deleted by the
+  scorecard/comparison operations. Cleanup and `verify-clean` passed with the
+  installed-agent digest unchanged; the launcher was restarted. Before this
+  successful session, `20260916T143244Z-29058e2294` was cleaned after the
+  FireOS shell lacked standalone `printf`; the payload now uses the preflight-
+  qualified Magisk BusyBox `printf`. The subsequent session was also cleaned
+  and verified before this restart. Off-axis/far-field repetition, 20 wake
+  trials, and endpointing trials remain, so Task 10 stays in progress and
+  `bypass-v1` remains the only defensible profile.
+
+- 2026-09-16: Prepared, but did not execute, the first Task 10 front/550 mm
+  batch. The token-owned device-lab payload captures silence; fresh matched
+  room-noise and normal, quiet, and loud speech pairs; displays three-second
+  `thinking` cues and a ready-led cyan-green `listening` window; writes the
+  silence scorecard and three health-bound comparisons; and deletes raw WAVs
+  through the existing scorecard/comparison defaults. The historic distance
+  transcription was corrected to the operator-confirmed 550 mm throughout
+  the Task 10 evidence. Host checks passed: `sh -n
+  tools/device-lab/payloads/task10_front_550mm.sh`, `uv run --no-project
+  --script tools/device-lab/device_lab_test.py`, and `git diff --check`.
+  Fresh-context review identified three defects, all **fixed**: direct ADB
+  execution now derives the token-owned root from the payload pathname; the
+  silence sidecar must prove zero XRuns/dropped frames; and listening receives
+  a one-second visual ready lead. The review agent exhausted its service quota
+  before sending a final completion report; no finding was declined or
+  postponed. Hardware qualification remains unrun and Task 10 remains in
+  progress with `bypass-v1` the only defensible profile.
+
+- 2026-09-15: Task 10 host implementation is in progress. Added deterministic
+  channel-0, polarity-qualified unsteered-mix, and EchoLocal delay-and-sum
+  candidate processors behind `Preprocessor`, each with bounded 12 dB output
+  leveling, a 1 dBFS ceiling, saturation-safe conversion, and controlled
+  gain transitions. `echoctl mic compare` now emits per-candidate profile,
+  applied gain, peak/RMS, clipping count/fraction, noise level,
+  speech/noise separation, and processing duration from simultaneous
+  seven-channel captures, deleting source recordings unless explicitly
+  retained. Final selection remains blocked on the required controlled
+  real-Dot capture and wake/endpointing trials; no candidate is published as
+  `dot-gen2-qualified-v1` from host fixtures alone.
+  Fresh-context review found five issues, all fixed: comparison now processes
+  fixed 80 ms blocks; it calculates speech/noise separation from raw candidate
+  reduction before independent output leveling; reports position, distance,
+  condition, and validated input/noise capture health; rejects XRuns/dropped
+  frames and non-canonical capture; and has streaming/cadence, gain, clipping,
+  SNR, and candidate tests. No findings were declined or postponed.
 
 - 2026-09-14: Task 7 completed. `dotsim` now uses the production single-agent
   installer against simulator-owned files and exposes deterministic controls

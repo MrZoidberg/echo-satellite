@@ -229,6 +229,36 @@ class CoreTests(unittest.TestCase):
         with self.assertRaises(SystemExit):
             device_lab.main(["record-external-action", "--adb", "adb", "--serial", "dot"])
 
+    def test_task10_front_550mm_payload_has_ordered_health_bound_captures(self) -> None:
+        payload = Path(__file__).with_name("payloads") / "task10_front_550mm.sh"
+        text = payload.read_text(encoding="utf-8")
+        self.assertIn('ROOT=${ROOT:-${0%/*}}', text)
+        self.assertIn(': "${ROOT:?device-lab ROOT is required}"', text)
+        self.assertIn("BB=/data/adb/magisk/busybox", text)
+        self.assertIn('"$BB" printf', text)
+        self.assertIn("--channels all", text)
+        self.assertIn("--health-out", text)
+        self.assertIn("--state thinking --seconds 3 --clear", text)
+        self.assertIn("--state listening --seconds 12 --clear", text)
+        self.assertIn("sleep 1", text)
+        self.assertIn("--position front --distance-mm 550", text)
+        self.assertIn("mic scorecard --input \"$OUT/silence.wav\"", text)
+        self.assertIn("'^  \"xruns\": 0,$' \"$OUT/silence.health.json\"", text)
+        self.assertIn("'^  \"dropped_frames\": 0,$' \"$OUT/silence.health.json\"", text)
+        for condition in ("normal-speech", "quiet-speech", "loud-speech"):
+            self.assertIn(f'compare {condition} room-noise-{condition.removesuffix("-speech")} {condition}', text)
+        ordered = (
+            "record silence",
+            "record room-noise-normal",
+            "record_listening normal-speech",
+            "record room-noise-quiet",
+            "record_listening quiet-speech",
+            "record room-noise-loud",
+            "record_listening loud-speech",
+        )
+        offsets = [text.index(line) for line in ordered]
+        self.assertEqual(offsets, sorted(offsets))
+
 
 def _walk(suite: unittest.TestSuite):
     for item in suite:

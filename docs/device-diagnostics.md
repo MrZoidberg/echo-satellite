@@ -1183,14 +1183,14 @@ Run the matrix for silence, room noise, normal speech, continuous quiet speech,
 and loud speech at front, off-axis, and far-field positions. Record each actual
 distance; do not substitute assumed array geometry or fabricated metrics.
 
-The 2026-09-15 front, 55 mm nominal-normal-speech trial verified the capture
+The 2026-09-15 front, 550 mm nominal-normal-speech trial verified the capture
 and health path (16 kHz S16_LE, seven channels, 160,000 frames, zero XRuns and
 dropped frames), but it is not acoustic evidence: all channels measured only
 0.75--0.81 dB below the matched room-noise RMS. The raw WAVs were deleted after
 local scoring. Repeat it with speech synchronized to the ten-second capture
 window before comparing conditioning candidates.
 
-A repeated front, 55 mm normal-speech capture used the semantic cyan-green
+A repeated front, 550 mm normal-speech capture used the semantic cyan-green
 `listening` ring during the ten-second human speech window and produced usable
 evidence: 16 kHz S16_LE, seven channels, 160,000 frames, zero XRuns/dropped
 frames and clipping, normal polarity for mic1--mic6, and respective relative
@@ -1198,7 +1198,7 @@ delays of 0, -1, -2, -2, -1, and -1 samples against mic0. Per-channel
 speech/noise separation was 17.50--20.01 dB. Raw WAVs were deleted after local
 scoring; the derived JSON is retained in the device-lab session evidence.
 
-A front, 55 mm deliberate-silence cell in device-lab session
+A front, 550 mm deliberate-silence cell in device-lab session
 `20260915T160603Z-314c638f2b` used the same semantic cyan-green `listening`
 ring during its ten-second capture. The verified scorecard recorded 16 kHz
 S16_LE, seven channels, 160,000 frames, zero XRuns/dropped frames and clipping,
@@ -1206,7 +1206,7 @@ with RMS levels of -63.84 to -60.07 dBFS. No speech/noise separation applies to
 a silence-only capture. The raw WAV was confirmed deleted after local scoring;
 only its JSON metrics remain in the token-owned host evidence directory.
 
-A front, 55 mm continuous-quiet-speech cell in device-lab session
+A front, 550 mm continuous-quiet-speech cell in device-lab session
 `20260915T161003Z-09519438e1` used a matched ten-second room-noise baseline and
 the semantic cyan-green `listening` ring during the human speech window. The
 verified 16 kHz S16_LE, seven-channel, 160,000-frame capture had zero XRuns,
@@ -1215,7 +1215,89 @@ dropped frames, and clipping. Per-channel speech/noise separation was
 scoring; cleanup removed the temporary matched room-noise WAV. Only the JSON
 metric artifact remains in the token-owned host evidence directory.
 
-A front, 55 mm loud-speech cell in device-lab session
+### Task 10 conditioning comparison procedure
+
+Use matched simultaneous seven-channel speech and room-noise captures for each
+matrix cell, retaining them only long enough to run the local comparison:
+
+```sh
+/data/local/tmp/echoctl mic compare \
+  --input /data/local/tmp/task10-front-normal.wav \
+  --noise /data/local/tmp/task10-front-room-noise.wav \
+  --capture-health /data/local/tmp/task10-front-normal.health.json \
+  --noise-capture-health /data/local/tmp/task10-front-room-noise.health.json \
+  --position front --distance-mm 1000 --condition normal-speech \
+  --out /data/local/tmp/task10-front-normal-comparison.json
+```
+
+The result has one entry per `channel-0`, `unsteered-mix`, and
+`echolocal-delay-sum` candidate with its applied gain, output peak/RMS,
+clipping count/fraction, noise level, speech/noise separation, and processing
+duration. It deletes both source WAVs after atomically publishing the JSON;
+use `--retain-input` only for an approved follow-on diagnostic. Fixture output
+is implementation evidence only. The comparison validates the named
+capture-health sidecars and rejects any XRun or dropped frame. It reports
+speech/noise separation before output leveling so independently leveled captures
+cannot mask array-quality differences. The qualifying record must prove every
+remaining Task 10 rejection rule (including live wake and endpointing trials)
+before publishing `dot-gen2-qualified-v1`.
+
+### Front/550 mm combined-capture procedure
+
+`tools/device-lab/payloads/task10_front_550mm.sh` prepares the first compact
+Task 10 batch without changing the agent or adding a production command. In a
+future prepared device-lab session, after the approved `echoctl` diagnostic is
+staged at `/data/local/tmp/echoctl`, the operator invokes the token-owned
+payload with its remote pathname as the sole `su -c` argument:
+
+```sh
+"$ADB" -s "$DEVICE_SERIAL" shell \
+  "su -c '/data/local/tmp/echo-device-lab/<session-id>/task10_front_550mm.sh'"
+```
+
+It captures ten seconds each of silence, matched room-noise plus
+normal speech, matched room-noise plus quiet speech, and matched room-noise
+plus loud speech—all simultaneous seven-channel recordings at front/550 mm.
+Every capture has a recorder-produced health sidecar. A three-second blue
+`thinking` cue separates windows; the cyan-green `listening` ring begins one
+second before and stays active through each ten-second speech capture. The
+payload rejects nonzero XRun or dropped-frame fields in the silence sidecar;
+the comparisons enforce that same rule for both members of every speech pair.
+It writes the silence scorecard and all three comparisons, which validate the
+sidecars and delete the raw WAVs after scoring. This is
+preparation only, not real-Dot evidence or a profile selection.
+
+### 2026-09-16 front/550 mm combined capture
+
+The prepared batch ran in device-lab session `20260916T145631Z-0233ef1d7f`
+on rooted Dot `G090LF0964060EHP`. It completed all seven ten-second,
+simultaneous seven-microphone windows: silence; matched room noise and normal
+speech; matched room noise and quiet speech; and matched room noise and loud
+speech. The three-second blue `thinking` transitions and cyan-green
+`listening` speech windows were observed through the schedule. Every sidecar
+verified 16 kHz S16_LE, seven channels, 160,000 frames, zero XRuns, and zero
+dropped frames. The silence scorecard had zero clipping and RMS from -74.12 to
+-69.89 dBFS. Raw WAVs were deleted after scoring; only derived metrics were
+read before session cleanup.
+
+All candidate outputs had zero clipping and met the 80 ms cadence requirement:
+their worst measured block was 4.77 ms. The speech/noise separations (dB) were:
+
+| Candidate | Normal | Quiet | Loud |
+| --- | ---: | ---: | ---: |
+| channel-0 | 6.09 | 8.17 | 20.56 |
+| unsteered-mix | 6.74 | 10.64 | 23.36 |
+| echolocal-delay-sum | 6.91 | 9.76 | 23.58 |
+
+This is one front-position evidence batch only. Its minimum separations differ
+by less than 1 dB, so the specified tie-breaker would favor channel 0 *if the
+remaining positions repeat that result*. It does not select
+`dot-gen2-qualified-v1`: off-axis and far-field cells, repeatability evidence,
+20 wake trials, and endpointing trials remain required. Device-lab cleanup and
+`verify-clean` passed with the installed-agent digest unchanged; the controlled
+launcher was then restarted.
+
+A front, 550 mm loud-speech cell in device-lab session
 `20260915T161447Z-3e028ea061` likewise used a matched ten-second room-noise
 baseline and the semantic cyan-green `listening` ring during the human speech
 window. The verified 16 kHz S16_LE, seven-channel, 160,000-frame capture had
@@ -1225,7 +1307,7 @@ after local scoring; cleanup removed the temporary matched room-noise WAV.
 Only the JSON metric artifact remains in the token-owned host evidence
 directory.
 
-An off-axis, 55 mm normal-speech cell in device-lab session
+An off-axis, 550 mm normal-speech cell in device-lab session
 `20260915T161902Z-8e723ac1dc` used a matched ten-second room-noise baseline and
 the semantic cyan-green `listening` ring during the human speech window. The
 verified 16 kHz S16_LE, seven-channel, 160,000-frame capture had zero XRuns,

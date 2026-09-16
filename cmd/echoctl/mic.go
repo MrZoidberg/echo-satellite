@@ -53,6 +53,21 @@ type micScorecardChannel struct {
 	SpeechNoiseSeparationDB *float64 `json:"speech_noise_separation_db,omitempty"`
 }
 
+type micComparisonReport struct {
+	Position         string                      `json:"position"`
+	DistanceMM       int                         `json:"distance_mm"`
+	Condition        string                      `json:"condition"`
+	InputHealth      micComparisonHealth         `json:"input_health"`
+	NoiseHealth      micComparisonHealth         `json:"noise_health"`
+	InputDisposition string                      `json:"input_disposition"`
+	Candidates       []audio.ConditioningMetrics `json:"candidates"`
+}
+
+type micComparisonHealth struct {
+	Xruns         uint64 `json:"xruns"`
+	DroppedFrames uint64 `json:"dropped_frames"`
+}
+
 type micCaptureHealth struct {
 	SHA256        string `json:"sha256"`
 	XRuns         uint64 `json:"xruns"`
@@ -291,6 +306,116 @@ func micScorecard(w io.Writer, c micScorecardCommand) error {
 	return writeReport(w, []string{fmt.Sprintf("scorecard: %s (%d channels, %d frames, raw audio %s)", c.Out, format.Channels, report.Capture.Frames, report.RawAudio.Disposition)})
 }
 
+// micCompare applies each candidate to simultaneous seven-channel captures.
+// It is deliberately offline: this produces reproducible evidence but cannot
+// substitute for Task 10's live wake, endpointing, and capture-health trials.
+func micCompare(w io.Writer, c micCompareCommand) error {
+	if c.DistanceMM <= 0 {
+		return fmt.Errorf("distance must be positive: %d mm", c.DistanceMM)
+	}
+	format, speech, err := readSevenMicWAV(c.Input)
+	if err != nil {
+		return err
+	}
+	noiseFormat, noise, err := readSevenMicWAV(c.Noise)
+	if err != nil {
+		return err
+	}
+	if noiseFormat != format {
+		return errors.New("noise capture format does not match input")
+	}
+	frames := len(speech) / format.Channels
+	health, err := readCaptureHealth(c.Health, c.Input, format, frames)
+	if err != nil {
+		return err
+	}
+	noiseHealth, err := readCaptureHealth(c.NoiseHealth, c.Noise, noiseFormat, len(noise)/noiseFormat.Channels)
+	if err != nil {
+		return err
+	}
+	if health.XRuns != 0 || health.DroppedFrames != 0 || noiseHealth.XRuns != 0 || noiseHealth.DroppedFrames != 0 {
+		return errors.New("conditioning comparison requires captures with zero XRuns and dropped frames")
+	}
+	report := micComparisonReport{Position: c.Position, DistanceMM: c.DistanceMM, Condition: c.Condition, InputHealth: micComparisonHealth{Xruns: health.XRuns, DroppedFrames: health.DroppedFrames}, NoiseHealth: micComparisonHealth{Xruns: noiseHealth.XRuns, DroppedFrames: noiseHealth.DroppedFrames}, InputDisposition: "deleted"}
+	for _, candidate := range []audio.ConditioningCandidate{audio.CandidateChannel0, audio.CandidateUnsteeredMix, audio.CandidateDelaySum} {
+		conditioner, createErr := audio.NewConditioning(candidate)
+		if createErr != nil {
+			return fmt.Errorf("create %s conditioner: %w", candidate, createErr)
+		}
+		conditionSamples(conditioner, speech)
+		noiseConditioner, createErr := audio.NewConditioning(candidate)
+		if createErr != nil {
+			return fmt.Errorf("create %s noise conditioner: %w", candidate, createErr)
+		}
+		noiseReduced := conditionSamples(noiseConditioner, noise)
+		report.Candidates = append(report.Candidates, conditioner.Metrics(noiseReduced))
+	}
+	if c.RetainInput {
+		report.InputDisposition = "retained"
+		if err := writeJSONFile(c.Out, report); err != nil {
+			return fmt.Errorf("write conditioning comparison: %w", err)
+		}
+	} else if err := publishDeletedComparison(c.Input, c.Noise, c.Out, report); err != nil {
+		return err
+	}
+	return writeReport(w, []string{fmt.Sprintf("comparison: %s (%d candidates, raw audio %s)", c.Out, len(report.Candidates), report.InputDisposition)})
+}
+
+func conditionSamples(conditioner *audio.Conditioning, samples []int16) []int16 {
+	frames := len(samples) / audio.PhysicalMicrophones
+	reduced := make([]int16, 0, frames)
+	for start := 0; start < frames; start += audio.ConditioningCadenceSamples {
+		end := min(start+audio.ConditioningCadenceSamples, frames)
+		frame := make([]int16, (end-start)*audio.PhysicalMicrophones)
+		copy(frame, samples[start*audio.PhysicalMicrophones:end*audio.PhysicalMicrophones])
+		_, raw := conditioner.ProcessBlock(deinterleaveScorecard(frame))
+		reduced = append(reduced, raw...)
+	}
+	return reduced
+}
+
+func deinterleaveScorecard(samples []int16) [][]int16 {
+	frames := len(samples) / audio.PhysicalMicrophones
+	mics := make([][]int16, audio.PhysicalMicrophones)
+	for mic := range mics {
+		mics[mic] = make([]int16, frames)
+		for frame := range frames {
+			mics[mic][frame] = samples[frame*audio.PhysicalMicrophones+mic]
+		}
+	}
+	return mics
+}
+
+func publishDeletedComparison(input, noise, output string, report micComparisonReport) error {
+	data, err := json.MarshalIndent(report, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal conditioning comparison: %w", err)
+	}
+	pending, err := os.CreateTemp(filepath.Dir(output), ".comparison-*")
+	if err != nil {
+		return fmt.Errorf("create pending conditioning comparison: %w", err)
+	}
+	pendingName := pending.Name()
+	defer func() { _ = os.Remove(pendingName) }()
+	if _, err := pending.Write(append(data, '\n')); err != nil {
+		_ = pending.Close()
+		return fmt.Errorf("write pending conditioning comparison: %w", err)
+	}
+	if err := pending.Close(); err != nil {
+		return fmt.Errorf("close pending conditioning comparison: %w", err)
+	}
+	if err := os.Remove(input); err != nil {
+		return fmt.Errorf("delete compared microphone capture: %w", err)
+	}
+	if err := os.Remove(noise); err != nil {
+		return fmt.Errorf("delete compared noise capture: %w", err)
+	}
+	if err := os.Rename(pendingName, output); err != nil {
+		return fmt.Errorf("publish conditioning comparison: %w", err)
+	}
+	return nil
+}
+
 func publishDeletedScorecard(input, output string, report micScorecardReport) error {
 	data, err := json.MarshalIndent(report, "", "  ")
 	if err != nil {
@@ -368,6 +493,9 @@ func readSevenMicWAV(path string) (audio.Format, []int16, error) {
 	}
 	if format.Channels != 7 {
 		return audio.Format{}, nil, fmt.Errorf("microphone capture %q has %d channels; Task 9 requires exactly seven physical microphones", path, format.Channels)
+	}
+	if format.SampleRate != audio.CanonicalSampleRate || format.Layout != audio.LayoutS16LE {
+		return audio.Format{}, nil, fmt.Errorf("microphone capture %q must be canonical %d Hz S16_LE", path, audio.CanonicalSampleRate)
 	}
 	if len(samples) == 0 {
 		return audio.Format{}, nil, fmt.Errorf("microphone capture %q contains no frames", path)
