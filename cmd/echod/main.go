@@ -513,6 +513,7 @@ func announcedCapabilities(disableUpdates bool) protocol.Capabilities {
 		protocol.CapButton,
 		protocol.CapLED,
 		protocol.CapMute,
+		protocol.CapHealthTelemetry,
 	}
 	if !disableUpdates {
 		caps = append(caps, protocol.CapUpdateSingle)

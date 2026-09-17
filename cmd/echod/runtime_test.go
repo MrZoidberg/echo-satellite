@@ -37,6 +37,11 @@ type runtimeDetector struct{ score float64 }
 func (d *runtimeDetector) Observe([]int16)      {}
 func (d *runtimeDetector) SpeechScore() float64 { return d.score }
 
+func TestDeploymentManager_WelcomeAllowsDisabledUpdates(t *testing.T) {
+	var manager *deploymentManager
+	manager.Welcome(t.Context(), nil)
+}
+
 type indicatorStub struct {
 	mu    sync.Mutex
 	calls []string

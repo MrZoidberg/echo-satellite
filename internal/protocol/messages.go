@@ -3,6 +3,9 @@ package protocol
 import (
 	"errors"
 	"fmt"
+	"math"
+	"strings"
+	"time"
 )
 
 // MessageType identifies a control frame. The full set mirrors the message
@@ -220,7 +223,8 @@ type AudioStart struct {
 
 // AudioStop closes the command audio window.
 type AudioStop struct {
-	Reason AudioStopReason `json:"reason"`
+	Reason    AudioStopReason `json:"reason"`
+	Telemetry *TurnTelemetry  `json:"telemetry,omitempty"`
 }
 
 // Validate checks the reason for an input audio window closing.
@@ -228,8 +232,130 @@ func (s AudioStop) Validate() error {
 	if !s.Reason.Valid() {
 		return fmt.Errorf("protocol: invalid audio stop reason %q", s.Reason)
 	}
+	if s.Telemetry != nil {
+		if err := s.Telemetry.Validate(); err != nil {
+			return fmt.Errorf("protocol: invalid audio stop telemetry: %w", err)
+		}
+	}
 	return nil
 }
+
+// Health is a bounded, device-to-gateway observability snapshot. It contains
+// counters and measurements only; it never contains audio, paths, or secrets.
+type Health struct {
+	Version       int                `json:"version"`
+	Capture       CaptureHealth      `json:"capture"`
+	Wake          WakeHealth         `json:"wake"`
+	Conditioning  ConditioningHealth `json:"conditioning"`
+	Resources     ResourceHealth     `json:"resources"`
+	TelemetryDrop uint64             `json:"telemetry_drops"`
+}
+
+type CaptureHealth struct {
+	XRuns       uint64 `json:"xruns"`
+	FanoutDrops uint64 `json:"fanout_drops"`
+	Frames      uint64 `json:"frames"`
+}
+
+type WakeHealth struct {
+	Accepted    uint64 `json:"accepted"`
+	Rejected    uint64 `json:"rejected"`
+	VADActiveMS uint64 `json:"vad_active_ms"`
+	InferenceMS uint64 `json:"inference_ms"`
+}
+
+type ConditioningHealth struct {
+	Profile          string        `json:"profile"`
+	AppliedGainDB    float64       `json:"applied_gain_db"`
+	PeakDBFS         float64       `json:"peak_dbfs"`
+	RMSDBFS          float64       `json:"rms_dbfs"`
+	ClippingCount    uint64        `json:"clipping_count"`
+	ClippingFraction float64       `json:"clipping_fraction"`
+	ProcessingTime   time.Duration `json:"processing_time_ns"`
+	MaxBlockTime     time.Duration `json:"max_block_time_ns"`
+}
+
+type ResourceHealth struct {
+	RSSBytes   uint64  `json:"rss_bytes"`
+	CPUPercent float64 `json:"cpu_percent"`
+	Available  bool    `json:"available"`
+}
+
+// TurnTelemetry is a terminal observation for the turn identified by the
+// enclosing audio.stop envelope. Counters are deltas from turn start.
+type TurnTelemetry struct {
+	Version      int                `json:"version"`
+	StoppedAt    time.Time          `json:"stopped_at"`
+	Duration     time.Duration      `json:"duration_ns"`
+	Capture      CaptureHealth      `json:"capture"`
+	Conditioning ConditioningHealth `json:"conditioning"`
+	Resources    ResourceHealth     `json:"resources"`
+}
+
+func (h Health) Validate() error {
+	if h.Version != 1 {
+		return errors.New("health version must be 1")
+	}
+	if err := validateCapture(h.Capture); err != nil {
+		return err
+	}
+	if h.Wake.VADActiveMS > maxHealthMS || h.Wake.InferenceMS > maxHealthMS {
+		return errors.New("health: wake timing exceeds limit")
+	}
+	if err := validateConditioning(h.Conditioning); err != nil {
+		return err
+	}
+	return validateResources(h.Resources)
+}
+
+func (t TurnTelemetry) Validate() error {
+	if t.Version != 1 {
+		return errors.New("turn telemetry version must be 1")
+	}
+	if t.StoppedAt.IsZero() || t.Duration < 0 || t.Duration > maxTurnDuration || !finiteDuration(t.Duration) {
+		return errors.New("turn telemetry: invalid stop time or duration")
+	}
+	if err := validateCapture(t.Capture); err != nil {
+		return err
+	}
+	if err := validateConditioning(t.Conditioning); err != nil {
+		return err
+	}
+	return validateResources(t.Resources)
+}
+
+const (
+	maxHealthMS     = 24 * 60 * 60 * 1000
+	maxTurnDuration = 10 * time.Minute
+	maxProfileBytes = 64
+)
+
+func validateCapture(c CaptureHealth) error {
+	if c.Frames > 1<<40 {
+		return errors.New("health: capture frame count exceeds limit")
+	}
+	return nil
+}
+func validateConditioning(c ConditioningHealth) error {
+	if c.Profile == "" || len(c.Profile) > maxProfileBytes || strings.ContainsAny(c.Profile, "\r\n/") {
+		return errors.New("health: invalid conditioning profile")
+	}
+	if !finite(c.AppliedGainDB) || c.AppliedGainDB < -60 || c.AppliedGainDB > 60 || !finite(c.PeakDBFS) || c.PeakDBFS < -200 || c.PeakDBFS > 1 || !finite(c.RMSDBFS) || c.RMSDBFS < -200 || c.RMSDBFS > 1 || !finite(c.ClippingFraction) || c.ClippingFraction < 0 || c.ClippingFraction > 1 {
+		return errors.New("health: invalid conditioning metric")
+	}
+	if c.ProcessingTime < 0 || c.MaxBlockTime < 0 || c.ProcessingTime > 24*time.Hour || c.MaxBlockTime > time.Minute {
+		return errors.New("health: invalid conditioning duration")
+	}
+	return nil
+}
+func validateResources(r ResourceHealth) error {
+	if !finite(r.CPUPercent) || r.CPUPercent < 0 || r.CPUPercent > 1000 || r.RSSBytes > 1<<50 {
+		return errors.New("health: invalid resource metric")
+	}
+	return nil
+}
+func finite(value float64) bool               { return !math.IsNaN(value) && !math.IsInf(value, 0) }
+func finiteDuration(value time.Duration) bool { return value >= 0 }
 
 // PlayStart opens the binary PCM window for gateway-to-device playback.
 type PlayStart struct {

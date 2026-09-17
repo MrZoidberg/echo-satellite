@@ -33,12 +33,13 @@ type Receiver struct{ Directory string }
 // Turn is the completed turn metadata. WAVPath is set only when diagnostics
 // were explicitly enabled and audio ended successfully.
 type Turn struct {
-	ID      string
-	Start   protocol.TurnStart
-	Stop    protocol.AudioStop
-	Bytes   int64
-	WAVPath string
-	Started time.Time
+	ID        string
+	Start     protocol.TurnStart
+	Stop      protocol.AudioStop
+	Bytes     int64
+	WAVPath   string
+	Started   time.Time
+	Telemetry *protocol.TurnTelemetry
 }
 
 // Active is a mutable receiver for one turn.

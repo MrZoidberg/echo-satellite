@@ -146,7 +146,7 @@ func newGatewayRuntime(ctx context.Context, o opts) (*gatewayRuntime, error) {
 		slog.Warn("release trust", "note", logValue(note))
 	}
 
-	server, err := devices.New(devices.Options{Token: token, ServerID: o.ServerID, Config: func(deviceID string) protocol.DeviceConfig { return store.Snapshot().Effective(deviceID) }, Turns: turns.Receiver{Directory: o.DiagnosticWAV}})
+	server, err := devices.New(devices.Options{Token: token, ServerID: o.ServerID, Config: func(deviceID string) protocol.DeviceConfig { return store.Snapshot().Effective(deviceID) }, Turns: turns.Receiver{Directory: o.DiagnosticWAV}, EvidenceDirectory: o.DiagnosticEvidence})
 	if err != nil {
 		return nil, fmt.Errorf("create device session server: %w", err)
 	}

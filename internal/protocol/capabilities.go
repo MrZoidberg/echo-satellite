@@ -30,6 +30,8 @@ const (
 	CapButton Capability = "button"
 	// CapMute reports the device exposes a microphone mute control.
 	CapMute Capability = "mute"
+	// CapHealthTelemetry reports bounded device health and per-turn telemetry.
+	CapHealthTelemetry Capability = "health.telemetry.v1"
 )
 
 // Capabilities is the set of capabilities a device announces. It marshals as a

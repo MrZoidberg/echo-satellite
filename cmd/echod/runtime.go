@@ -332,6 +332,10 @@ type turnCoordinator struct {
 	historySize  int
 	turn         client.Turn
 	dropped      uint64
+	turnStarted  time.Time
+	turnXRuns    uint64
+	captureXRuns func() uint64
+	profile      string
 	onIdle       func()
 }
 
@@ -465,6 +469,9 @@ func (m *deploymentManager) Cancel(value protocol.UpdateCancellation) {
 }
 
 func (m *deploymentManager) Welcome(_ context.Context, report client.UpdateReporter) {
+	if m == nil {
+		return
+	}
 	m.mu.Lock()
 	pending := m.pending
 	m.mu.Unlock()
@@ -603,6 +610,10 @@ func (t *turnCoordinator) start(request turnTrigger) {
 		return
 	}
 	t.active, t.nextOffset, t.dropped = true, request.offset+int64(len(request.preRoll)), t.subscription.Dropped()
+	t.turnStarted = time.Now()
+	if t.captureXRuns != nil {
+		t.turnXRuns = t.captureXRuns()
+	}
 	t.turn = client.Turn{ID: fmt.Sprintf("turn-%d", time.Now().UnixNano()), Start: request.start, PCM: make([][]byte, 0, 32)}
 	if len(request.preRoll) > 0 {
 		t.turn.PCM = append(t.turn.PCM, encodePCM(request.preRoll))
@@ -675,6 +686,12 @@ func (t *turnCoordinator) finish(reason protocol.AudioStopReason) {
 		return
 	}
 	t.turn.Reason, t.active = reason, false
+	stoppedAt := time.Now()
+	telemetry := &protocol.TurnTelemetry{Version: 1, StoppedAt: stoppedAt, Duration: stoppedAt.Sub(t.turnStarted), Capture: protocol.CaptureHealth{FanoutDrops: t.subscription.Dropped() - t.dropped}, Conditioning: protocol.ConditioningHealth{Profile: t.profile, PeakDBFS: -200, RMSDBFS: -200}, Resources: protocol.ResourceHealth{Available: false}}
+	if t.captureXRuns != nil {
+		telemetry.Capture.XRuns = t.captureXRuns() - t.turnXRuns
+	}
+	t.turn.Telemetry = telemetry
 	turn := t.turn
 	connected := t.connected
 	t.mu.Unlock()
@@ -757,6 +774,8 @@ func runConnected(ctx context.Context, o opts) (returnErr error) {
 		return fmt.Errorf("subscribe turn coordinator: %w", err)
 	}
 	turns := newTurnCoordinator(turnSub, controller)
+	turns.captureXRuns = capturer.XRuns
+	turns.profile = string(settings.Audio.ConditioningProfile)
 	models := wake.Store{Root: o.WakeModelDir}
 	model, err := models.Get(settings.Wake.Model)
 	if err != nil {
@@ -800,7 +819,8 @@ func runConnected(ctx context.Context, o opts) (returnErr error) {
 		default:
 		}
 	}
-	pipeline := wake.Pipeline{Engines: []wake.Engine{dynamicEngine}, VAD: vad, Gate: wake.Gate{Thresholds: wake.Thresholds{Wake: settings.Wake.Threshold, VAD: settings.Wake.VAD.Threshold}, MinInterval: time.Duration(settings.Wake.MinIntervalMS) * time.Millisecond}, Ring: ring, Stats: wake.NewStats(wake.StatsConfig{}), Config: settings.Wake, ConfigSource: func() wake.Config { return state.current().Wake }}
+	wakeStats := wake.NewStats(wake.StatsConfig{})
+	pipeline := wake.Pipeline{Engines: []wake.Engine{dynamicEngine}, VAD: vad, Gate: wake.Gate{Thresholds: wake.Thresholds{Wake: settings.Wake.Threshold, VAD: settings.Wake.VAD.Threshold}, MinInterval: time.Duration(settings.Wake.MinIntervalMS) * time.Millisecond}, Ring: ring, Stats: wakeStats, Config: settings.Wake, ConfigSource: func() wake.Config { return state.current().Wake }}
 	turns.onIdle = func() {
 		state.applyPending()
 		if animator != nil && turns.isConnected() && indicator != nil && !indicator.IsBooting() {
@@ -864,6 +884,7 @@ func runConnected(ctx context.Context, o opts) (returnErr error) {
 	workers := []wakeWorker{fanout.Run, turns.Run, func(workerCtx context.Context) error {
 		return pipeline.Run(workerCtx, subscriptionFrames{wakeSub}, events)
 	}, func(workerCtx context.Context) error { return consumeWakeEvents(workerCtx, events, turns, animator) }, session.Run}
+	workers = append(workers, reportDeviceHealth(session, wakeStats, wakeSub, capturer, state))
 	workers = append(workers, buttonWorkers...)
 	if animator != nil {
 		workers = append(workers, func(workerCtx context.Context) error {
@@ -882,6 +903,36 @@ func runConnected(ctx context.Context, o opts) (returnErr error) {
 		return err
 	case <-restartRequested:
 		return errControlledRestart
+	}
+}
+
+const deviceHealthInterval = 30 * time.Second
+
+func reportDeviceHealth(session *client.Client, stats *wake.Stats, subscription *audio.Subscription, capturer *audio.Capturer, state *deviceRuntimeConfig) wakeWorker {
+	return func(ctx context.Context) error {
+		ticker := time.NewTicker(deviceHealthInterval)
+		defer ticker.Stop()
+		var sampler system.Sampler
+		havePrevious := false
+		for {
+			select {
+			case <-ctx.Done():
+				return nil
+			case sampledAt := <-ticker.C:
+				usage, err := system.ReadUsage("/proc/self")
+				report := protocol.Health{Version: 1, Capture: protocol.CaptureHealth{XRuns: capturer.XRuns(), FanoutDrops: subscription.Dropped(), Frames: stats.Snapshot().StepsProcessed}, Wake: protocol.WakeHealth{Accepted: stats.Snapshot().WakeCount, Rejected: stats.Snapshot().RejectedLowVAD}, Conditioning: protocol.ConditioningHealth{Profile: string(state.current().Audio.ConditioningProfile)}, Resources: protocol.ResourceHealth{Available: err == nil}}
+				if err == nil {
+					if havePrevious {
+						report.Resources.CPUPercent = sampler.CPUPercent(usage, sampledAt)
+					} else {
+						sampler.CPUPercent(usage, sampledAt)
+						havePrevious = true
+					}
+					report.Resources.RSSBytes = usage.RSSBytes
+				}
+				_ = session.ReportHealth(report)
+			}
+		}
 	}
 }
 

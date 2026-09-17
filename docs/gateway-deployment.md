@@ -68,3 +68,12 @@ docker compose -f deploy/docker-compose.yml \
 
 The override is intentionally separate so normal deployments cannot persist raw
 audio accidentally. Stop it with the same pair of Compose files and `down`.
+
+## Optional telemetry evidence
+
+Telemetry metadata is not persisted unless an explicit existing directory is
+configured. Set `GATEWAY_DIAGNOSTIC_EVIDENCE_DIR` to an owner-writable
+directory; the gateway appends sanitized turn metadata to `turns.jsonl` and
+never writes PCM, credentials, or arbitrary device fields there. This option is
+independent of the diagnostic WAV override and should be removed after a
+qualification run.

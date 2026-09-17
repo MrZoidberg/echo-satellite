@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -16,6 +18,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/MrZoidberg/echo-satellite/internal/gateway/turns"
 	"github.com/MrZoidberg/echo-satellite/internal/protocol"
 )
 
@@ -200,6 +203,21 @@ func TestBoundedFields_RedactsAndBounds(t *testing.T) {
 	assert.Equal(t, "[redacted]", fields["token"])
 	assert.Len(t, fields["safe"], 256)
 	assert.Equal(t, "short", truncate("short", 10))
+}
+
+func TestAppendEvidenceWritesSanitizedTurnMetadata(t *testing.T) {
+	directory := t.TempDir()
+	server, err := New(Options{Token: []byte("device-token"), ServerID: "gateway", Config: func(string) protocol.DeviceConfig { return testConfig() }, EvidenceDirectory: directory})
+	require.NoError(t, err)
+	turn := turns.Turn{ID: "turn-1", Start: protocol.TurnStart{Trigger: protocol.TriggerButton}, Stop: protocol.AudioStop{Reason: protocol.AudioStopEndpointed, Telemetry: func() *protocol.TurnTelemetry {
+		value := protocol.TurnTelemetry{Version: 1, StoppedAt: time.Now(), Duration: time.Second, Conditioning: protocol.ConditioningHealth{Profile: "dot-gen2-qualified-v1", PeakDBFS: -12, RMSDBFS: -30}, Resources: protocol.ResourceHealth{Available: false}}
+		return &value
+	}()}, Bytes: 4, Started: time.Now()}
+	require.NoError(t, server.appendEvidence("dot-1", turn))
+	data, err := os.ReadFile(filepath.Join(directory, "turns.jsonl")) //nolint:gosec // Test path is created by t.TempDir.
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "turn-1")
+	assert.NotContains(t, string(data), "raw audio")
 }
 
 func testServer(t *testing.T) *Server {

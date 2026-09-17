@@ -725,6 +725,22 @@ Wake accepted locally
   -> return to idle/local wake stack
 ```
 
+Health flow:
+
+```text
+device-local bounded snapshot
+  -> health (best-effort D→G observation)
+completed local turn
+  -> audio.stop(id, reason, optional terminal telemetry)
+```
+
+Health telemetry is capability-negotiated as `health.telemetry.v1`. It contains
+fixed, bounded counters and resource/conditioning observations only. It never
+contains idle or raw microphone audio, and neither telemetry backpressure nor
+optional gateway evidence persistence can influence local wake, endpointing, or
+turn control. The gateway may append sanitized JSONL evidence only when an
+operator supplies an existing diagnostic directory.
+
 ### 8.6 Candidate message families
 
 ```text

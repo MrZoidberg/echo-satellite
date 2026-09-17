@@ -903,7 +903,7 @@ timing bounds.
 
 ### Task 11: Integrate and requalify command audio
 
-**Status:** in progress
+**Status:** completed 2026-09-17 (user-directed)
 
 #### Task 11 operator-run hardware procedure
 
@@ -1098,6 +1098,18 @@ completion evidence names which checks ran on real hardware.
 - [ ] Hardware and host/simulator evidence are identified separately.
 
 ## Progress log
+
+- 2026-09-17: Task 11 marked completed at the user's explicit direction after
+  the shortened on-device run through the Windows gateway at
+  `192.168.110.127`. The run completed all scheduled phases (5 wake windows,
+  telemetry checkpoint, 1-minute idle, 3 continuous-speech, 3 endpointing, and
+  3 Action-button/no-speech windows); cyan-green and yellow operator ring cues
+  were used. Gateway evidence contains four turn records with version-1
+  terminal telemetry, and the device-lab cleanup/verify-clean checks passed
+  with the installed agent unchanged. This completion is recorded despite the
+  run not satisfying every original numeric acceptance threshold: the observed
+  wake/endpoint/button counts and full Task 11 acoustic qualification remain
+  limitations, not claims of threshold compliance. Host `make verify` passed.
 
 - 2026-09-17: Task 11 hardware execution was intentionally stopped before any
   human wake, command, endpointing, idle/music, or diagnostic-WAV acceptance

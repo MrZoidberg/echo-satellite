@@ -34,6 +34,7 @@ SECRET_ASSIGNMENT = re.compile(r"(?:token|authorization|credential|private.?key|
 URL_QUERY = re.compile(r"https?://[^\s?]+\?[^\s]+", re.I)
 SAFE_REMOTE_ROOT = re.compile(r"^/data/local/tmp/echo-device-lab/[A-Za-z0-9_-]+$")
 SAFE_SERIAL = re.compile(r"^[A-Za-z0-9._:-]+$")
+SAFE_GATEWAY_URL = re.compile(r"^wss://[A-Za-z0-9._:-]+/device$")
 SAFE_ARTIFACT_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 SAFE_PAYLOAD_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*\.sh$")
 SAFE_RESULT_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*\.(?:json|txt)$")
@@ -278,7 +279,10 @@ class Runner:
     def run_remote_payload(self, payload: str, diagnostic: str = "") -> CommandResult:
         # The script pathname is the sole su -c argument: no host-built nested shell.
         path = f"{self.remote_root}/{payload}"
-        return self.root_shell(f"ROOT={self.remote_root}; RESULTS=$ROOT/results; DIAGNOSTIC={diagnostic}; export ROOT RESULTS DIAGNOSTIC; mkdir -p $RESULTS; chmod 700 $RESULTS; . {path}")
+        gateway_url = getattr(self.args, "gateway_url", "")
+        if gateway_url and not SAFE_GATEWAY_URL.fullmatch(gateway_url):
+            raise LabError("--gateway-url must be a query-free wss://host/device URL")
+        return self.root_shell(f"ROOT={self.remote_root}; RESULTS=$ROOT/results; DIAGNOSTIC={diagnostic}; GATEWAY_URL={gateway_url}; export ROOT RESULTS DIAGNOSTIC GATEWAY_URL; mkdir -p $RESULTS; chmod 700 $RESULTS; . {path}")
 
     def root_shell(self, script: str) -> CommandResult:
         """Run a generated root script as the sole ``su -c`` target.
@@ -808,6 +812,7 @@ def parser() -> argparse.ArgumentParser:
     argument_parser.add_argument("--metadata-path", default=DEFAULT_METADATA_PATH)
     argument_parser.add_argument("--payload")
     argument_parser.add_argument("--diagnostic")
+    argument_parser.add_argument("--gateway-url")
     argument_parser.add_argument("--stop-known-launcher", action="store_true")
     return argument_parser
 
@@ -818,6 +823,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser().error("--serial must not be blank")
     if not SAFE_SERIAL.fullmatch(args.serial):
         parser().error("--serial contains unsafe path characters")
+    if args.gateway_url and not SAFE_GATEWAY_URL.fullmatch(args.gateway_url):
+        parser().error("--gateway-url must be a query-free wss://host/device URL")
     if args.command == "render-evidence":
         if not args.resume:
             parser().error("render-evidence requires --resume")

@@ -27,9 +27,10 @@ import (
 )
 
 const (
-	maxFrameBytes = 64 << 10
-	maxLogRecords = 256
-	handshakeWait = 5 * time.Second
+	maxFrameBytes    = 64 << 10
+	maxLogRecords    = 256
+	maxHealthRecords = 8
+	handshakeWait    = 5 * time.Second
 )
 
 var (
@@ -154,6 +155,7 @@ type Client struct {
 	active bool
 	high   chan outbound
 	logs   chan protocol.LogRecord
+	health chan protocol.Health
 	access UpdateAccess
 }
 
@@ -183,7 +185,7 @@ func New(opts Options) (*Client, error) {
 	if opts.HelloSource == nil && opts.Hello.Protocol != protocol.ProtocolVersion {
 		return nil, errors.New("device client: unsupported hello protocol")
 	}
-	return &Client{opts: opts, high: make(chan outbound, 64), logs: make(chan protocol.LogRecord, maxLogRecords)}, nil
+	return &Client{opts: opts, high: make(chan outbound, 64), logs: make(chan protocol.LogRecord, maxLogRecords), health: make(chan protocol.Health, maxHealthRecords)}, nil
 }
 
 // Run reconnects until ctx is canceled. A failed connection is never trusted
@@ -298,6 +300,7 @@ func (c *Client) runOnce(ctx context.Context, usePairing bool) (bool, error) {
 	_ = conn.Close(websocket.StatusGoingAway, "session ended")
 	workers.Wait()
 	c.drainHigh()
+	c.drainHealth()
 	return true, err
 }
 
@@ -414,6 +417,17 @@ func (c *Client) writer(ctx context.Context, conn Connection) error {
 			if err := conn.Write(ctx, websocket.MessageText, data); err != nil {
 				return fmt.Errorf("write log: %w", err)
 			}
+		case report := <-c.health:
+			data, err := protocol.Encode(protocol.TypeHealth, "", c.opts.Clock.Now(), report)
+			if err != nil {
+				return fmt.Errorf("encode health: %w", err)
+			}
+			if len(data) > maxFrameBytes {
+				return errors.New("device client: health frame exceeds 64 KiB")
+			}
+			if err := conn.Write(ctx, websocket.MessageText, data); err != nil {
+				return fmt.Errorf("write health: %w", err)
+			}
 		case <-ticker.C:
 			pingCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 			err := conn.Ping(pingCtx)
@@ -512,6 +526,20 @@ func (c *Client) Log(record protocol.LogRecord) bool {
 	}
 	select {
 	case c.logs <- record:
+		return true
+	default:
+		return false
+	}
+}
+
+// ReportHealth queues one lossy device health snapshot without blocking local
+// capture, wake detection, endpointing, or turn control.
+func (c *Client) ReportHealth(report protocol.Health) bool {
+	if err := report.Validate(); err != nil {
+		return false
+	}
+	select {
+	case c.health <- report:
 		return true
 	default:
 		return false
@@ -629,7 +657,7 @@ func (c *Client) SendTurn(ctx context.Context, turn Turn) error {
 			return err
 		}
 	}
-	data, err := protocol.Encode(protocol.TypeAudioStop, turn.ID, c.opts.Clock.Now(), protocol.AudioStop{Reason: turn.Reason})
+	data, err := protocol.Encode(protocol.TypeAudioStop, turn.ID, c.opts.Clock.Now(), protocol.AudioStop{Reason: turn.Reason, Telemetry: turn.Telemetry})
 	if err != nil {
 		return fmt.Errorf("encode control frame: %w", err)
 	}
@@ -708,6 +736,16 @@ func (c *Client) drainHigh() {
 		}
 	}
 }
+
+func (c *Client) drainHealth() {
+	for {
+		select {
+		case <-c.health:
+		default:
+			return
+		}
+	}
+}
 func (c *Client) loadPairing() *discovery.Instance {
 	if c.opts.Pairings == nil {
 		return nil
@@ -722,15 +760,21 @@ func (c *Client) loadPairing() *discovery.Instance {
 // Turn is one device-originated active audio window. PCM has already been
 // canonicalized to mono 16 kHz signed little-endian samples by the device.
 type Turn struct {
-	ID     string
-	Start  protocol.TurnStart
-	PCM    [][]byte
-	Reason protocol.AudioStopReason
+	ID        string
+	Start     protocol.TurnStart
+	PCM       [][]byte
+	Reason    protocol.AudioStopReason
+	Telemetry *protocol.TurnTelemetry
 }
 
 func (t Turn) Validate() error {
 	if strings.TrimSpace(t.ID) == "" || !t.Start.Trigger.Valid() || !t.Reason.Valid() {
 		return errors.New("device client: invalid turn")
+	}
+	if t.Telemetry != nil {
+		if err := t.Telemetry.Validate(); err != nil {
+			return fmt.Errorf("device client: invalid turn telemetry: %w", err)
+		}
 	}
 	return nil
 }

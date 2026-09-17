@@ -160,7 +160,7 @@ func requiresCorrelationID(msgType MessageType) bool {
 
 func requiresPayload(msgType MessageType) bool {
 	switch msgType {
-	case TypeWelcome, TypeConfig, TypeConfigResult, TypeLog, TypeAudioStop,
+	case TypeWelcome, TypeConfig, TypeConfigResult, TypeLog, TypeHealth, TypeAudioStop,
 		TypeUpdateOffer, TypeUpdateDecision, TypeUpdateProgress, TypeUpdateConfirmed,
 		TypeUpdateCancelled, TypeUpdateFailed:
 		return true

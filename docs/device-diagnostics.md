@@ -1321,6 +1321,9 @@ check followed by disabling raw-audio storage again.
 
 ### Task 11 command-audio run procedure
 
+For the Windows/WSL2 gateway setup and the exact operator sequence, use
+[`docs/telemetry-on-device-test.md`](telemetry-on-device-test.md).
+
 `tools/device-lab/payloads/task11_command_audio.sh` is the prepared
 operator-guided run. It stages a newly built `echod` only in the token-owned
 diagnostic root, starts it with the paired agent INI but an isolated

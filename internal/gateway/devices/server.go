@@ -4,10 +4,13 @@ package devices
 import (
 	"context"
 	"crypto/subtle"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -28,12 +31,13 @@ type Config func(deviceID string) protocol.DeviceConfig
 
 // Options configures a Server.
 type Options struct {
-	Token    []byte
-	ServerID string
-	Config   Config
-	Turns    turns.Receiver
-	Logger   *slog.Logger
-	Now      func() time.Time
+	Token             []byte
+	ServerID          string
+	Config            Config
+	Turns             turns.Receiver
+	Logger            *slog.Logger
+	Now               func() time.Time
+	EvidenceDirectory string
 }
 
 // Server is an HTTP handler and a concurrency-safe device registry.
@@ -44,6 +48,7 @@ type Server struct {
 	turns    turns.Receiver
 	logger   *slog.Logger
 	now      func() time.Time
+	evidence string
 
 	mu       sync.RWMutex
 	sessions map[string]*session
@@ -81,7 +86,13 @@ func New(opts Options) (*Server, error) {
 	if opts.Now == nil {
 		opts.Now = time.Now
 	}
-	return &Server{token: append([]byte(nil), opts.Token...), serverID: opts.ServerID, config: opts.Config, turns: opts.Turns, logger: opts.Logger, now: opts.Now, sessions: make(map[string]*session)}, nil
+	if opts.EvidenceDirectory != "" {
+		info, err := os.Stat(opts.EvidenceDirectory)
+		if err != nil || !info.IsDir() {
+			return nil, errors.New("gateway devices: evidence directory must already exist")
+		}
+	}
+	return &Server{token: append([]byte(nil), opts.Token...), serverID: opts.ServerID, config: opts.Config, turns: opts.Turns, logger: opts.Logger, now: opts.Now, evidence: opts.EvidenceDirectory, sessions: make(map[string]*session)}, nil
 }
 
 // ServeHTTP authenticates before upgrade, so unauthenticated callers never
@@ -306,6 +317,7 @@ func (s *session) control(ctx context.Context, data []byte) bool {
 	return s.handleControlLocked(ctx, env)
 }
 
+//nolint:gocyclo // Protocol control sequencing is intentionally centralized so a session has one authority.
 func (s *session) handleControlLocked(ctx context.Context, env protocol.Envelope) bool {
 	switch env.Type {
 	case protocol.TypeTurnStart:
@@ -343,7 +355,19 @@ func (s *session) handleControlLocked(ctx context.Context, env protocol.Envelope
 		}
 		s.server.logger.Info("device turn ended", "device_id", s.metadata.DeviceID, "turn_id", env.ID,
 			"reason", completed.Stop.Reason, "pcm_bytes", completed.Bytes)
+		if s.server.evidence != "" {
+			if err := s.server.appendEvidence(s.metadata.DeviceID, completed); err != nil {
+				s.server.logger.Error("write device telemetry evidence", "device_id", s.metadata.DeviceID, "turn_id", env.ID, "error", err)
+			}
+		}
 		s.active, s.metadata.ActiveTurn = nil, ""
+	case protocol.TypeHealth:
+		var health protocol.Health
+		if err := env.DecodePayload(&health); err != nil {
+			s.server.closeProtocol(s.conn, "invalid health")
+			return false
+		}
+		s.server.logger.Debug("device health", "device_id", s.metadata.DeviceID, "xruns", health.Capture.XRuns, "fanout_drops", health.Capture.FanoutDrops, "rss_bytes", health.Resources.RSSBytes)
 	case protocol.TypeConfigResult:
 		var result protocol.ConfigResult
 		if err := env.DecodePayload(&result); err != nil || result.Validate() != nil {
@@ -364,6 +388,46 @@ func (s *session) handleControlLocked(ctx context.Context, env protocol.Envelope
 		// Unknown and future messages are explicitly forward-compatible.
 	}
 	return true
+}
+
+type evidenceRecord struct {
+	DeviceID       string                   `json:"device_id"`
+	TurnID         string                   `json:"turn_id"`
+	GatewayStarted time.Time                `json:"gateway_started"`
+	GatewayStopped time.Time                `json:"gateway_stopped"`
+	DeviceStopped  time.Time                `json:"device_stopped"`
+	DeviceDuration time.Duration            `json:"device_duration_ns"`
+	Reason         protocol.AudioStopReason `json:"reason"`
+	PCMBytes       int64                    `json:"pcm_bytes"`
+	Telemetry      *protocol.TurnTelemetry  `json:"telemetry,omitempty"`
+	WAVName        string                   `json:"wav_name,omitempty"`
+	WAVBytes       int64                    `json:"wav_bytes,omitempty"`
+}
+
+func (s *Server) appendEvidence(deviceID string, turn turns.Turn) error {
+	record := evidenceRecord{DeviceID: truncate(deviceID, 128), TurnID: truncate(turn.ID, 128), GatewayStarted: turn.Started, GatewayStopped: s.now(), Reason: turn.Stop.Reason, PCMBytes: turn.Bytes, Telemetry: turn.Stop.Telemetry}
+	if turn.Stop.Telemetry != nil {
+		record.DeviceStopped, record.DeviceDuration = turn.Stop.Telemetry.StoppedAt, turn.Stop.Telemetry.Duration
+	}
+	if turn.WAVPath != "" {
+		record.WAVName = filepath.Base(turn.WAVPath)
+		if info, err := os.Stat(turn.WAVPath); err == nil {
+			record.WAVBytes = info.Size()
+		}
+	}
+	data, err := json.Marshal(record)
+	if err != nil {
+		return fmt.Errorf("marshal evidence: %w", err)
+	}
+	file, err := os.OpenFile(filepath.Join(s.evidence, "turns.jsonl"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o640) //nolint:gosec // G304: operator-configured existing evidence directory.
+	if err != nil {
+		return fmt.Errorf("open evidence: %w", err)
+	}
+	defer func() { _ = file.Close() }()
+	if _, err := file.Write(append(data, '\n')); err != nil {
+		return fmt.Errorf("append evidence: %w", err)
+	}
+	return nil
 }
 
 func boundedFields(input map[string]string) map[string]string {

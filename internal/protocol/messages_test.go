@@ -1,11 +1,55 @@
 package protocol
 
 import (
+	"math"
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func validTelemetry() TurnTelemetry {
+	return TurnTelemetry{Version: 1, StoppedAt: time.Now().UTC(), Duration: time.Second, Capture: CaptureHealth{Frames: 10}, Conditioning: ConditioningHealth{Profile: "dot-gen2-qualified-v1", PeakDBFS: -12, RMSDBFS: -30, ClippingFraction: 0.01}, Resources: ResourceHealth{CPUPercent: 20, RSSBytes: 1024, Available: true}}
+}
+
+func TestHealthAndAudioStopTelemetryValidateAndRoundTrip(t *testing.T) {
+	report := Health{Version: 1, Conditioning: ConditioningHealth{Profile: "dot-gen2-qualified-v1", PeakDBFS: -12, RMSDBFS: -30}, Resources: ResourceHealth{Available: false}}
+	data, err := Encode(TypeHealth, "", time.Now(), report)
+	require.NoError(t, err)
+	envelope, err := Decode(data)
+	require.NoError(t, err)
+	var decoded Health
+	require.NoError(t, envelope.DecodePayload(&decoded))
+	assert.Equal(t, report, decoded)
+	telemetry := validTelemetry()
+	assert.NoError(t, (AudioStop{Reason: AudioStopEndpointed, Telemetry: &telemetry}).Validate())
+}
+
+func TestTelemetryValidationRejectsUnsafeValues(t *testing.T) {
+	base := validTelemetry()
+	for name, mutate := range map[string]func(*TurnTelemetry){
+		"nan":               func(v *TurnTelemetry) { v.Conditioning.PeakDBFS = math.NaN() },
+		"infinite":          func(v *TurnTelemetry) { v.Resources.CPUPercent = math.Inf(1) },
+		"negative duration": func(v *TurnTelemetry) { v.Duration = -time.Second },
+		"path profile":      func(v *TurnTelemetry) { v.Conditioning.Profile = "/tmp/raw.wav" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			value := base
+			mutate(&value)
+			assert.Error(t, value.Validate())
+		})
+	}
+}
+
+func TestHealthHasNoFileOrSecretFields(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join(".", "messages.go"))
+	require.NoError(t, err)
+	assert.NotContains(t, string(data), "RawAudio")
+	assert.NotContains(t, string(data), "Token")
+}
 
 func TestAllMessageTypes_CoversDesignFamilies(t *testing.T) {
 	// the list from docs/DESIGN.md 8.6, verbatim

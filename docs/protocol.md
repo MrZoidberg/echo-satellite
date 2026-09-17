@@ -91,7 +91,7 @@ fixed, and its payload lands with the milestone that needs it).
 | `config` | G→D | defined | versioned gateway-managed device configuration |
 | `config.result` | D→G | defined | device acknowledgement of a config revision |
 | `state` | both | defined | semantic device state (LED ring, listening, thinking) |
-| `health` | D→G | reserved | periodic device health report |
+| `health` | D→G | defined | periodic device health report |
 | `log` | D→G | defined | forwarded device log records |
 | `turn.start` | D→G | defined | opens a voice turn; **always produced by the device** |
 | `turn.cancel` | both | reserved | abandons the current turn |
@@ -194,6 +194,24 @@ inputs to a decision it re-makes.
 For a device input window, `reason` is one of `endpointed`, `no_speech`,
 `timeout`, `eof`, or `capture_overrun`. `audio.stop` reuses the turn's
 non-empty correlation id. Playback stop reasons are gateway-defined.
+
+An optional `telemetry` object on `audio.stop` is a version-1 terminal device
+observation for that same envelope id. It contains `version`, `stopped_at`,
+`duration_ns`, `capture`, `conditioning`, and `resources`; capture counters are
+deltas from the local turn start. `reason` remains the device-local endpointing
+outcome and telemetry never overrides it. Device timestamps and gateway receipt
+timestamps are distinct. The fixed fields are bounded, finite, and contain no
+audio, paths, secrets, or arbitrary maps.
+
+### `health` (D→G)
+
+`health` is an informational periodic snapshot with the same fixed sections as
+terminal telemetry plus wake counters and `telemetry_drops`. Devices advertise
+support with `health.telemetry.v1`. The interval is device-local and is not
+configured by the gateway. Health is best effort: a full queue may drop a
+sample, and neither health nor evidence persistence can block capture, wake,
+endpointing, PCM, or the terminal stop frame. Unknown health messages remain
+forward-compatible; malformed defined payloads are protocol errors.
 
 ### `log` (D→G)
 
