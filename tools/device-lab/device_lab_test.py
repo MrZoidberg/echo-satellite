@@ -411,28 +411,24 @@ class CoreTests(unittest.TestCase):
         offsets = [text.index(line) for line in ordered]
         self.assertEqual(offsets, sorted(offsets))
 
-    def test_task11_command_audio_payload_stages_an_isolated_agent_and_no_raw_audio(self) -> None:
-        payload = Path(__file__).with_name("payloads") / "task11_command_audio.sh"
+    def test_command_audio_qualification_payload_isolated_and_reusable(self) -> None:
+        payload = Path(__file__).with_name("payloads") / "command_audio_qualification.sh"
         text = payload.read_text(encoding="utf-8")
-        self.assertIn('ROOT=${ROOT:-${0%/*}}', text)
         self.assertIn('ECHOD=${DIAGNOSTIC:?device-lab DIAGNOSTIC is required}', text)
-        self.assertIn('CONFIG=/data/local/etc/echo-satellite/echod.ini', text)
+        self.assertIn(': "${GATEWAY_URL:?device-lab --gateway-url is required}"', text)
+        self.assertIn('PROFILE=${CONDITIONING_PROFILE:-dot-gen2-qualified-v1}', text)
+        self.assertIn('WAKE_TRIALS=${WAKE_TRIALS:-20}', text)
+        self.assertIn('IDLE_SECONDS=${IDLE_SECONDS:-900}', text)
         self.assertIn('--config-state "$ROOT/config.json"', text)
         self.assertIn('--pairing-state "$ROOT/paired-gateway.json"', text)
         self.assertIn('--disable-updates', text)
-        self.assertIn('--conditioning-profile dot-gen2-qualified-v1', text)
-        self.assertIn('"$ROOT/task11-echod.pid"', text)
-        self.assertIn('for trial in 01 02 03 04 05; do', text)
-        self.assertIn('wait_phase "idle_music no_speech_to_device" 60', text)
-        self.assertIn('CYAN_GREEN=006e96', text)
-        self.assertIn('YELLOW=b4b400', text)
-        self.assertIn('wait_phase "telemetry-check inspect_gateway_records" 60', text)
-        self.assertIn('raw_audio=disabled', text)
+        self.assertIn('--conditioning-profile "$PROFILE"', text)
+        self.assertIn('"$ROOT/command-audio-echod.pid"', text)
+        self.assertIn('"continuous_quiet-$trial wake_then_continuous_speech" 66', text)
+        self.assertIn('"endpointed-$trial wake_command_then_silence" 12', text)
+        self.assertIn('"no_speech-$trial action_button_then_silence" 5', text)
         self.assertIn('rm -f "$OUT/echod.stdout" "$OUT/echod.jsonl"', text)
         self.assertIn("trap 'stop_cue; stop_agent; exit 130' HUP INT TERM", text)
-        self.assertIn('test "$#" -lt 3 || cue=$3', text)
-        self.assertIn('test "$tries" -lt 50', text)
-        self.assertIn('staged agent did not exit after TERM', text)
         self.assertIn('"$RESULTS/manifest.json"', text)
 
     def test_known_launcher_release_accepts_shell_hook_without_trailing_arguments(self) -> None:

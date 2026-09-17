@@ -21,6 +21,8 @@ for pidfile in "$ROOT"/*.pid; do
   test -e "$pidfile" || continue
   pid=$("$BB" cat "$pidfile")
   if kill -0 "$pid" 2>/dev/null; then
+    executable=$("$BB" readlink "/proc/$pid/exe" 2>/dev/null || true)
+    case "$executable" in "$ROOT"/*) ;; *) exit 71 ;; esac
     kill -TERM "$pid" 2>/dev/null || exit 71
     tries=0
     while kill -0 "$pid" 2>/dev/null && test "$tries" -lt 50; do sleep 0.1; tries=$((tries + 1)); done

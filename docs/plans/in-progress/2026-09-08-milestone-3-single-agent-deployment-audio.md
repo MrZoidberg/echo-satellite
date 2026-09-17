@@ -3,7 +3,7 @@
 **Status:** in-progress
 **Owner or active agent:** Codex (Tasks 1–7 completed)
 **Created:** 2026-09-08
-**Updated:** 2026-09-15
+**Updated:** 2026-09-17
 **Started:** 2026-09-08
 **Completed:** not completed
 
@@ -973,12 +973,12 @@ behavior.
 **Verification:** All stated real-device trials and numeric thresholds pass and
 are recorded. Simulator or fixture success cannot complete this task.
 
-### Task 12: Cross-cutting verification, documentation, and fresh review
+### Task 12: Cross-cutting verification, cleanup, documentation, and fresh review
 
-**Status:** not started
+**Status:** in progress
 
-**Purpose:** Reconcile the new design, close stale A/B assumptions, and obtain
-independent review.
+**Purpose:** Complete an ownership-based cleanup and reconcile the settled
+single-agent design without reopening the already-replaced A/B architecture.
 
 **Dependencies:** Tasks 1–11.
 
@@ -994,9 +994,22 @@ independent review.
 - Reconcile final protocol payloads, manifest format, launcher behavior, CLI
   commands, recovery limitations, audio profile, and hardware defaults across
   all documentation.
-- Scan code, tests, configuration, examples, and current docs for stale A/B,
-  supervisor, trial, rollback-slot, and `supervisor_min` behavior.
+- Scan current code, tests, configuration, examples, and documentation for
+  obsolete legacy update implementation or references, removing them only when
+  they contradict the settled single-agent boundary. Do not re-evaluate or
+  redesign the superseded A/B architecture.
 - Preserve historical plan records unchanged.
+- Inventory test-specific code, fixtures, commands, payloads, and documentation
+  before deletion. Retain reusable `echoctl` and device-lab on-device
+  diagnostics, their safe preparation/cleanup/evidence paths, and any component
+  claimed by an active or future plan. In particular, retain `task8gateway` and
+  its documentation/tests because
+  `2026-09-15-release-signing-and-deployment-qualification.md` depends on it.
+  Remove a complete code/test/fixture/documentation slice only when it has no
+  product caller, reusable diagnostic purpose, test value, or active/future
+  plan ownership.
+- Preserve or add focused tests for retained on-device diagnostic paths, and
+  search for dangling references after every deletion.
 - Review coverage for every touched function and document deliberately untested
   composition or hardware-only paths.
 - Dispatch a fresh-context review agent with the complete diff, this plan,
@@ -1007,7 +1020,9 @@ independent review.
   verification.
 
 **Expected outcome:** Implementation, sources of truth, tests, and operational
-instructions consistently describe and verify the simplified milestone.
+instructions consistently describe and verify the settled simplified milestone,
+with no unsupported one-off test surface and no loss of reproducible on-device
+testing capability.
 
 **Verification:**
 
@@ -1024,7 +1039,9 @@ make verify
 ```
 
 Expected: all commands succeed, the fresh review is fully triaged, and
-completion evidence names which checks ran on real hardware.
+completion evidence names which checks ran on real hardware. The cleanup
+inventory identifies every retained diagnostic component and the supported or
+plan-owned reason it remains; deleted paths have no live references.
 
 ## Cross-task risks
 
@@ -1098,6 +1115,31 @@ completion evidence names which checks ran on real hardware.
 - [ ] Hardware and host/simulator evidence are identified separately.
 
 ## Progress log
+
+- 2026-09-17: Task 12 cleanup inventory and fresh-review triage:
+  `cmd/task8gateway` and its documentation/tests are **retained** because the
+  future release-signing/deployment-qualification plan owns them;
+  `task10_front_550mm.sh` and its test are **retained** because Task 10 remains
+  in progress; `echod --wake-only`, `echoctl` diagnostics, and the generic
+  device-lab runner are **retained** because they are reusable on-device
+  diagnostics. The Task 11-named payload, static test, and standalone runbook
+  had no product caller or future-plan owner, but the initial decision to delete
+  the complete slice was **fixed** after fresh review: it was the only safe
+  end-to-end command-audio path. They are replaced by the reusable
+  `command_audio_qualification.sh`, its focused host test, and
+  `docs/command-audio-qualification.md`; the payload uses isolated state,
+  disables offers, provides operator cues, and preserves device-lab cleanup.
+  The raw-WAV cleanup procedure is **fixed** in `docs/gateway-deployment.md`.
+  The review's low-severity inventory finding is **fixed** by this entry. The
+  reviewer could not execute its Python suite in its read-only sandbox because
+  it has no writable temporary directory; the normal host suite passed.
+
+- 2026-09-17: User-approved Task 12 cleanup amendment recorded in
+  `docs/plans/2026-09-17-task12-cleanup-design.md` (commit `c95a3ef`). Task 12
+  is now in progress for current-documentation and ownership-based
+  test-tooling cleanup. It does not reopen the superseded A/B design. Reusable
+  on-device diagnostics and the Task 8 offer harness remain protected; final
+  completion remains dependent on Task 10 and the task's final verification.
 
 - 2026-09-17: Task 11 marked completed at the user's explicit direction after
   the shortened on-device run through the Windows gateway at

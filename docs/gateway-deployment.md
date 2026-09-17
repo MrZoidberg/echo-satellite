@@ -60,14 +60,35 @@ existing writable directory owned by `GATEWAY_UID:GATEWAY_GID`, then use the
 diagnostic override:
 
 ```sh
-mkdir -p .gateway-secrets/wav
-export GATEWAY_DIAGNOSTIC_WAV_DIR=$PWD/.gateway-secrets/wav
+mkdir -p .gateway-secrets/command-audio-wav
+: >.gateway-secrets/command-audio-wav/.echo-satellite-owner
+export GATEWAY_DIAGNOSTIC_WAV_DIR=$PWD/.gateway-secrets/command-audio-wav
 docker compose -f deploy/docker-compose.yml \
   -f deploy/docker-compose.diagnostics.yml up --build -d gateway
 ```
 
 The override is intentionally separate so normal deployments cannot persist raw
 audio accidentally. Stop it with the same pair of Compose files and `down`.
+
+After an operator-approved diagnostic run, first stop the gateway gracefully.
+Then remove only regular files from the explicit, operator-owned diagnostic
+directory (including hidden `.turn-*.part` files), verify it is empty, and
+restart without the diagnostics override:
+
+```sh
+set -eu
+dir=${GATEWAY_DIAGNOSTIC_WAV_DIR:?set the diagnostic WAV directory}
+case "$dir" in "$PWD"/.gateway-secrets/command-audio-wav) ;; *) exit 2;; esac
+test -d "$dir" && test ! -L "$dir" && test -f "$dir/.echo-satellite-owner"
+docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.diagnostics.yml down &&
+find "$dir" -mindepth 1 -maxdepth 1 -type f ! -name .echo-satellite-owner -delete &&
+test -z "$(find "$dir" -mindepth 1 -maxdepth 1 ! -name .echo-satellite-owner -print -quit)" &&
+unset GATEWAY_DIAGNOSTIC_WAV_DIR &&
+docker compose -f deploy/docker-compose.yml up --build -d gateway
+```
+
+Do not use a broad temporary directory or delete subdirectories: a non-empty
+directory after the check is a cleanup failure that needs operator inspection.
 
 ## Optional telemetry evidence
 
