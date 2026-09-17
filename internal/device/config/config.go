@@ -39,7 +39,7 @@ func Bootstrap() Settings {
 			SpeechThreshold: 0.50, SpeechOnsetMS: 160, TrailingSilenceMS: 1500,
 			NoSpeechTimeoutMS: 3000, MaxTurnMS: 60000,
 		},
-		Audio: protocol.AudioConfig{ConditioningProfile: protocol.ConditioningProfileBypass},
+		Audio: protocol.AudioConfig{ConditioningProfile: protocol.ConditioningProfileDotGen2},
 		Logs:  protocol.LogSettings{ForwardLevel: protocol.LogLevelInfo},
 	}
 }

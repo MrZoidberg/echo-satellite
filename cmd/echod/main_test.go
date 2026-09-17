@@ -16,7 +16,36 @@ import (
 	"github.com/MrZoidberg/echo-satellite/internal/device/audio"
 	"github.com/MrZoidberg/echo-satellite/internal/device/audio/alsa"
 	"github.com/MrZoidberg/echo-satellite/internal/device/led"
+	"github.com/MrZoidberg/echo-satellite/internal/protocol"
 )
+
+func TestConditioningPreprocessor(t *testing.T) {
+	dot, err := conditioningPreprocessor(protocol.ConditioningProfileDotGen2)
+	require.NoError(t, err)
+	assert.Equal(t, string(audio.CandidateChannel0), dot.Name())
+	_, ok := dot.(audio.MultichannelPreprocessor)
+	assert.True(t, ok)
+
+	bypass, err := conditioningPreprocessor(protocol.ConditioningProfileBypass)
+	require.NoError(t, err)
+	assert.Equal(t, "bypass", bypass.Name())
+
+	_, err = conditioningPreprocessor("unknown")
+	assert.Error(t, err)
+}
+
+func TestProfilePreprocessor_BypassRetainsMic0(t *testing.T) {
+	processor := profilePreprocessor{processor: audio.Bypass{}}
+	first := []int16{1, 2}
+	got := processor.ProcessChannels([][]int16{first, {9, 9}, {8, 8}, {7, 7}, {6, 6}, {5, 5}, {4, 4}})
+	assert.Equal(t, first, got)
+
+	dot, err := conditioningPreprocessor(protocol.ConditioningProfileDotGen2)
+	require.NoError(t, err)
+	dotProcessor := profilePreprocessor{processor: dot}
+	assert.Equal(t, string(audio.CandidateChannel0), dotProcessor.Name())
+	assert.Equal(t, first, dotProcessor.ProcessChannels([][]int16{first, {9, 9}, {8, 8}, {7, 7}, {6, 6}, {5, 5}, {4, 4}}))
+}
 
 func TestOpenWakeOnlySource_LiveUsesDotMicrophone(t *testing.T) {
 	wantErr := errors.New("stop after config capture")

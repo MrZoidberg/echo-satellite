@@ -173,8 +173,12 @@ func runWakeOnly(parent context.Context, o opts) (returnErr error) {
 	if err != nil {
 		return err
 	}
+	preprocessor, err := conditioningPreprocessor(o.ConditioningProfile)
+	if err != nil {
+		return err
+	}
 	capturer, err := audio.NewCapturer(source, audio.CaptureConfig{
-		Device: source.Format(), Channels: channels, Preprocessor: audio.Bypass{}, StepSamples: wake.StepSamples,
+		Device: source.Format(), Channels: channels, Preprocessor: profilePreprocessor{processor: preprocessor}, StepSamples: wake.StepSamples,
 	}, slog.Default())
 	if err != nil {
 		return fmt.Errorf("create wake capturer: %w", err)
@@ -234,6 +238,50 @@ func runWakeOnly(parent context.Context, o opts) (returnErr error) {
 	runErr := runWakeWorkers(ctx, source, workers)
 	slog.Info("echod stopped", "mode", "wake-only", "device_id", identity.DeviceID)
 	return runErr
+}
+
+// conditioningPreprocessor maps stable protocol names to the fixed local
+// implementation. The Dot Gen 2 profile is deliberately channel 0: Task 10's
+// available comparison did not show a repeatable one-dB advantage for either
+// more complex candidate, so the documented simple-candidate tie-break applies.
+func conditioningPreprocessor(profile protocol.ConditioningProfile) (audio.Preprocessor, error) {
+	switch profile {
+	case protocol.ConditioningProfileBypass:
+		return audio.Bypass{}, nil
+	case protocol.ConditioningProfileDotGen2:
+		processor, err := audio.NewConditioning(audio.CandidateChannel0)
+		if err != nil {
+			return nil, fmt.Errorf("create Dot Gen 2 conditioning: %w", err)
+		}
+		return processor, nil
+	default:
+		return nil, fmt.Errorf("unsupported conditioning profile %q", profile)
+	}
+}
+
+// profilePreprocessor receives all physical microphones. Bypass intentionally
+// selects mic0, preserving the prior bypass-v1 signal rather than silently
+// becoming a seven-channel mix.
+type profilePreprocessor struct {
+	processor audio.Preprocessor
+}
+
+func (p profilePreprocessor) Process(in []int16) []int16 {
+	return p.processor.Process(in)
+}
+
+func (p profilePreprocessor) ProcessChannels(mics [][]int16) []int16 {
+	if processor, ok := p.processor.(audio.MultichannelPreprocessor); ok {
+		return processor.ProcessChannels(mics)
+	}
+	if len(mics) == 0 {
+		return nil
+	}
+	return p.processor.Process(mics[0])
+}
+
+func (p profilePreprocessor) Name() string {
+	return p.processor.Name()
 }
 
 func runWakeWorkers(parent context.Context, source io.Closer, workers []wakeWorker) error {
@@ -453,9 +501,11 @@ func handleActionTap(press buttons.Press, animator *led.Service, onActionTap fun
 }
 
 // announcedCapabilities is what this build would send in hello. Wake detection
-// is always local, so every build announces it.
-func announcedCapabilities() protocol.Capabilities {
-	return protocol.NewCapabilities(
+// is always local, so every build announces it. Diagnostics can explicitly
+// remove update capability, which prevents their staged process accepting an
+// offer intended for the installed agent.
+func announcedCapabilities(disableUpdates bool) protocol.Capabilities {
+	caps := []protocol.Capability{
 		protocol.CapWakeLocal,
 		protocol.CapCommandEndpointingLocal,
 		protocol.CapAudioCapture,
@@ -463,8 +513,11 @@ func announcedCapabilities() protocol.Capabilities {
 		protocol.CapButton,
 		protocol.CapLED,
 		protocol.CapMute,
-		protocol.CapUpdateSingle,
-	)
+	}
+	if !disableUpdates {
+		caps = append(caps, protocol.CapUpdateSingle)
+	}
+	return protocol.NewCapabilities(caps...)
 }
 
 // logValue prevents values received from configuration or discovery from

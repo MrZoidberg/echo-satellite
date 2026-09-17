@@ -131,6 +131,22 @@ device closes that window when endpointing decides the command is complete.
 
 The two functions have separate configuration and thresholds.
 
+### 3.3.1 Command-audio conditioning
+
+The qualified-configuration name `dot-gen2-qualified-v1` is the default local
+profile. It currently selects bounded channel-0 conditioning before the single
+`audio.Fanout`; therefore local wake VAD, wake inference, pre-roll, command
+endpointing, and active-turn PCM consume the same conditioned frames. The
+gateway may select only a stable profile name, never channel delays, beamformer
+weights, or gain internals. Wake-VAD and endpointing settings remain
+independent. A profile change is persisted only at the idle boundary and then
+requests a controlled `echod` restart, so a capture pipeline is never altered
+while it owns an active audio source.
+
+This default is provisional pending the remaining Task 10/11 qualified-Dot
+trials recorded in `docs/device-diagnostics.md`; it is not a claim that the
+unsteered or delay-and-sum candidates have been fully rejected.
+
 ### 3.4 The gateway owns assistant and fleet orchestration
 
 The gateway is responsible for:
@@ -1358,6 +1374,8 @@ wake:
     threshold: 0.50     # measured on the qualified Dot; see docs/device-diagnostics.md
     lookback_ms: 1200   # measured effective-VAD lookback
   preroll_ms: 600       # measured shortest value preserving the first command word
+audio:
+  conditioning_profile: dot-gen2-qualified-v1
 ```
 
 There is deliberately no gateway wake mode.

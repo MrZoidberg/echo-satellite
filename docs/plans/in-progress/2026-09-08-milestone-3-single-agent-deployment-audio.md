@@ -903,7 +903,36 @@ timing bounds.
 
 ### Task 11: Integrate and requalify command audio
 
-**Status:** not started
+**Status:** in progress
+
+#### Task 11 operator-run hardware procedure
+
+**Status:** completed 2026-09-16
+
+**Purpose:** Make the real-Dot qualification reproducible without installing
+an unverified diagnostic binary or retaining raw audio by default.
+
+**Scope and ownership:** `tools/device-lab/payloads/task11_command_audio.sh`,
+the runner's host tests, and `docs/device-diagnostics.md`. The payload stages
+the current ARM64 `echod` only beneath its token-owned root and relies on the
+existing paired INI with an isolated device config state; it does not install
+an agent or modify gateway state.
+
+**Procedure:** Build the ARM64 agent, add the gateway's temporary opt-in WAV
+and log directories, then invoke `device_lab.py run-payload` with explicit
+`/usr/bin/adb`, `G090LF0964060EHP`, the Task 11 payload, the built diagnostic,
+and `--stop-known-launcher`. The payload records all human trial windows in a
+sanitized UTC schedule, deletes local agent logs, and lets the runner cleanup,
+verify the installed digest, and restart the known launcher.
+
+**Verification before hardware:** `sh -n` validates the shell payload and
+`uv run --no-project --script tools/device-lab/device_lab_test.py` performs
+static contract checks for its isolated paths, phase schedule, no-raw-audio
+intent, bounded signal cleanup, and result manifest. The runner buffers the
+payload output and the current runtime lacks task-attributable capture-health
+and conditioning metrics; add a real-time phase cue and an attributable
+metric/health collector before using this procedure as qualification evidence.
+Real execution remains the parent Task 11 acceptance evidence.
 
 **Purpose:** Prove that the selected conditioning improves audio without
 regressing local wake or endpointing.
@@ -1069,6 +1098,81 @@ completion evidence names which checks ran on real hardware.
 - [ ] Hardware and host/simulator evidence are identified separately.
 
 ## Progress log
+
+- 2026-09-17: Task 11 hardware execution was intentionally stopped before any
+  human wake, command, endpointing, idle/music, or diagnostic-WAV acceptance
+  evidence was recorded. Device-lab session
+  `20260917T104439Z-c5368b3589` exposed FireOS-specific runner defects while
+  releasing the known agent: the valid parent is Magisk BusyBox executing
+  `sh /sbin/.core/img/.core/service.d/echo-satellite.sh`, rather than
+  `/system/bin/sh`, and cleanup used an unqualified `rm`. Both are **fixed**:
+  release accepts only that exact hook command with either qualified shell
+  executable, cleanup uses preflight-qualified BusyBox, and interrupted
+  sessions can remove only a digest-checked, token-owned residual root. The
+  runner now restarts the recognized launcher after successful `verify-clean`.
+  The final cleanup-residual-root, verify-clean, and launcher-restart phases
+  passed with the original installed-agent digest. Host checks: `uv run
+  --no-project --script tools/device-lab/device_lab_test.py` (32 tests) and
+  `git diff --check`. This is recovery evidence only; Task 11 remains
+  in progress and requires a present operator for its spoken/audio trials.
+  Fresh-context review then found two high-severity failure-path defects:
+  restoration intent was recorded too late if post-TERM release checks failed,
+  and a second host interrupt could skip remaining restoration. Both are
+  **fixed**: the exact validated launcher identity is persisted before TERM,
+  then revalidated before release, and all cleanup/verify/restart actions catch
+  `BaseException` before reporting the original failure. The updated device-lab
+  host suite has 33 passing tests. Follow-up review found one remaining
+  high-severity crash-window risk: pre-TERM restoration intent could relaunch
+  alongside an agent that never stopped. This is **fixed**: restoration now
+  scans `/proc` on the device and no-ops only with exactly one live installed
+  agent, failing closed for multiple agents. The host suite has 34 passing
+  tests; final follow-up review is pending.
+
+- 2026-09-16: Task 11 claimed by Codex after the user explicitly directed a
+  provisional profile change before the deferred Task 10 acoustic cells are
+  complete. `dot-gen2-qualified-v1` is provisionally mapped to bounded
+  channel-0 conditioning, the simplest candidate favored by the specified
+  tie-breaker for the available front/550 mm results. This is an integration
+  decision, not a claim that Task 10 has selected or qualified a profile: its
+  remaining off-axis/far-field, wake, and endpointing evidence remains open.
+  Task 11 cannot be completed until its real-Dot trials, gateway diagnostic
+  recording check, and raw-audio-storage cleanup are recorded.
+
+- 2026-09-16: Fresh-context Task 11 review found two correctness defects, both
+  **fixed**. Gateway desired state now defaults to `dot-gen2-qualified-v1`, and
+  the capture composition always supplies the seven physical channels to a
+  static profile preprocessor. Its `bypass-v1` branch explicitly returns mic0,
+  preserving the former fallback rather than changing it into a seven-channel
+  average. A gateway-requested profile change is atomically persisted at the
+  idle boundary and then requests the existing controlled restart, so the new
+  process alone opens the selected pipeline. Follow-up review accepted both
+  dispositions with no remaining findings.
+
+- 2026-09-16: Qualified-Dot device-lab session
+  `20260916T160204Z-51df06eb0f` passed explicit `/usr/bin/adb` and
+  `G090LF0964060EHP` preflight, prepare, cleanup, and `verify-clean`; the
+  installed-agent digest was unchanged. An initial cleanup before `prepare`
+  failed because the runner's cleanup payload requires the prepared initial
+  state; resuming through `prepare` restored its normal cleanup path. No new
+  agent was installed, no task acoustic/voice trial was run, and no raw audio
+  was retained. This is setup/cleanup evidence only, not Task 11 acceptance.
+
+- 2026-09-16: Prepared the Task 11 operator payload and documentation; it
+  stages the diagnostic agent under the token-owned root with isolated config
+  and pairing state, selects the provisional profile, records only a sanitized
+  schedule/summary, and bounds shutdown after TERM. The runner now performs
+  cleanup, `verify-clean`, and launcher restart even if the host receives
+  `KeyboardInterrupt`. `sh -n tools/device-lab/payloads/task11_command_audio.sh`,
+  `uv run --no-project --script tools/device-lab/device_lab_test.py` (27 tests),
+  `git diff --check`, and `make fmt-check` passed. Fresh review findings about
+  pairing isolation, interrupt cleanup, unbounded agent shutdown, WAV
+  deletion verification, and unsafe gateway deployment offers were **fixed**:
+  diagnostics use `--disable-updates`, omit `update.single.v1`, and have no
+  deployment handler. Two qualification prerequisites remain
+  **postponed**: a host-visible real-time phase cue, and an attributable
+  conditioning/capture-health metric collector. No hardware trial was run, and
+  Task 11 remains in progress. The follow-up fresh-context review accepted the
+  update-offer remediation with no remaining safety or documentation finding.
 
 - 2026-09-15: The approved EchoLocal conditioning-baseline amendment changes
   Task 9 onward. Task 9 now owns copied/adapted, attributable and deterministic

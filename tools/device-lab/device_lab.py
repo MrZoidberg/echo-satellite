@@ -409,19 +409,29 @@ class Runner:
         launcher = DEFAULT_HOOK_PATH
 
         def release() -> dict[str, str]:
-            script = (
-                f"BB=/data/adb/magisk/busybox; pid={pid}; test \"$($BB readlink /proc/$pid/exe)\" = /data/local/bin/echod; "
-                "ppid=$($BB awk '/^PPid:/{print $2}' /proc/$pid/status); test \"$ppid\" -gt 1; "
-                "test \"$($BB readlink /proc/$ppid/exe)\" = /system/bin/sh; "
-                f"cmd=$($BB tr '\\000' ' ' < /proc/$ppid/cmdline); case \"$cmd\" in 'sh {launcher} '*) ;; *) exit 70;; esac; "
-                "kill -TERM $pid $ppid; tries=0; while { kill -0 $pid 2>/dev/null || kill -0 $ppid 2>/dev/null; } && test $tries -lt 50; do sleep 0.1; tries=$((tries+1)); done; "
-                "! kill -0 $pid 2>/dev/null && ! kill -0 $ppid 2>/dev/null; for p in /proc/[0-9]*; do for fd in $p/fd/*; do target=$($BB readlink $fd 2>/dev/null || true); case \"$target\" in /dev/snd/*) exit 71;; esac; done; done; $BB printf 'agent_pid=%s\\nlauncher_pid=%s\\nagent_executable=/data/local/bin/echod\\n' $pid $ppid"
+            validate = (
+                f"BB=/data/adb/magisk/busybox; pid={pid}; fail() {{ $BB printf '%s\\n' \"$1\" >&2; exit \"$2\"; }}; "
+                "test \"$($BB readlink /proc/$pid/exe)\" = /data/local/bin/echod || fail 'agent executable changed' 70; "
+                "ppid=$($BB awk '/^PPid:/{print $2}' /proc/$pid/status); test \"$ppid\" -gt 1 || fail 'agent has no launcher parent' 70; "
+                f"parent_exe=$($BB readlink /proc/$ppid/exe); cmd=$($BB tr '\\000' ' ' < /proc/$ppid/cmdline); case \"$parent_exe\" in /system/bin/sh|/sbin/.core/mirror/bin/busybox) ;; *) fail \"launcher parent executable=$parent_exe command=$cmd\" 70;; esac; "
+                f"case \"$cmd\" in 'sh {launcher}'|'sh {launcher} '*|'/system/bin/sh {launcher}'|'/system/bin/sh {launcher} '*) ;; *) fail \"launcher parent command is not recognized hook: $cmd\" 70;; esac; $BB printf 'agent_pid=%s\\nlauncher_pid=%s\\nagent_executable=/data/local/bin/echod\\n' $pid $ppid"
             )
-            output = self._must_succeed(self.root_shell(script), "release known launcher")["output"]
+            output = self._must_succeed(self.root_shell(validate), "validate known launcher")["output"]
             values = dict(line.split("=", 1) for line in output.splitlines() if "=" in line)
-            self.state["released_launcher"] = {"agent_pid": values.get("agent_pid", raw_pid), "agent_executable": values.get("agent_executable", ""), "launcher_pid": values.get("launcher_pid", ""), "path": launcher}
+            if values.get("agent_pid") != str(pid) or values.get("launcher_pid", "").isdigit() is False or values.get("agent_executable") != "/data/local/bin/echod":
+                raise LabError("recognized launcher validation returned malformed identity")
+            # Record the recovery intent before TERM. If a post-TERM check fails,
+            # run_payload's final restoration still starts this exact hook.
+            self.state["released_launcher"] = {"agent_pid": values["agent_pid"], "agent_executable": values["agent_executable"], "launcher_pid": values["launcher_pid"], "path": launcher}
             self._save()
-            return {"agent_pid": values.get("agent_pid", raw_pid), "agent_executable": values.get("agent_executable", ""), "launcher_pid": values.get("launcher_pid", ""), "launcher_path": launcher}
+            terminate = (
+                validate.removesuffix("; $BB printf 'agent_pid=%s\\nlauncher_pid=%s\\nagent_executable=/data/local/bin/echod\\n' $pid $ppid")
+                + "; "
+                "kill -TERM $pid $ppid; tries=0; while { kill -0 $pid 2>/dev/null || kill -0 $ppid 2>/dev/null; } && test $tries -lt 50; do sleep 0.1; tries=$((tries+1)); done; "
+                "! kill -0 $pid 2>/dev/null && ! kill -0 $ppid 2>/dev/null || fail 'recognized launcher did not exit after TERM' 71; for p in /proc/[0-9]*; do for fd in $p/fd/*; do target=$($BB readlink $fd 2>/dev/null || true); case \"$target\" in /dev/snd/*) fail 'microphone remains busy after launcher release' 71;; esac; done; done"
+            )
+            self._must_succeed(self.root_shell(terminate), "release known launcher")
+            return {"agent_pid": values["agent_pid"], "agent_executable": values["agent_executable"], "launcher_pid": values["launcher_pid"], "launcher_path": launcher}
 
         self.phase("release-known-launcher", release)
 
@@ -565,6 +575,8 @@ class Runner:
         return destination
 
     def restart_known_launcher(self) -> None:
+        if self.state.get("launcher_restarted"):
+            return
         released = self.state.get("released_launcher")
         if not isinstance(released, dict):
             return
@@ -575,7 +587,10 @@ class Runner:
         try:
             def restart() -> dict[str, str]:
                 script = (
-                    f"BB=/data/adb/magisk/busybox; sh {path} >/dev/null 2>&1 & launcher_pid=$!; "
+                    "BB=/data/adb/magisk/busybox; existing=; existing_count=0; for p in /proc/[0-9]*; do candidate=${p#/proc/}; "
+                    "test \"$($BB readlink $p/exe 2>/dev/null || true)\" = /data/local/bin/echod || continue; existing=$candidate; existing_count=$((existing_count+1)); done; "
+                    "case $existing_count in 0) ;; 1) $BB printf 'launcher_status=already_running\nagent_pid=%s\nagent_executable=/data/local/bin/echod\n' $existing; exit 0;; *) $BB printf 'expected zero or one production agent, found %s\n' $existing_count >&2; exit 73;; esac; "
+                    f"sh {path} >/dev/null 2>&1 & launcher_pid=$!; "
                     "tries=0; agent_pid=; while test $tries -lt 50; do kill -0 $launcher_pid 2>/dev/null || exit 72; "
                     "for p in /proc/[0-9]*; do candidate=${p#/proc/}; test \"$($BB readlink $p/exe 2>/dev/null || true)\" = /data/local/bin/echod || continue; "
                     "parent=$($BB awk '/^PPid:/{print $2}' $p/status); test \"$parent\" = \"$launcher_pid\" && agent_pid=$candidate && break; done; "
@@ -584,8 +599,10 @@ class Runner:
                 )
                 output = self._must_succeed(self.root_shell(script), "restart known launcher")["output"]
                 values = dict(line.split("=", 1) for line in output.splitlines() if "=" in line)
-                return {"launcher_pid": values.get("launcher_pid", ""), "agent_pid": values.get("agent_pid", ""), "agent_executable": values.get("agent_executable", "")}
+                return {"launcher_status": values.get("launcher_status", "started"), "launcher_pid": values.get("launcher_pid", ""), "agent_pid": values.get("agent_pid", ""), "agent_executable": values.get("agent_executable", "")}
             self.phase("restart-known-launcher", restart)
+            self.state["launcher_restarted"] = True
+            self._save()
         finally:
             self.release_host_lock()
 
@@ -603,13 +620,13 @@ class Runner:
             self.verify_remote_owner(payload)
             self.phase(f"run-payload-{payload}", lambda: self._must_succeed(self.run_remote_payload(payload, diagnostic), f"run payload {payload}"))
             self.collect_results()
-        except Exception as error:
+        except BaseException as error:
             primary = error if isinstance(error, LabError) else LabError(f"payload runner failed: {safe_failure(str(error))}")
         cleanup_errors: list[str] = []
         for action in (self.cleanup, self.verify_clean, self.restart_known_launcher):
             try:
                 action()
-            except Exception as error:
+            except BaseException as error:
                 cleanup_errors.append(str(error) if isinstance(error, LabError) else safe_failure(str(error)))
         cleanup_error = LabError("; ".join(cleanup_errors)) if cleanup_errors else None
         if primary and cleanup_error:
@@ -699,6 +716,11 @@ class Runner:
     def cleanup(self) -> None:
         self.acquire_host_lock()
         try:
+            initial = self.state.get("initial_device_state")
+            remote_initial = self.root_shell(f"test -f {self.remote_root}/initial-state")
+            if self.state.get("cleaned") or (isinstance(initial, dict) and remote_initial.returncode):
+                self._cleanup_residual_root()
+                return
             # Resume may follow a harness repair; refresh only the token-owned
             # payloads before executing cleanup, never device/product files.
             self.stage_payloads()
@@ -708,6 +730,27 @@ class Runner:
             self._save()
         finally:
             self.release_host_lock()
+
+    def _cleanup_residual_root(self) -> None:
+        """Remove only a proven token-owned residual root after interrupted cleanup."""
+
+        initial = self.state.get("initial_device_state")
+        if not isinstance(initial, dict) or not isinstance(initial.get("installed_agent_digest"), str):
+            raise LabError("residual cleanup requires captured initial device state")
+        if self.installed_digest() != initial["installed_agent_digest"]:
+            raise LabError("residual cleanup refused because installed-agent digest changed")
+
+        def remove() -> dict[str, str]:
+            script = (
+                f"BB=/data/adb/magisk/busybox; root={self.remote_root}; "
+                "test ! -e \"$root\" && { echo root=absent; exit 0; }; "
+                f"test \"$($BB cat \"$root/.owner\" 2>/dev/null)\" = '{self.token}' || exit 73; "
+                f"test \"$($BB cat \"$root/.lock\" 2>/dev/null)\" = '{self.token}' || exit 74; "
+                "$BB rm -rf \"$root\"; test ! -e \"$root\"; echo root=removed"
+            )
+            return {"residual_root": self._must_succeed(self.root_shell(script), "remove token-owned residual root")["output"].strip()}
+
+        self.phase("cleanup-residual-root", remove)
 
     def verify_clean(self) -> None:
         self.acquire_host_lock()
@@ -721,11 +764,24 @@ class Runner:
                 self.evidence["checks"].append({"name": "installed-agent-digest", "status": "failed", "observation": drift, "provenance": "hardware"})
                 self._save()
                 raise LabError(f"installed-agent digest changed during diagnostics (expected {initial['installed_agent_digest']}, observed {current}); {drift['recovery']}")
-            absent = self.root_shell(f"test ! -e {self.remote_root}")
-            self._must_succeed(absent, "verify removal of token-owned diagnostic root")
+            root_status = self.root_shell(
+                f"BB=/data/adb/magisk/busybox; root={self.remote_root}; "
+                "if test ! -e \"$root\"; then echo absent; exit 0; fi; "
+                "test -d \"$root\" && echo root_kind=directory || echo root_kind=non_directory; "
+                "echo root_entries=$($BB find \"$root\" -mindepth 1 -maxdepth 1 2>/dev/null | $BB wc -l); "
+                "for p in /proc/[0-9]*; do pid=${p#/proc/}; cwd=$($BB readlink \"$p/cwd\" 2>/dev/null || true); "
+                "test \"$cwd\" = \"$root\" && echo cwd_holder=$pid; done"
+            )
+            self._must_succeed(root_status, "inspect token-owned diagnostic root")
+            if root_status.stdout.strip() != "absent":
+                raise LabError(f"token-owned diagnostic root remains after cleanup ({bounded(root_status.stdout).strip()})")
             residual = self.root_shell(f"BB=/data/adb/magisk/busybox; for p in /proc/[0-9]*/cmdline; do test -r \"$p\" || continue; text=$($BB tr '\\000' ' ' < \"$p\" 2>/dev/null || true); case \"$text\" in *'{self.remote_root}'*) exit 71;; esac; done")
             self._must_succeed(residual, "verify no token-owned process remains")
             self.phase("verify-clean", lambda: {"installed_agent_digest": current, "remote_root": "absent", "owned_processes": "absent"})
+            # A standalone cleanup/verify sequence must not leave the recognized
+            # production launcher stopped. The method is idempotent for run-payload,
+            # which performs this same restoration in its final cleanup path.
+            self.restart_known_launcher()
         finally:
             self.release_host_lock()
 

@@ -1300,6 +1300,92 @@ remaining positions repeat that result*. It does not select
 `verify-clean` passed with the installed-agent digest unchanged; the controlled
 launcher was then restarted.
 
+### Task 11 provisional integration and pending requalification
+
+On 2026-09-16, the user directed `echod` to use the provisional
+`dot-gen2-qualified-v1` profile before the deferred Task 10 acoustic cells
+were complete. The profile maps to bounded channel-0 conditioning and is run
+once before `audio.Fanout`; wake VAD/model, pre-roll, endpointing, and sent PCM
+therefore share one conditioned frame stream. The default does not merge wake
+VAD with command endpointing; a profile change is persisted at the idle
+boundary and requests a controlled `echod` restart.
+
+This is not hardware qualification evidence. Before declaring Task 11 complete,
+record a token-owned device-lab session with: 20 `okay_nabu` trials (at least
+18 accepts); a 15-minute idle/music run with zero false accepts; three
+continuous quiet-speech timeout trials; three endpointed speech-plus-silence
+trials; three silence-only no-speech trials; zero XRuns/dropped frames; at most
+0.1% conditioned clipping; processing latency, CPU/RSS, gain, peak/RMS and
+speech/noise metrics; and an opt-in gateway diagnostic WAV duration/stop-reason
+check followed by disabling raw-audio storage again.
+
+### Task 11 command-audio run procedure
+
+`tools/device-lab/payloads/task11_command_audio.sh` is the prepared
+operator-guided run. It stages a newly built `echod` only in the token-owned
+diagnostic root, starts it with the paired agent INI but an isolated
+`config-state` and pairing state, and selects `dot-gen2-qualified-v1`. It never
+writes `/data/local/bin/echod`, gateway credentials, or persisted device state:
+it also passes `--disable-updates`, removes `update.single.v1` from its hello,
+and has no deployment handler, so a gateway `update.offer` is ignored.
+The payload's cleanup PID and TERM/HUP/INT trap let device-lab stop only that
+staged process; the runner then restores the known launcher. Its collected
+artifacts are a UTC schedule and a no-audio summary; local JSON logs are
+deleted before collection. The payload emits sanitized `TASK11` phase lines,
+but the operator must also use the documented phase order and gateway events
+for authoritative timing.
+
+Before the run, confirm the installed agent can reach the gateway through its
+explicit URL or persisted authenticated pairing; the payload intentionally uses
+the isolated config state and the agent startup stops `mdnsd`. The gateway
+operator must use the current device-config profile (whose default is
+`dot-gen2-qualified-v1`), raise its configuration revision, and add
+`--diagnostic-wav-dir "$TASK11_WAV_DIR"` and
+`--log-file "$TASK11_GATEWAY_LOG"` to the existing gateway invocation. The
+WAV directory must be a fresh operator-controlled directory with restrictive
+permissions. Do not put it under the device-lab result root. The gateway log's
+`device turn started` and `device turn ended` records are the authoritative
+trigger, stop-reason, and duration evidence.
+
+After `make build-device`, the prepared device session uses the explicit
+qualified inputs below (it takes about 22 minutes and requires one operator
+throughout):
+
+```sh
+uv run --no-project --script tools/device-lab/device_lab.py run-payload \
+  --adb /usr/bin/adb --serial G090LF0964060EHP \
+  --payload task11_command_audio.sh --diagnostic .bin/linux_arm64/echod \
+  --stop-known-launcher
+```
+
+The payload gives twenty six-second `okay_nabu` windows, then fifteen minutes
+of idle/music, three 66-second continuous-quiet-speech windows, three
+wake-command-silence windows, and three Action-button silence windows. Follow
+the spoken instructions embedded in each schedule entry. A scheduled window
+is not evidence by itself: correlate it with gateway events. The runner buffers
+payload stdout until the end, so this command has no host-visible real-time
+phase cue; an independently synchronized timer/display is mandatory before a
+human uses it for qualification. Accept only 18 or
+more wake starts, zero idle/music wake starts, `timeout` at 59.9--60.2 seconds
+for every continuous-speech turn, `endpointed` 1.3--2.2 seconds after each
+recorded speech end, and `no_speech` 2.8--3.3 seconds after every Action-button
+start. Reject a `capture_overrun`, dropped frame, or XRun.
+
+For exactly one endpointed turn, inspect the gateway WAV duration against the
+matching `device turn ended` record and confirm its `endpointed` reason. Then
+gracefully stop the temporary gateway, remove every regular file from
+`$TASK11_WAV_DIR` including hidden `.turn-*.part` files, verify the directory
+is empty, restart it without `--diagnostic-wav-dir`, and record that no
+diagnostic WAV directory is configured. Add the current Task 10 comparison's
+gain, peak/RMS, clipping fraction,
+speech/noise-separation, and processing-duration metrics to the Task 11
+worksheet; reject clipping above 0.1%. Record agent CPU/RSS separately from
+the staged process before cleanup. The present runtime does not export a live
+conditioning metric stream or task-attributable XRun/dropped-frame report, so
+do not substitute guessed values for the Task 10 profile metrics. Consequently,
+this payload cannot complete Task 11: add a real-time cue and an attributable
+metric/health collector before treating any execution as qualification evidence.
+
 A front, 550 mm loud-speech cell in device-lab session
 `20260915T161447Z-3e028ea061` likewise used a matched ten-second room-noise
 baseline and the semantic cyan-green `listening` ring during the human speech

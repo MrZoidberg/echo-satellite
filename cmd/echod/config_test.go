@@ -25,6 +25,9 @@ func TestParseArgs_Defaults(t *testing.T) {
 	assert.Equal(t, 5000, o.DiscoveryTimeout)
 	assert.Equal(t, "/data/local/etc/echo-satellite/paired-gateway.json", o.PairingState)
 	assert.Equal(t, "/data/local/etc/echo-satellite/config.json", o.ConfigState)
+	assert.Equal(t, protocol.ConditioningProfileDotGen2, o.ConditioningProfile)
+	assert.Equal(t, "0,1,2,3,4,5,6", o.MicChannels)
+	assert.False(t, o.DisableUpdates)
 }
 
 func TestParseArgs_GatewayStateOptionsFollowFlagEnvironmentIniPrecedence(t *testing.T) {
@@ -71,6 +74,16 @@ func TestParseArgs_MicChannelsAcceptsCommaList(t *testing.T) {
 	channels, err := o.micChannelList()
 	require.NoError(t, err)
 	assert.Equal(t, []int{0, 2, 6}, channels)
+}
+
+func TestParseArgs_ConditioningProfileFollowsFlagEnvironmentIniPrecedence(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "echod.ini")
+	require.NoError(t, os.WriteFile(path, []byte("conditioning-profile = bypass-v1\n"), 0o600))
+	t.Setenv("ECHOD_CONDITIONING_PROFILE", "dot-gen2-qualified-v1")
+
+	o, err := parseArgs([]string{"--config=" + path, "--conditioning-profile=bypass-v1"})
+	require.NoError(t, err)
+	assert.Equal(t, protocol.ConditioningProfileBypass, o.ConditioningProfile)
 }
 
 func TestParseArgs_WakeBooleansCanBeDisabled(t *testing.T) {
@@ -178,7 +191,14 @@ func TestParseArgs_MissingConfigFile(t *testing.T) {
 }
 
 func TestAnnouncedCapabilities_AlwaysLocalWake(t *testing.T) {
-	caps := announcedCapabilities()
+	caps := announcedCapabilities(false)
 	assert.True(t, caps.Has(protocol.CapWakeLocal), "wake detection is always device-local")
 	assert.True(t, caps.Has(protocol.CapUpdateSingle))
+}
+
+func TestParseArgs_DisableUpdatesRemovesDeploymentCapability(t *testing.T) {
+	o, err := parseArgs([]string{"--disable-updates"})
+	require.NoError(t, err)
+	assert.True(t, o.DisableUpdates)
+	assert.False(t, announcedCapabilities(o.DisableUpdates).Has(protocol.CapUpdateSingle))
 }

@@ -126,6 +126,7 @@ type deviceRuntimeConfig struct {
 	prepareWake   func(deviceconfig.Settings) (wake.Engine, error)
 	ensurePreRoll func(int) error
 	swapWake      func(wake.Engine) error
+	restart       func()
 	mu            sync.Mutex
 	pending       *deviceconfig.Settings
 	pendingEngine wake.Engine
@@ -235,6 +236,7 @@ func (c *deviceRuntimeConfig) applyPending() {
 }
 
 func (c *deviceRuntimeConfig) applyLocked(candidate deviceconfig.Settings, prepared wake.Engine) error {
+	profileChanged := candidate.Audio.ConditioningProfile != c.settings.Audio.ConditioningProfile
 	if err := c.store.Save(candidate); err != nil {
 		return fmt.Errorf("persist device configuration: %w", err)
 	}
@@ -246,6 +248,9 @@ func (c *deviceRuntimeConfig) applyLocked(candidate deviceconfig.Settings, prepa
 		slog.Warn("close replaced wake model", "error", err)
 	}
 	c.settings = candidate
+	if profileChanged && c.restart != nil {
+		c.restart()
+	}
 	return nil
 }
 
@@ -711,6 +716,7 @@ func runConnected(ctx context.Context, o opts) (returnErr error) {
 	}
 	bootstrap := deviceconfig.Bootstrap()
 	bootstrap.Wake = o.wakeConfig()
+	bootstrap.Audio.ConditioningProfile = o.ConditioningProfile
 	if _, tokenErr := client.LoadToken(o.GatewayTokenFile); tokenErr != nil {
 		return fmt.Errorf("load gateway token: %w", tokenErr)
 	}
@@ -733,7 +739,11 @@ func runConnected(ctx context.Context, o opts) (returnErr error) {
 	if err != nil {
 		return err
 	}
-	capturer, err := audio.NewCapturer(raw, audio.CaptureConfig{Device: raw.Format(), Channels: channels, Preprocessor: audio.Bypass{}, StepSamples: wake.StepSamples}, slog.Default())
+	preprocessor, err := conditioningPreprocessor(settings.Audio.ConditioningProfile)
+	if err != nil {
+		return err
+	}
+	capturer, err := audio.NewCapturer(raw, audio.CaptureConfig{Device: raw.Format(), Channels: channels, Preprocessor: profilePreprocessor{processor: preprocessor}, StepSamples: wake.StepSamples}, slog.Default())
 	if err != nil {
 		return fmt.Errorf("create wake capturer: %w", err)
 	}
@@ -768,6 +778,7 @@ func runConnected(ctx context.Context, o opts) (returnErr error) {
 	}
 	vad := vadlevel.NewScorer()
 	defer func() { returnErr = errors.Join(returnErr, vad.Close()) }()
+	restartRequested := make(chan struct{}, 1)
 	state := &deviceRuntimeConfig{store: store, settings: settings, turns: turns, models: models, ensurePreRoll: func(milliseconds int) error {
 		return ring.EnsureDuration(time.Duration(milliseconds) * time.Millisecond)
 	}}
@@ -783,6 +794,12 @@ func runConnected(ctx context.Context, o opts) (returnErr error) {
 		return next, nil
 	}
 	state.swapWake = dynamicEngine.Swap
+	state.restart = func() {
+		select {
+		case restartRequested <- struct{}{}:
+		default:
+		}
+	}
 	pipeline := wake.Pipeline{Engines: []wake.Engine{dynamicEngine}, VAD: vad, Gate: wake.Gate{Thresholds: wake.Thresholds{Wake: settings.Wake.Threshold, VAD: settings.Wake.VAD.Threshold}, MinInterval: time.Duration(settings.Wake.MinIntervalMS) * time.Millisecond}, Ring: ring, Stats: wake.NewStats(wake.StatsConfig{}), Config: settings.Wake, ConfigSource: func() wake.Config { return state.current().Wake }}
 	turns.onIdle = func() {
 		state.applyPending()
@@ -791,27 +808,34 @@ func runConnected(ctx context.Context, o opts) (returnErr error) {
 		}
 	}
 	resolver := timedResolver{resolver: discovery.NewResolver(mdns.NewDevice(), protocol.ProtocolVersion), timeout: time.Duration(o.DiscoveryTimeout) * time.Millisecond}
-	installed := installedReleaseDiagnostics(update.DefaultMetadataPath)
-	restartRequested := make(chan struct{}, 1)
-	manager := &deploymentManager{turns: turns, pending: installed, metadataPath: update.DefaultMetadataPath, restart: func() {
-		select {
-		case restartRequested <- struct{}{}:
-		default:
+	var manager *deploymentManager
+	if o.DisableUpdates {
+		slog.Warn("gateway deployments disabled", "diagnostic_mode", true)
+	} else {
+		installed := installedReleaseDiagnostics(update.DefaultMetadataPath)
+		manager = &deploymentManager{turns: turns, pending: installed, metadataPath: update.DefaultMetadataPath, restart: func() {
+			select {
+			case restartRequested <- struct{}{}:
+			default:
+			}
+		}}
+		manager.newInstaller = func(_ protocol.UpdateOffer, access client.UpdateAccess) (*update.Installer, error) {
+			return update.New(update.Config{
+				Downloader: update.HTTPDownloader{Client: access.HTTPClient, GatewayAuthority: access.GatewayAuthority, RequestHeaders: access.Headers},
+				FS:         update.OSFileSystem{}, Space: statSpace{}, Clock: updateClock{}, Trust: release.TrustPolicy{},
+				Voice: turns, Device: release.Device{Architecture: "linux-arm64", Protocol: protocol.ProtocolVersion},
+				TargetPath: update.DefaultAgentPath, MetadataPath: update.DefaultMetadataPath, GatewayAuthority: access.GatewayAuthority,
+				MaxArtifactSize: o.UpdateMaxSize, DirectorySync: true,
+			})
 		}
-	}}
-	manager.newInstaller = func(_ protocol.UpdateOffer, access client.UpdateAccess) (*update.Installer, error) {
-		return update.New(update.Config{
-			Downloader: update.HTTPDownloader{Client: access.HTTPClient, GatewayAuthority: access.GatewayAuthority, RequestHeaders: access.Headers},
-			FS:         update.OSFileSystem{}, Space: statSpace{}, Clock: updateClock{}, Trust: release.TrustPolicy{},
-			Voice: turns, Device: release.Device{Architecture: "linux-arm64", Protocol: protocol.ProtocolVersion},
-			TargetPath: update.DefaultAgentPath, MetadataPath: update.DefaultMetadataPath, GatewayAuthority: access.GatewayAuthority,
-			MaxArtifactSize: o.UpdateMaxSize, DirectorySync: true,
-		})
 	}
 	session, err := client.New(client.Options{Discovery: o.discoveryConfig(), HelloSource: func() protocol.Hello {
 		current := state.current()
-		metadata := manager.pendingMetadata()
-		return protocol.Hello{DeviceID: identity.DeviceID, AgentVersion: revision, Protocol: protocol.ProtocolVersion, Capabilities: announcedCapabilities(), WakeConfig: wakeSummary(current), UpdateState: protocol.PhaseIdle, InstalledVersion: metadata.Version, InstalledBuildID: metadata.BuildID, PendingDeploymentID: metadata.PendingDeploymentID, ConfigVersion: current.Version}
+		metadata := update.Metadata{}
+		if manager != nil {
+			metadata = manager.pendingMetadata()
+		}
+		return protocol.Hello{DeviceID: identity.DeviceID, AgentVersion: revision, Protocol: protocol.ProtocolVersion, Capabilities: announcedCapabilities(o.DisableUpdates), WakeConfig: wakeSummary(current), UpdateState: protocol.PhaseIdle, InstalledVersion: metadata.Version, InstalledBuildID: metadata.BuildID, PendingDeploymentID: metadata.PendingDeploymentID, ConfigVersion: current.Version}
 	}, Dialer: client.WSSDialer{}, Resolver: resolver, Pairings: discovery.PairingStore{Path: o.PairingState}, Config: state, TurnSource: turns, TokenPath: o.GatewayTokenFile, SkipTLSVerify: o.TLSSkipVerify, Logger: slog.Default(), Update: manager, SessionChanged: func(connected bool) {
 		turns.SetConnected(connected)
 		if indicator != nil {

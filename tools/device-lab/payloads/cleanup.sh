@@ -28,5 +28,5 @@ for pidfile in "$ROOT"/*.pid; do
   fi
   rm -f "$pidfile"
 done
-rm -rf "$ROOT"
+"$BB" rm -rf "$ROOT"
 sync

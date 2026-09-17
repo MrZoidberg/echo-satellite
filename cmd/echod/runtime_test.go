@@ -220,6 +220,22 @@ func TestDeviceRuntimeConfig_DoesNotPublishRuntimeWhenPersistenceFails(t *testin
 	assert.Zero(t, swapped())
 }
 
+func TestDeviceRuntimeConfig_PersistsConditioningProfileThenRequestsRestart(t *testing.T) {
+	state, candidate, _, swapped := newRuntimeConfigForTest(t, filepath.Join(t.TempDir(), "config.json"))
+	candidate.Audio.ConditioningProfile = protocol.ConditioningProfileBypass
+	var restarts int
+	state.restart = func() { restarts++ }
+
+	result := state.Apply(candidate.ToProtocol())
+	assert.Equal(t, protocol.ConfigResultApplied, result.Status)
+	assert.Equal(t, 1, swapped())
+	assert.Equal(t, 1, restarts)
+	assert.Equal(t, protocol.ConditioningProfileBypass, state.current().Audio.ConditioningProfile)
+	loaded, err := state.store.Load(deviceconfig.Bootstrap())
+	require.NoError(t, err)
+	assert.Equal(t, protocol.ConditioningProfileBypass, loaded.Audio.ConditioningProfile)
+}
+
 func TestSwappableWakeEngine_PublishesReplacementWhenOldCloseFails(t *testing.T) {
 	old := &runtimeEngine{id: "old", err: errors.New("close failed")}
 	next := &runtimeEngine{id: "next"}

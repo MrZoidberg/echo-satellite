@@ -334,6 +334,38 @@ class CoreTests(unittest.TestCase):
             runner.run_payload()
         self.assertEqual(["prepare", "verify-clean", "restart"], calls)
 
+    def test_run_payload_cleans_up_after_keyboard_interrupt(self) -> None:
+        runner = object.__new__(device_lab.Runner)
+        runner.args = argparse.Namespace(payload="task10_front_550mm.sh", diagnostic=None)
+        calls = []
+        runner.prepare = lambda: calls.append("prepare")
+        runner.stage_diagnostic = lambda: ""
+        runner.verify_remote_owner = lambda _payload: calls.append("owner")
+        runner.run_remote_payload = lambda _payload, _diagnostic: (_ for _ in ()).throw(KeyboardInterrupt())
+        runner.cleanup = lambda: calls.append("cleanup")
+        runner.verify_clean = lambda: calls.append("verify-clean")
+        runner.restart_known_launcher = lambda: calls.append("restart")
+        runner.phase = lambda _name, action: action()
+        with self.assertRaisesRegex(device_lab.LabError, "payload runner failed"):
+            runner.run_payload()
+        self.assertEqual(["prepare", "owner", "cleanup", "verify-clean", "restart"], calls)
+
+    def test_run_payload_completes_restoration_after_second_keyboard_interrupt(self) -> None:
+        runner = object.__new__(device_lab.Runner)
+        runner.args = argparse.Namespace(payload="task10_front_550mm.sh", diagnostic=None)
+        calls = []
+        runner.prepare = lambda: calls.append("prepare")
+        runner.stage_diagnostic = lambda: ""
+        runner.verify_remote_owner = lambda _payload: calls.append("owner")
+        runner.run_remote_payload = lambda _payload, _diagnostic: (_ for _ in ()).throw(KeyboardInterrupt())
+        runner.cleanup = lambda: (_ for _ in ()).throw(KeyboardInterrupt())
+        runner.verify_clean = lambda: calls.append("verify-clean")
+        runner.restart_known_launcher = lambda: calls.append("restart")
+        runner.phase = lambda _name, action: action()
+        with self.assertRaises(device_lab.LabError):
+            runner.run_payload()
+        self.assertEqual(["prepare", "owner", "verify-clean", "restart"], calls)
+
     def test_task10_front_550mm_payload_has_ordered_health_bound_captures(self) -> None:
         payload = Path(__file__).with_name("payloads") / "task10_front_550mm.sh"
         text = payload.read_text(encoding="utf-8")
@@ -378,6 +410,120 @@ class CoreTests(unittest.TestCase):
         )
         offsets = [text.index(line) for line in ordered]
         self.assertEqual(offsets, sorted(offsets))
+
+    def test_task11_command_audio_payload_stages_an_isolated_agent_and_no_raw_audio(self) -> None:
+        payload = Path(__file__).with_name("payloads") / "task11_command_audio.sh"
+        text = payload.read_text(encoding="utf-8")
+        self.assertIn('ROOT=${ROOT:-${0%/*}}', text)
+        self.assertIn('ECHOD=${DIAGNOSTIC:?device-lab DIAGNOSTIC is required}', text)
+        self.assertIn('CONFIG=/data/local/etc/echo-satellite/echod.ini', text)
+        self.assertIn('--config-state "$ROOT/config.json"', text)
+        self.assertIn('--pairing-state "$ROOT/paired-gateway.json"', text)
+        self.assertIn('--disable-updates', text)
+        self.assertIn('--conditioning-profile dot-gen2-qualified-v1', text)
+        self.assertIn('"$ROOT/task11-echod.pid"', text)
+        self.assertIn('for trial in 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16 17 18 19 20', text)
+        self.assertIn('wait_phase "idle_music no_speech_to_device" 900', text)
+        self.assertIn('raw_audio=disabled', text)
+        self.assertIn('rm -f "$OUT/echod.stdout" "$OUT/echod.jsonl"', text)
+        self.assertIn("trap 'stop_agent; exit 130' HUP INT TERM", text)
+        self.assertIn('test "$tries" -lt 50', text)
+        self.assertIn('staged agent did not exit after TERM', text)
+        self.assertIn('"$RESULTS/manifest.json"', text)
+
+    def test_known_launcher_release_accepts_shell_hook_without_trailing_arguments(self) -> None:
+        runner = object.__new__(device_lab.Runner)
+        runner.phase = lambda _name, action: action()
+        runner._save = lambda: None
+        runner.state = {}
+        script = []
+        runner.root_shell = lambda value: (script.append(value) or device_lab.CommandResult(0, "agent_pid=318\nlauncher_pid=2\nagent_executable=/data/local/bin/echod\n", ""))
+        runner.release_known_launcher(["318:/data/local/bin/echod"])
+        self.assertIn("'sh /sbin/.core/img/.core/service.d/echo-satellite.sh'", script[0])
+        self.assertIn("'/system/bin/sh /sbin/.core/img/.core/service.d/echo-satellite.sh'", script[0])
+        self.assertIn("launcher parent executable=$parent_exe command=$cmd", script[0])
+        self.assertIn("/sbin/.core/mirror/bin/busybox", script[0])
+        self.assertIn("launcher parent command is not recognized hook: $cmd", script[0])
+
+    def test_verify_clean_restores_a_released_launcher(self) -> None:
+        runner = object.__new__(device_lab.Runner)
+        runner.acquire_host_lock = lambda: None
+        runner.release_host_lock = lambda: None
+        runner.phase = lambda _name, action: action()
+        runner._save = lambda: None
+        runner.args = argparse.Namespace(serial="dot")
+        runner.remote_root = "/data/local/tmp/echo-device-lab/session"
+        runner.state = {"initial_device_state": {"installed_agent_digest": "a" * 64}, "released_launcher": {"path": device_lab.DEFAULT_HOOK_PATH}}
+        runner.installed_digest = lambda: "a" * 64
+        runner.root_shell = lambda script: device_lab.CommandResult(0, "absent\n" if "cwd_holder" in script else "", "")
+        calls = []
+        runner.restart_known_launcher = lambda: calls.append("restart")
+        runner.verify_clean()
+        self.assertEqual(["restart"], calls)
+
+    def test_launcher_restoration_noops_when_the_validated_agent_is_already_running(self) -> None:
+        runner = object.__new__(device_lab.Runner)
+        runner.acquire_host_lock = lambda: None
+        runner.release_host_lock = lambda: None
+        runner.phase = lambda _name, action: action()
+        runner._save = lambda: None
+        runner.args = argparse.Namespace(serial="dot")
+        runner.state = {"released_launcher": {"path": device_lab.DEFAULT_HOOK_PATH}}
+        scripts = []
+        runner.root_shell = lambda script: (scripts.append(script) or device_lab.CommandResult(0, "launcher_status=already_running\nagent_pid=318\nagent_executable=/data/local/bin/echod\n", ""))
+        runner.restart_known_launcher()
+        self.assertIn("case $existing_count in 0)", scripts[0])
+        self.assertIn("launcher_status=already_running", scripts[0])
+        self.assertNotIn("launcher_pid=$!", scripts[0].split("case $existing_count in 0)", 1)[0])
+
+    def test_verify_clean_reports_a_remaining_owned_root(self) -> None:
+        runner = object.__new__(device_lab.Runner)
+        runner.acquire_host_lock = lambda: None
+        runner.release_host_lock = lambda: None
+        runner._save = lambda: None
+        runner.args = argparse.Namespace(serial="dot")
+        runner.remote_root = "/data/local/tmp/echo-device-lab/session"
+        runner.state = {"initial_device_state": {"installed_agent_digest": "a" * 64}}
+        runner.installed_digest = lambda: "a" * 64
+        runner.root_shell = lambda _script: device_lab.CommandResult(0, "root_kind=directory\ncwd_holder=123\n", "")
+        with self.assertRaisesRegex(device_lab.LabError, "cwd_holder=123"):
+            runner.verify_clean()
+
+    def test_cleanup_after_interruption_removes_only_the_token_owned_residual_root(self) -> None:
+        runner = object.__new__(device_lab.Runner)
+        runner.acquire_host_lock = lambda: None
+        runner.release_host_lock = lambda: None
+        runner.phase = lambda _name, action: action()
+        runner._save = lambda: None
+        runner.args = argparse.Namespace(serial="dot")
+        runner.remote_root = "/data/local/tmp/echo-device-lab/session"
+        runner.token = "owner-token"
+        runner.state = {"cleaned": True, "initial_device_state": {"installed_agent_digest": "a" * 64}}
+        runner.installed_digest = lambda: "a" * 64
+        scripts = []
+
+        def root_shell(script):
+            scripts.append(script)
+            if script.startswith("test -f"):
+                return device_lab.CommandResult(1, "", "")
+            return device_lab.CommandResult(0, "root=removed\n", "")
+
+        runner.root_shell = root_shell
+        runner.cleanup()
+        self.assertIn('test "$($BB cat "$root/.owner" 2>/dev/null)" = \'owner-token\'', scripts[-1])
+        self.assertIn('$BB rm -rf "$root"', scripts[-1])
+
+    def test_cleanup_detects_an_interrupted_remote_cleanup_from_missing_initial_state(self) -> None:
+        runner = object.__new__(device_lab.Runner)
+        runner.acquire_host_lock = lambda: None
+        runner.release_host_lock = lambda: None
+        runner._cleanup_residual_root = lambda: setattr(runner, "residual_cleaned", True)
+        runner.args = argparse.Namespace(serial="dot")
+        runner.remote_root = "/data/local/tmp/echo-device-lab/session"
+        runner.state = {"initial_device_state": {"installed_agent_digest": "a" * 64}}
+        runner.root_shell = lambda _script: device_lab.CommandResult(1, "", "")
+        runner.cleanup()
+        self.assertTrue(runner.residual_cleaned)
 
 
 def _walk(suite: unittest.TestSuite):

@@ -13,6 +13,7 @@ import (
 
 	"github.com/MrZoidberg/echo-satellite/internal/device/wake"
 	"github.com/MrZoidberg/echo-satellite/internal/discovery"
+	"github.com/MrZoidberg/echo-satellite/internal/protocol"
 )
 
 const (
@@ -36,38 +37,40 @@ func (b configurableBool) Bool() bool { return b == "true" }
 // opts is the echod command line. Precedence is CLI flag, then environment
 // variable, then config file, then the built-in default.
 type opts struct {
-	Config            string           `long:"config" env:"ECHOD_CONFIG" description:"path to the echod ini config file" no-ini:"true"`
-	DeviceID          string           `long:"device-id" env:"ECHOD_DEVICE_ID" description:"device identity announced in hello"`
-	Discovery         string           `long:"discovery" env:"ECHOD_DISCOVERY" default:"mdns" choice:"mdns" choice:"disabled" description:"gateway discovery mode"`
-	GatewayURL        string           `long:"gateway-url" env:"ECHOD_GATEWAY_URL" description:"explicit gateway url; overrides discovery"`
-	GatewayTokenFile  string           `long:"gateway-token-file" env:"ECHOD_GATEWAY_TOKEN_FILE" description:"file containing the gateway bearer token"`
-	TLSSkipVerify     bool             `long:"tls-skip-verify" env:"ECHOD_TLS_SKIP_VERIFY" description:"disable TLS certificate verification; development only"`
-	PreferredServerID string           `long:"preferred-server-id" env:"ECHOD_PREFERRED_SERVER_ID" description:"gateway server_id to prefer"`
-	PairingState      string           `long:"pairing-state" env:"ECHOD_PAIRING_STATE" default:"/data/local/etc/echo-satellite/paired-gateway.json" description:"persisted authenticated gateway state"`
-	ConfigState       string           `long:"config-state" env:"ECHOD_CONFIG_STATE" default:"/data/local/etc/echo-satellite/config.json" description:"persisted gateway configuration state"`
-	UpdateMaxSize     int64            `long:"update-max-artifact-size" env:"ECHOD_UPDATE_MAX_ARTIFACT_SIZE" default:"268435456" description:"maximum accepted deployment artifact size in bytes"`
-	DiscoveryTimeout  int              `long:"discovery-timeout-ms" env:"ECHOD_DISCOVERY_TIMEOUT_MS" default:"5000" description:"maximum mDNS resolution time in milliseconds"`
-	WakeOnly          bool             `long:"wake-only" env:"ECHOD_WAKE_ONLY" description:"run the device-local wake pipeline without gateway traffic"`
-	TestStartAudio    string           `long:"test-start-audio" env:"ECHOD_TEST_START_AUDIO" default:"/data/local/etc/echo-satellite/starting_test.wav" description:"16 kHz mono WAV played before live wake-only diagnostics"`
-	WakeModel         string           `long:"wake-model" env:"ECHOD_WAKE_MODEL" default:"okay_nabu" description:"installed wake model id"`
-	WakeModelDir      string           `long:"wake-model-dir" env:"ECHOD_WAKE_MODEL_DIR" default:"/data/local/etc/echo-satellite/wake-models" description:"installed wake model directory"`
-	WakeThreshold     float64          `long:"wake-threshold" env:"ECHOD_WAKE_THRESHOLD" default:"0.50" description:"wake acceptance threshold from 0 to 1"`
-	VADThreshold      float64          `long:"vad-threshold" env:"ECHOD_VAD_THRESHOLD" default:"0.50" description:"wake VAD threshold from 0 to 1"`
-	VADEnabled        configurableBool `long:"vad-enabled" env:"ECHOD_VAD_ENABLED" default:"true" optional:"true" optional-value:"true" description:"require local VAD evidence for wake acceptance"`
-	VADLookbackMS     int              `long:"vad-lookback-ms" env:"ECHOD_VAD_LOOKBACK_MS" default:"1200" description:"bounded recent VAD evidence window in milliseconds"`
-	PreRollMS         int              `long:"preroll-ms" env:"ECHOD_PREROLL_MS" default:"600" description:"pre-trigger audio retained in milliseconds"`
-	MinWakeIntervalMS int              `long:"min-wake-interval-ms" env:"ECHOD_MIN_WAKE_INTERVAL_MS" default:"2000" description:"minimum interval between accepted wakes in milliseconds"`
-	MicChannels       string           `long:"mic-channels" env:"ECHOD_MIC_CHANNELS" default:"0" description:"comma-separated physical microphone channel indices"`
-	MicFromFile       string           `long:"mic-from-file" env:"ECHOD_MIC_FROM_FILE" description:"replay paced WAV or raw Dot microphone PCM instead of ALSA"`
-	LEDRoot           string           `long:"led-root" env:"ECHOD_LED_ROOT" default:"/sys/bus/i2c/devices/0-003f" description:"LED controller sysfs root"`
-	GPIORoot          string           `long:"gpio-root" env:"ECHOD_GPIO_ROOT" default:"/sys/class/gpio" description:"GPIO sysfs root used to preserve the microphone cut state"`
-	StatsInterval     time.Duration    `long:"stats-interval" env:"ECHOD_STATS_INTERVAL" default:"30s" description:"periodic wake statistics interval"`
-	AlwaysScoreWake   configurableBool `long:"always-score-wake" env:"ECHOD_ALWAYS_SCORE_WAKE" default:"true" optional:"true" optional-value:"true" description:"score wake on every step instead of pre-gating on instantaneous VAD"`
-	LogFile           string           `long:"log-file" env:"ECHOD_LOG_FILE" description:"bounded rotating structured log file"`
-	LogMaxBytes       int64            `long:"log-max-bytes" env:"ECHOD_LOG_MAX_BYTES" default:"10485760" description:"total byte cap across rotating logs"`
-	LogFormat         string           `long:"log-format" env:"ECHOD_LOG_FORMAT" default:"text" choice:"text" choice:"json" description:"operational log encoding"`
-	Dbg               bool             `long:"dbg" env:"DEBUG" description:"debug logging" no-ini:"true"`
-	Version           bool             `long:"version" short:"V" description:"show version and exit" no-ini:"true"`
+	Config              string                       `long:"config" env:"ECHOD_CONFIG" description:"path to the echod ini config file" no-ini:"true"`
+	DeviceID            string                       `long:"device-id" env:"ECHOD_DEVICE_ID" description:"device identity announced in hello"`
+	Discovery           string                       `long:"discovery" env:"ECHOD_DISCOVERY" default:"mdns" choice:"mdns" choice:"disabled" description:"gateway discovery mode"`
+	GatewayURL          string                       `long:"gateway-url" env:"ECHOD_GATEWAY_URL" description:"explicit gateway url; overrides discovery"`
+	GatewayTokenFile    string                       `long:"gateway-token-file" env:"ECHOD_GATEWAY_TOKEN_FILE" description:"file containing the gateway bearer token"`
+	TLSSkipVerify       bool                         `long:"tls-skip-verify" env:"ECHOD_TLS_SKIP_VERIFY" description:"disable TLS certificate verification; development only"`
+	PreferredServerID   string                       `long:"preferred-server-id" env:"ECHOD_PREFERRED_SERVER_ID" description:"gateway server_id to prefer"`
+	PairingState        string                       `long:"pairing-state" env:"ECHOD_PAIRING_STATE" default:"/data/local/etc/echo-satellite/paired-gateway.json" description:"persisted authenticated gateway state"`
+	ConfigState         string                       `long:"config-state" env:"ECHOD_CONFIG_STATE" default:"/data/local/etc/echo-satellite/config.json" description:"persisted gateway configuration state"`
+	UpdateMaxSize       int64                        `long:"update-max-artifact-size" env:"ECHOD_UPDATE_MAX_ARTIFACT_SIZE" default:"268435456" description:"maximum accepted deployment artifact size in bytes"`
+	DisableUpdates      bool                         `long:"disable-updates" env:"ECHOD_DISABLE_UPDATES" description:"refuse all gateway agent deployments; diagnostic use only" no-ini:"true"`
+	DiscoveryTimeout    int                          `long:"discovery-timeout-ms" env:"ECHOD_DISCOVERY_TIMEOUT_MS" default:"5000" description:"maximum mDNS resolution time in milliseconds"`
+	WakeOnly            bool                         `long:"wake-only" env:"ECHOD_WAKE_ONLY" description:"run the device-local wake pipeline without gateway traffic"`
+	TestStartAudio      string                       `long:"test-start-audio" env:"ECHOD_TEST_START_AUDIO" default:"/data/local/etc/echo-satellite/starting_test.wav" description:"16 kHz mono WAV played before live wake-only diagnostics"`
+	WakeModel           string                       `long:"wake-model" env:"ECHOD_WAKE_MODEL" default:"okay_nabu" description:"installed wake model id"`
+	WakeModelDir        string                       `long:"wake-model-dir" env:"ECHOD_WAKE_MODEL_DIR" default:"/data/local/etc/echo-satellite/wake-models" description:"installed wake model directory"`
+	WakeThreshold       float64                      `long:"wake-threshold" env:"ECHOD_WAKE_THRESHOLD" default:"0.50" description:"wake acceptance threshold from 0 to 1"`
+	VADThreshold        float64                      `long:"vad-threshold" env:"ECHOD_VAD_THRESHOLD" default:"0.50" description:"wake VAD threshold from 0 to 1"`
+	VADEnabled          configurableBool             `long:"vad-enabled" env:"ECHOD_VAD_ENABLED" default:"true" optional:"true" optional-value:"true" description:"require local VAD evidence for wake acceptance"`
+	VADLookbackMS       int                          `long:"vad-lookback-ms" env:"ECHOD_VAD_LOOKBACK_MS" default:"1200" description:"bounded recent VAD evidence window in milliseconds"`
+	PreRollMS           int                          `long:"preroll-ms" env:"ECHOD_PREROLL_MS" default:"600" description:"pre-trigger audio retained in milliseconds"`
+	MinWakeIntervalMS   int                          `long:"min-wake-interval-ms" env:"ECHOD_MIN_WAKE_INTERVAL_MS" default:"2000" description:"minimum interval between accepted wakes in milliseconds"`
+	MicChannels         string                       `long:"mic-channels" env:"ECHOD_MIC_CHANNELS" default:"0,1,2,3,4,5,6" description:"comma-separated physical microphone channel indices"`
+	ConditioningProfile protocol.ConditioningProfile `long:"conditioning-profile" env:"ECHOD_CONDITIONING_PROFILE" default:"dot-gen2-qualified-v1" choice:"bypass-v1" choice:"dot-gen2-qualified-v1" description:"device-local command-audio conditioning profile"`
+	MicFromFile         string                       `long:"mic-from-file" env:"ECHOD_MIC_FROM_FILE" description:"replay paced WAV or raw Dot microphone PCM instead of ALSA"`
+	LEDRoot             string                       `long:"led-root" env:"ECHOD_LED_ROOT" default:"/sys/bus/i2c/devices/0-003f" description:"LED controller sysfs root"`
+	GPIORoot            string                       `long:"gpio-root" env:"ECHOD_GPIO_ROOT" default:"/sys/class/gpio" description:"GPIO sysfs root used to preserve the microphone cut state"`
+	StatsInterval       time.Duration                `long:"stats-interval" env:"ECHOD_STATS_INTERVAL" default:"30s" description:"periodic wake statistics interval"`
+	AlwaysScoreWake     configurableBool             `long:"always-score-wake" env:"ECHOD_ALWAYS_SCORE_WAKE" default:"true" optional:"true" optional-value:"true" description:"score wake on every step instead of pre-gating on instantaneous VAD"`
+	LogFile             string                       `long:"log-file" env:"ECHOD_LOG_FILE" description:"bounded rotating structured log file"`
+	LogMaxBytes         int64                        `long:"log-max-bytes" env:"ECHOD_LOG_MAX_BYTES" default:"10485760" description:"total byte cap across rotating logs"`
+	LogFormat           string                       `long:"log-format" env:"ECHOD_LOG_FORMAT" default:"text" choice:"text" choice:"json" description:"operational log encoding"`
+	Dbg                 bool                         `long:"dbg" env:"DEBUG" description:"debug logging" no-ini:"true"`
+	Version             bool                         `long:"version" short:"V" description:"show version and exit" no-ini:"true"`
 }
 
 func (o opts) wakeConfig() wake.Config {
@@ -141,6 +144,9 @@ func validateOpts(o opts) (opts, error) {
 	}
 	if _, err := o.micChannelList(); err != nil {
 		return opts{}, err
+	}
+	if !o.ConditioningProfile.Valid() {
+		return opts{}, fmt.Errorf("unsupported conditioning profile %q", o.ConditioningProfile)
 	}
 	if o.StatsInterval <= 0 {
 		return opts{}, errors.New("stats interval must be positive")

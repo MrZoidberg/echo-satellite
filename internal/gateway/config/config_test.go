@@ -24,6 +24,7 @@ func TestLoad_MergesPartialDeviceOverrides(t *testing.T) {
 	assert.Equal(t, 1500, defaults.Endpointing.TrailingSilenceMS)
 	assert.Equal(t, 1000, kitchen.Endpointing.TrailingSilenceMS)
 	assert.Equal(t, protocol.LogLevelInfo, defaults.Logs.ForwardLevel)
+	assert.Equal(t, protocol.ConditioningProfileDotGen2, defaults.Audio.ConditioningProfile)
 	assert.Equal(t, protocol.LogLevelDebug, kitchen.Logs.ForwardLevel)
 	assert.Equal(t, defaults.Wake, kitchen.Wake)
 	require.NoError(t, kitchen.Validate())
