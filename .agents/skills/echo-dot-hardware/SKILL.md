@@ -19,4 +19,7 @@ device. One orchestrator owns a physical Dot session; reviewers are read-only.
 
 The voice boundary stays local to the device. The update boundary permits only
 verified replacement of `/data/local/bin/echod`; this diagnostic runner never
-writes it. See `tools/device-lab/` for payloads and evidence format.
+writes it. See `docs/device-lab.md` for the runner lifecycle,
+`docs/device-diagnostics.md` for qualified hardware facts,
+`docs/device-installation.md` for bootstrap/recovery, and
+`docs/command-audio-qualification.md` for the reusable live-audio procedure.

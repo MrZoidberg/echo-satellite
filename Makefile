@@ -65,6 +65,7 @@ bench:
 	go test -bench . -benchmem ./...
 
 device-check:
+	@test -n "$(DEVICE_SERIAL)" || { echo "DEVICE_SERIAL is required; refuse implicit ADB target"; exit 2; }
 	@state=$$($(ADB_DEVICE) get-state | tr -d '\r'); \
 		[ "$$state" = device ] || { echo "ADB state is '$$state', want 'device'"; exit 1; }; \
 		echo "state: $$state"

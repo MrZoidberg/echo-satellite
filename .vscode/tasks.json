@@ -5,11 +5,9 @@
             "label": "device: check",
             "type": "shell",
             "command": "make",
-            "args": ["device-check"],
+            "args": ["device-check", "DEVICE_SERIAL=${input:deviceSerial}"],
             "options": {
-                "env": {
-                    "ADB": "/mnt/c/tools/android-platform-tools/adb.exe"
-                }
+                "env": { "ADB": "adb" }
             },
             "problemMatcher": []
         },
@@ -17,11 +15,9 @@
             "label": "device: push",
             "type": "shell",
             "command": "make",
-            "args": ["push-device"],
+            "args": ["push-device", "DEVICE_SERIAL=${input:deviceSerial}"],
             "options": {
-                "env": {
-                    "ADB": "/mnt/c/tools/android-platform-tools/adb.exe"
-                }
+                "env": { "ADB": "adb" }
             },
             "problemMatcher": []
         },
@@ -29,13 +25,18 @@
             "label": "device: run",
             "type": "shell",
             "command": "make",
-            "args": ["run-device"],
+            "args": ["run-device", "DEVICE_SERIAL=${input:deviceSerial}"],
             "options": {
-                "env": {
-                    "ADB": "/mnt/c/tools/android-platform-tools/adb.exe"
-                }
+                "env": { "ADB": "adb" }
             },
             "problemMatcher": []
+        }
+    ],
+    "inputs": [
+        {
+            "id": "deviceSerial",
+            "type": "promptString",
+            "description": "Echo Dot serial reported by Linux adb devices -l"
         }
     ]
 }

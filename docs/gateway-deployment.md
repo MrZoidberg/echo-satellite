@@ -1,11 +1,10 @@
 # Gateway Docker deployment
 
-Docker Compose packages the Milestone 2 gateway for explicit, authenticated
-WSS connections. It deliberately disables mDNS: Docker/WSL multicast reachability
-to the physical LAN requires a separate real-network experiment, and must not
-be inferred from this deployment. Its port is published only on localhost, so
-host-side simulators can connect without exposing the development service to
-the LAN.
+Docker Compose packages the gateway for explicit, authenticated WSS smoke
+tests. It deliberately disables mDNS and publishes only on localhost, so this
+path is for host-side simulators rather than a physical-Dot discovery test. Run
+the native Windows gateway on the physical LAN when qualifying mDNS; see
+[Windows and WSL development](development-windows-wsl.md).
 
 ## Prepare host files
 
@@ -60,9 +59,11 @@ existing writable directory owned by `GATEWAY_UID:GATEWAY_GID`, then use the
 diagnostic override:
 
 ```sh
-mkdir -p .gateway-secrets/command-audio-wav
+mkdir -p .gateway-secrets/command-audio-wav .gateway-secrets/command-audio-evidence
 : >.gateway-secrets/command-audio-wav/.echo-satellite-owner
+: >.gateway-secrets/command-audio-evidence/.echo-satellite-owner
 export GATEWAY_DIAGNOSTIC_WAV_DIR=$PWD/.gateway-secrets/command-audio-wav
+export GATEWAY_DIAGNOSTIC_EVIDENCE_DIR=$PWD/.gateway-secrets/command-audio-evidence
 docker compose -f deploy/docker-compose.yml \
   -f deploy/docker-compose.diagnostics.yml up --build -d gateway
 ```
@@ -77,13 +78,16 @@ restart without the diagnostics override:
 
 ```sh
 set -eu
-dir=${GATEWAY_DIAGNOSTIC_WAV_DIR:?set the diagnostic WAV directory}
-case "$dir" in "$PWD"/.gateway-secrets/command-audio-wav) ;; *) exit 2;; esac
-test -d "$dir" && test ! -L "$dir" && test -f "$dir/.echo-satellite-owner"
+wav_dir=${GATEWAY_DIAGNOSTIC_WAV_DIR:?set the diagnostic WAV directory}
+evidence_dir=${GATEWAY_DIAGNOSTIC_EVIDENCE_DIR:?set the diagnostic evidence directory}
+case "$wav_dir" in "$PWD"/.gateway-secrets/command-audio-wav) ;; *) exit 2;; esac
+case "$evidence_dir" in "$PWD"/.gateway-secrets/command-audio-evidence) ;; *) exit 2;; esac
+test -d "$wav_dir" && test ! -L "$wav_dir" && test -f "$wav_dir/.echo-satellite-owner"
+test -d "$evidence_dir" && test ! -L "$evidence_dir" && test -f "$evidence_dir/.echo-satellite-owner"
 docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.diagnostics.yml down &&
-find "$dir" -mindepth 1 -maxdepth 1 -type f ! -name .echo-satellite-owner -delete &&
-test -z "$(find "$dir" -mindepth 1 -maxdepth 1 ! -name .echo-satellite-owner -print -quit)" &&
-unset GATEWAY_DIAGNOSTIC_WAV_DIR &&
+find "$wav_dir" -mindepth 1 -maxdepth 1 -type f ! -name .echo-satellite-owner -delete &&
+test -z "$(find "$wav_dir" -mindepth 1 -maxdepth 1 ! -name .echo-satellite-owner -print -quit)" &&
+unset GATEWAY_DIAGNOSTIC_WAV_DIR GATEWAY_DIAGNOSTIC_EVIDENCE_DIR &&
 docker compose -f deploy/docker-compose.yml up --build -d gateway
 ```
 
@@ -93,8 +97,8 @@ directory after the check is a cleanup failure that needs operator inspection.
 ## Optional telemetry evidence
 
 Telemetry metadata is not persisted unless an explicit existing directory is
-configured. Set `GATEWAY_DIAGNOSTIC_EVIDENCE_DIR` to an owner-writable
-directory; the gateway appends sanitized turn metadata to `turns.jsonl` and
-never writes PCM, credentials, or arbitrary device fields there. This option is
-independent of the diagnostic WAV override and should be removed after a
-qualification run.
+configured. The diagnostics override requires `GATEWAY_DIAGNOSTIC_EVIDENCE_DIR`
+as well as the WAV directory; it appends sanitized turn metadata to `turns.jsonl`
+and never writes PCM, credentials, or arbitrary device fields there. Retain the
+evidence directory only as long as its approved diagnostic record is needed;
+remove the environment variable when restarting normal deployment.

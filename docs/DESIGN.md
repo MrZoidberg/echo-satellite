@@ -1810,15 +1810,14 @@ Windows 11
   |     +-- Docker CLI
   |     +-- golangci-lint
   |     +-- source checkout
-  |     +-- adb -> Echo Dot (main adb path)
+  |     +-- Linux adb -> Echo Dot through usbipd attachment
   |
   +-- Docker Desktop / WSL backend
   |     +-- gateway
   |     +-- speech-worker
   |     +-- Hermes/test dependencies
   |
-  +-- Windows Android Platform Tools
-        +-- adb.exe -> Echo Dot (alternate adb path if USB passthrough is not activated)
+  +-- usbipd -> WSL2 USB attachment -> Echo Dot
 ```
 
 Keep the device binary pure Go where feasible:
@@ -2210,7 +2209,7 @@ daemon.
 | TTS | provider abstraction; Hermes or local |
 | Assistant | Hermes adapter + mock adapter |
 | Local dev | Windows + WSL2 |
-| Device bootstrap/recovery | Windows ADB called from WSL |
+| Device bootstrap/recovery | Linux ADB in WSL after usbipd attachment |
 | Normal device iteration | gateway single-agent deployment once implemented |
 | Integration testing | `dotsim` + WAV/wake/VAD/update fixtures |
 | Gateway deployment | Docker Compose |

@@ -4,7 +4,11 @@ Universal instructions for AI coding agents working in this repository. They app
 
 ## Repository state
 
-Milestone 1 has landed its device hardware and local-wake vertical slice: pure-Go ALSA capture/playback, LEDs, buttons, local VAD and openWakeWord, model installation, and Dot diagnostics. Gateway transport, mDNS, single-agent deployment, persistence, and assistant integration remain later milestones. Follow the layout, naming, and stack choices in `docs/DESIGN.md` §6 and §27 rather than inventing alternatives.
+Milestones 1 and 2 have landed the local-hardware and authenticated device-turn
+slices. Milestone 3 single-agent deployment and command-audio qualification are
+in progress; the remaining acoustic matrix is not complete. Follow the layout,
+naming, and stack choices in `docs/DESIGN.md` §6 and §27 rather than inventing
+alternatives.
 
 ## Build and test commands
 
@@ -110,6 +114,12 @@ repository `echo-dot-hardware` skill and begin with explicit runner inputs:
 `uv run --no-project --script tools/device-lab/device_lab.py preflight --adb
 <path> --serial <serial>`. It captures sanitized evidence and owns cleanup;
 only one agent may control a physical Dot.
+
+Use [`docs/device-lab.md`](docs/device-lab.md) for the complete runner
+lifecycle, [`docs/device-diagnostics.md`](docs/device-diagnostics.md) for
+qualified hardware facts, and [`docs/device-installation.md`](docs/device-installation.md)
+for bootstrap or ADB recovery. The command-audio procedure is
+[`docs/command-audio-qualification.md`](docs/command-audio-qualification.md).
 
 Before the first live diagnostic in an ADB session, stop `ledcontroller` and
 write `0` to `/sys/bus/i2c/devices/0-003f/boot_animation` so Amazon's indicator

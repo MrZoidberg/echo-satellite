@@ -4,15 +4,12 @@ Turn a rooted Amazon Echo Dot into a voice satellite for a self-hosted assistant
 gateway: the Dot listens for its wake word locally and streams a voice turn to a
 gateway that owns speech recognition, the assistant backend and the fleet.
 
-**Status: Milestone 2 discovery, authenticated transport, simulator, and
-device-turn slice.** The Dot now has pure-Go microphone capture, local
-VAD-gated openWakeWord detection, speaker playback, LED and button diagnostics,
-local wake-model installation, device-local command endpointing, and
-authenticated WSS device turns. The gateway advertises over mDNS; `dotsim` and
-`echod` can resolve it or use an explicit WSS URL. Supervisor/A/B updates,
-assistant integration, production device authentication, and command-audio
-conditioning remain later-milestone work. See `docs/DESIGN.md` §24 for the
-milestone sequence.
+**Status: Milestone 3 single-agent deployment and command-audio qualification
+are in progress.** The Dot has pure-Go microphone capture, local VAD-gated
+openWakeWord detection, speaker playback, LED and button diagnostics, local
+wake-model installation, device-local command endpointing, authenticated WSS
+device turns, and gateway-managed single-agent staging. See `docs/DESIGN.md`
+for the authoritative milestone sequence and current qualification limits.
 
 ## The two boundaries
 
@@ -23,11 +20,10 @@ device has opened a turn. Command endpointing — deciding when the user stopped
 talking — is also device-local, after a wake or Action-button trigger, with
 configuration independent of wake VAD.
 
-**Updates.** Agent updates are application-level A/B slots under `/data`, never
-FireOS OTA. The gateway owns the desired software state; the device owns its own
-recovery. A small supervisor outside both slots decides whether a new build
-survived its trial and can roll back with the gateway unreachable, so a bad
-release never requires ADB to recover.
+**Updates.** Agent updates replace the single application binary under `/data`,
+never FireOS OTA. The gateway owns desired state; the device verifies, stages,
+and atomically installs it. A connected device can receive an older signed
+release; a committed agent that cannot reconnect requires ADB recovery.
 
 Both boundaries are stated in full in [AGENTS.md](AGENTS.md) and
 [docs/DESIGN.md](docs/DESIGN.md) §28.
@@ -87,9 +83,14 @@ Verify a release bundle with the same checks a gateway and a device apply:
 ## Documentation
 
 - [docs/DESIGN.md](docs/DESIGN.md) — architecture, boundaries, milestones. Authoritative.
+- [docs/README.md](docs/README.md) — documentation index and task-based routing.
 - [docs/protocol.md](docs/protocol.md) — the wire contract, tracking `internal/protocol`.
-- [docs/development-windows-wsl.md](docs/development-windows-wsl.md) — the reference dev environment and device build.
+- [docs/development-windows-wsl.md](docs/development-windows-wsl.md) — WSL USB/IP/Linux ADB development and Windows gateway mDNS.
+- [docs/device-lab.md](docs/device-lab.md) — safe live-Dot diagnostic sessions.
+- [docs/device-diagnostics.md](docs/device-diagnostics.md) — qualified hardware facts and active limits.
+- [docs/device-installation.md](docs/device-installation.md) — bootstrap and ADB recovery.
 - [docs/gateway-deployment.md](docs/gateway-deployment.md) — Docker Compose gateway deployment and the explicit-WSS smoke test.
+- [docs/command-audio-qualification.md](docs/command-audio-qualification.md) — command-audio qualification.
 - [docs/plans/README.md](docs/plans/README.md) — how implementation work is planned and tracked.
 - [AGENTS.md](AGENTS.md) — instructions for AI coding agents, including build commands and code conventions.
 

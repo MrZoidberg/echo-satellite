@@ -1,229 +1,138 @@
-# Windows / WSL development workflow
+# Windows and WSL development workflow
 
-The reference development environment is Windows 11 with VS Code Remote WSL.
-Builds, tests, and lint run in WSL2; the Windows Android Platform Tools own the
-USB connection to the Echo Dot.
+The reference environment is Windows 11 with VS Code Remote WSL. Build, test,
+lint, and live-device commands run in WSL2. The Echo Dot is attached to WSL
+with USB/IP and is controlled with Linux `adb`. Run a native Windows gateway
+when testing mDNS on the physical LAN: WSL and Docker multicast are not an
+mDNS acceptance path for the Dot.
 
-## Environment
+## Topology
 
 ```text
 Windows 11
-  |
-  +-- VS Code + Remote WSL
-  |
-  +-- WSL2 Ubuntu
-  |     +-- Go 1.26.7
-  |     +-- make
-  |     +-- source checkout
-  |     +-- Windows adb.exe invoked through /mnt/c
-  |
-  +-- Docker Desktop / WSL backend
-  |     +-- gateway and later-milestone services
-  |
-  +-- C:\tools\android-platform-tools\adb.exe -> Echo Dot over USB
+  +-- native gateway.exe -> physical LAN mDNS + WSS
+  +-- usbipd -> WSL2 Ubuntu -> Linux adb -> Echo Dot over USB
+  +-- VS Code Remote WSL -> Go, make, uv, source checkout
 ```
 
-Install Go and golangci-lint inside WSL. Do not run a second, native-Linux ADB
-server in WSL: without an explicit USBIP setup it cannot see the USB device,
-and mixing it with Windows ADB can restart the server unexpectedly.
+Install Go, `golangci-lint`, `uv`, and Android Platform Tools (`adb`) in WSL.
+The repository enforces LF line endings through `.gitattributes`; keep that
+setting even for a Windows-hosted checkout.
 
-The repository enforces LF line endings through `.gitattributes`. This is
-required even on a Windows-hosted checkout: CRLF changes signed fixture sizes
-and digests and makes WSL `gofmt` report every Go file.
+## Attach the Dot to WSL
 
-## Configure and verify ADB
+Disconnect any Windows ADB client that currently owns the Dot. In an elevated
+Windows PowerShell, locate the Dot's bus ID, bind it when required, then attach
+it to the WSL distribution:
 
-In a WSL terminal opened at the repository:
+```powershell
+usbipd list
+usbipd bind --busid <BUSID>
+usbipd attach --wsl --busid <BUSID>
+```
 
-```bash
-export ADB=/mnt/c/tools/android-platform-tools/adb.exe
+`usbipd attach` is not persistent across a physical disconnect, reboot, or
+WSL shutdown; repeat it after those events. Do not run Windows `adb.exe` while
+the device is attached to WSL.
+
+In WSL, confirm that Linux ADB owns the attached device and select its serial
+explicitly:
+
+```sh
+export ADB=adb
 "$ADB" version
 "$ADB" devices -l
-```
-
-The device must appear once with state `device`, not `offline` or
-`unauthorized`. When more than one device is attached, select one explicitly:
-
-```bash
-export DEVICE_SERIAL=G090LF0964060EHP
-```
-
-The Make targets translate `DEVICE_SERIAL` into ADB's `-s` argument. ADB also
-honours its standard `ANDROID_SERIAL` environment variable, but use
-`DEVICE_SERIAL` in repository commands so the selected target is visible.
-
-Confirm the device is the expected rooted Echo Dot before copying anything:
-
-```bash
+export DEVICE_SERIAL=<serial-from-adb-devices>
 make device-check
 ```
 
-This requires ADB state `device`, product `biscuit`, ABI `arm64-v8a`, Magisk
-`su` at UID 0, and permissive SELinux, printing every accepted value. This Dot
-has a normal UID 2000 ADB shell;
-privileged commands must therefore use `su -c`. Do not assume `adb root` or a
-root ADB daemon.
+The Dot must report `device`, product `biscuit`, ABI `arm64-v8a`, Magisk `su`
+at UID 0, and permissive SELinux. Its normal ADB shell is UID 2000, so
+privileged device commands use `su -c`; never assume `adb root` is available.
 
-From Windows PowerShell, use the same client directly when troubleshooting:
+If ADB reports `offline`, detach/attach the USB/IP device and re-run `adb
+devices -l`. For `unauthorized`, resolve the debugging authorization rather
+than deleting ADB keys. Set `DEVICE_SERIAL` whenever more than one target is
+listed.
 
-```powershell
-$adb = 'C:\tools\android-platform-tools\adb.exe'
-& $adb devices -l
-& $adb -s G090LF0964060EHP shell id
-& $adb -s G090LF0964060EHP shell su -c id
-```
+## Build and foreground iteration
 
-## Build, push, and run
+Run this in WSL. It stages a disposable binary at `/data/local/tmp/echod`; it
+does not install a launcher or change `/data/local/bin/echod`.
 
-The pre-Milestone 3 development loop deliberately stages an ephemeral binary
-under `/data/local/tmp`. It does not modify `/system`, install a service, or
-survive a reboot.
-
-```bash
-export ADB=/mnt/c/tools/android-platform-tools/adb.exe
-export DEVICE_SERIAL=G090LF0964060EHP  # optional with exactly one device
-
+```sh
+make test
+make build-device
 make push-device
-make run-device
-```
-
-`push-device` runs the device checks, builds the static Linux/ARM64 binary,
-pushes it to `/data/local/tmp/echod`, makes it executable, and runs `--version`
-as an execution check. `run-device` then starts it through Magisk in the
-foreground with debug logging. Press Ctrl+C to stop it.
-
-## Prepare LED and microphone hardware
-
-Before a live microphone, wake, LED, or button diagnostic, stop Amazon's LED
-service and clear the physical microphone cut. The full script must be passed
-as one quoted argument to the remote `su -c`: putting `>` redirections outside
-those quotes makes the unprivileged ADB shell perform them and fails with
-`Permission denied` even when `su -c id` reports root.
-
-```bash
-"$ADB" -s "$DEVICE_SERIAL" shell "su -c '
-  stop ledcontroller
-  echo 0 > /sys/bus/i2c/devices/0-003f/boot_animation
-  test -e /sys/class/gpio/gpio444/value || echo 444 > /sys/class/gpio/export
-  echo out > /sys/class/gpio/gpio444/direction
-  echo 0 > /sys/class/gpio/gpio444/value
-  cat /sys/class/gpio/gpio444/value
-'"
-```
-
-The command must print `0`. On the qualified Dot, GPIO 444 is MTK pin 87; high
-physically disconnects the microphones, while low enables them. `boot_animation`
-alone does not prove microphone state. `ledcontroller` can be restored with
-`"$ADB" -s "$DEVICE_SERIAL" shell "su -c 'start ledcontroller'"` or a reboot.
-
-Windows ADB reports transport exit code 58 when Ctrl+C closes a foreground
-shell. `run-device` accepts that code only if the device remains online and
-`ps` confirms `/data/local/tmp/echod` is no longer running. All other non-zero
-exits and a surviving process fail the target.
-
-Pass different arguments without changing the Makefile:
-
-```bash
 make run-device DEVICE_ARGS='--dbg --device-id bench-dot'
 ```
 
-For a networked foreground diagnostic, supply the gateway settings through the
-same mechanism. `--gateway-url` bypasses mDNS but does not bypass WSS or token
-authentication. Use `--tls-skip-verify` only with a local development
-certificate; it disables certificate verification and must not be used in a
-production deployment.
+`run-device` owns a foreground terminal. Ctrl+C stops it. For a networked
+experiment, supply an explicit WSS URL and the existing device token path;
+`--tls-skip-verify` is development-only and must not appear in production
+configuration.
 
-```bash
+```sh
 make run-device DEVICE_ARGS='--dbg --device-id bench-dot \
-  --gateway-url wss://192.168.110.127:8770/device \
+  --gateway-url wss://<WINDOWS-LAN-IP>:8770/device \
   --gateway-token-file /data/local/tmp/echo-satellite-token \
   --tls-skip-verify'
 ```
 
-The normal device state paths are
-`/data/local/etc/echo-satellite/paired-gateway.json` and
-`/data/local/etc/echo-satellite/config.json`. For a disposable foreground
-experiment, set `--pairing-state` and `--config-state` to a separate directory
-instead of removing the normal state.
+Use isolated `--pairing-state` and `--config-state` paths for disposable
+experiments. See [device installation](device-installation.md) for the
+installed-agent and recovery workflow, and [device-lab](device-lab.md) for any
+live microphone, LED, button, reboot, or qualification work.
 
-## Gateway and simulator development
+## Run a gateway
 
-Run the native gateway on the LAN for mDNS acceptance. Its certificate, private
-key, device token, and TOML profile are operator-provided files; the shared
-token is development-only and must contain at least 32 random bytes.
+Build the gateway in WSL, then launch the Windows binary from PowerShell on the
+physical LAN. Use the Windows host's LAN address in any explicit device URL;
+do not use `localhost` or a WSL address for the Dot.
 
-```bash
-.bin/gateway --listen :8770 --tls-cert dev-cert.pem --tls-key dev-key.pem \
-  --device-token-file device-token --device-config devices.toml --dbg
+```sh
+make build-windows
 ```
 
-Increment the profile's top-level `version` whenever its effective desired
-configuration changes. Send `SIGHUP` to reload it; an invalid or non-increasing
-profile leaves the active snapshot unchanged. `dotsim` persists pairing and
-configuration below `.dotsim` by default, and `--once` exits after one
-successfully transmitted fixture turn. See `docs/gateway-deployment.md` for
-the Compose explicit-WSS smoke test and its separate opt-in diagnostic-WAV
-directory.
+```powershell
+.\.bin\gateway.exe --listen :8770 --server-id home-gateway `
+  --tls-cert .gateway-secrets\dev-cert.pem `
+  --tls-key .gateway-secrets\dev-key.pem `
+  --device-token-file .gateway-secrets\device-token `
+  --device-config .gateway-secrets\devices.toml --dbg
+```
 
-## VS Code tasks
+This native process advertises `_echo-satellite._tcp.local.` on the physical
+LAN. Ensure the Windows firewall permits the selected TCP port and multicast
+DNS on the active private network. Increment the profile's top-level `version`
+when its effective desired configuration changes; `SIGHUP` reloads a valid,
+increasing profile without replacing the active snapshot.
 
-Open the repository through **Remote - WSL**, then use **Tasks: Run Task**:
+Docker Compose deliberately runs with `--no-mdns` and publishes localhost-only
+WSS for host-side simulator smoke tests. Use [gateway deployment]
+(gateway-deployment.md) for that path. `dotsim` persists its state under
+`.dotsim` by default, and `--once` exits after one transmitted fixture turn.
 
-- `device: check`
-- `device: push`
-- `device: run`
+## VS Code and troubleshooting
 
-The committed tasks call the same Make targets and configure this machine's
-Windows ADB path. They do not duplicate deployment logic. The run task owns a
-foreground terminal; stop it with Ctrl+C.
+Open the repository through **Remote - WSL**. The committed `device: check`,
+`device: push`, and `device: run` tasks call the same Make targets with Linux
+ADB and prompt for the explicit device serial; the run task owns a foreground
+terminal.
 
-If the platform-tools directory moves, either update the task environment or
-put `adb.exe` on the WSL command path and set `ADB=adb` in the task environment.
+- **`adb` missing in WSL:** install Android Platform Tools in WSL and use
+  `ADB=adb`; do not fall back to `adb.exe` through `/mnt/c`.
+- **USB device absent:** run `usbipd list` in elevated PowerShell and attach
+  the correct bus ID again.
+- **root check fails:** run `adb -s "$DEVICE_SERIAL" shell 'su -c id'`.
+  This workflow requires an already rooted, Magisk-enabled Dot.
+- **old shell utilities missing:** FireOS 5.1 lacks many GNU tools. Keep
+  device commands to verified Android/Magisk BusyBox tools and process output
+  on the WSL host.
+- **mDNS does not resolve:** use the native Windows gateway for LAN testing or
+  an explicit URL. Docker, WSL, VLANs, VPNs, and multicast filtering can all
+  block discovery.
 
-## Troubleshooting
-
-- **`adb` not found:** use the absolute Windows or `/mnt/c` path above. Native
-  WSL ADB is not the USB client in this setup.
-- **`unauthorized`:** unlock/observe the device if possible, reconnect USB, and
-  accept its debugging authorization. Do not delete host ADB keys as a first
-  response because that invalidates existing authorizations.
-- **`offline`:** reconnect USB, then run `"$ADB" reconnect` and
-  `"$ADB" devices -l`. Restart the Windows server only if it remains offline:
-  `"$ADB" kill-server`, followed by `"$ADB" start-server`.
-- **more than one device:** set `DEVICE_SERIAL`; never deploy to an implicit
-  target when ADB lists multiple serials.
-- **root check fails:** verify `"$ADB" shell su -c id` directly. This workflow
-  requires an already-rooted/Magisk-enabled Dot and does not perform rooting.
-- **push source is not found:** when a checkout lives in WSL's ext4 filesystem,
-  Windows ADB may need a Windows path, for example
-  `"$ADB" push "$(wslpath -w "$(realpath .bin/linux_arm64/echod)")" /data/local/tmp/echod`.
-- **old Android shell commands are missing:** FireOS 5.1 does not provide
-  common GNU utilities such as `install` or `timeout`. Keep device commands to
-  the verified Android toolbox commands; do timeouts and output processing on
-  the WSL host.
-
-Codex can invoke the Windows ADB client and WSL toolchain in this setup, but its
-sandbox requires host approval for WSL service and device access. Treat an
-approval failure separately from an ADB or device failure.
-
-## Debugging
-
-Foreground execution plus structured logs is the supported device debugging
-workflow. Source-level VS Code debugging on the Dot is a later,
-experimental step: it requires an unstripped `-N -l` build, a Linux/ARM64
-Delve server, ADB port forwarding, and proof that ptrace works on this FireOS
-kernel. Do not use the stripped release binary for Delve and do not treat remote
-debugging as available until that hardware check passes.
-
-## Later milestones
-
-Once Milestone 3 lands, signed or explicitly allowed development releases go
-through the gateway into the inactive application slot. That becomes the normal
-iteration loop because it exercises trial health and rollback. ADB remains the
-bootstrap, development, and recovery mechanism.
-
-Docker Compose deliberately disables mDNS and is validated only with an
-explicit WSS URL. Test mDNS with the native gateway on the physical LAN; VLANs,
-VPNs, container isolation, and multicast filtering can require an mDNS
-reflector or the explicit URL fallback. An explicit gateway URL always wins
-over discovery.
+Source-level debugging on the Dot remains experimental: it requires an
+unstripped ARM64 build, a compatible Delve server, port forwarding, and a
+successful ptrace experiment on this FireOS kernel.
